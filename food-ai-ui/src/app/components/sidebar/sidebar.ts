@@ -1,5 +1,7 @@
 import { Component, inject, signal } from '@angular/core';
+import { Router } from '@angular/router';
 import { ChatService } from '../../services/chat';
+import { AuthService } from '../../services/auth';
 
 @Component({
   selector: 'app-sidebar',
@@ -8,6 +10,9 @@ import { ChatService } from '../../services/chat';
 })
 export class Sidebar {
   private readonly chatService = inject(ChatService);
+  private readonly authService = inject(AuthService);
+  private readonly router = inject(Router);
+
   readonly conversations = this.chatService.conversations;
   readonly activeConversationId = this.chatService.activeConversationId;
   readonly openMenuId = signal<string | null>(null);
@@ -36,5 +41,10 @@ export class Sidebar {
       this.chatService.deleteConversation(conversationId);
     }
     this.openMenuId.set(null);
+  }
+
+  logout(): void {
+    this.authService.logout();
+    this.router.navigate(['/login']);
   }
 }

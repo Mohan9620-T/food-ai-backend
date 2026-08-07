@@ -3,13 +3,14 @@ import { HttpClient } from '@angular/common/http';
 import { isPlatformBrowser } from '@angular/common';
 import { Observable } from 'rxjs';
 import { ChatConversation, ChatHistoryMessage, ChatMessage, ChatRequest, ChatResponse } from '../models/chat';
+import { environment } from '../../environments/environment';
 
 @Injectable({
   providedIn: 'root'
 })
 export class ChatService {
 
-  private readonly apiUrl = 'http://127.0.0.1:8000/chat/';
+  private readonly apiUrl = `${environment.apiUrl}/chat/`;
   private readonly storageKey = 'food-ai-chat-conversations';
 
   private readonly http = inject(HttpClient);

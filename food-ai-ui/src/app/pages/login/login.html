@@ -1,0 +1,26 @@
+<div class="login-container">
+
+  <h1>Food AI Assistant</h1>
+  <p class="subtitle">Login to continue</p>
+
+  <input
+    type="email"
+    [(ngModel)]="email"
+    placeholder="Email"
+    (keyup.enter)="submit()" />
+
+  <input
+    type="password"
+    [(ngModel)]="password"
+    placeholder="Password"
+    (keyup.enter)="submit()" />
+
+  @if (errorMessage()) {
+    <p class="error">{{ errorMessage() }}</p>
+  }
+
+  <button (click)="submit()" [disabled]="loading()">
+    {{ loading() ? 'Logging in...' : 'Login' }}
+  </button>
+
+</div>

@@ -10,3 +10,6 @@ ul { list-style: none; padding: 0; }
 .conversation-menu button { width: 100%; padding: 8px; border-radius: 4px; background: transparent; text-align: left; }
 .conversation-menu button:hover { background: #4b4c5b; }
 .conversation-menu .delete { color: #ff8d8d; }
+.logout { width: 100%; margin-top: auto; padding: 10px; border: 0; border-radius: 8px; background: #3a1f1f; color: #ff8d8d; cursor: pointer; }
+.logout:hover { background: #4a2626; }
+.sidebar { display: flex; flex-direction: column; }

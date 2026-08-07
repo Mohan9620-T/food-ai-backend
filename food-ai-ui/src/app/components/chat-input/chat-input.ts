@@ -1,6 +1,9 @@
 import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
+import { HttpErrorResponse } from '@angular/common/http';
 import { ChatService } from '../../services/chat';
+import { AuthService } from '../../services/auth';
 import { ChatResponse } from '../../models/chat';
 
 @Component({
@@ -13,6 +16,8 @@ export class ChatInput {
   message = '';
   readonly isSending = signal(false);
   private readonly chatService = inject(ChatService);
+  private readonly authService = inject(AuthService);
+  private readonly router = inject(Router);
 
   sendMessage(): void {
     const userMessage = this.message.trim();
@@ -37,12 +42,19 @@ export class ChatInput {
         this.chatService.addMessage({ sender: 'bot', text: response.response }, conversationId);
         this.isSending.set(false);
       },
-      error: () => {
+      error: (err: HttpErrorResponse) => {
+        this.isSending.set(false);
+
+        if (err.status === 401) {
+          this.authService.logout();
+          this.router.navigate(['/login']);
+          return;
+        }
+
         this.chatService.addMessage({
           sender: 'bot',
           text: 'Sorry, the response could not be loaded. Please try again.'
         }, conversationId);
-        this.isSending.set(false);
       }
     });
   }
