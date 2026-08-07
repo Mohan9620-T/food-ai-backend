@@ -7,7 +7,7 @@ from jose import JWTError, jwt
 # In production, load this from .env — never hardcode a real secret.
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-only-change-this-secret")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 
 def hash_password(plain_password: str) -> str:
