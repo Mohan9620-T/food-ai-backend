@@ -1,0 +1,34 @@
+:host {
+    display: block;
+    flex: 1;
+    min-height: 0;
+}
+
+.chat-window {
+    box-sizing: border-box;
+    height: 100%;
+    overflow-y: auto;
+    padding: 20px;
+}
+
+.user-message{
+    background:#10a37f;
+    color:white;
+    padding:10px;
+    margin:10px;
+    border-radius:10px;
+    width:fit-content;
+    max-width:70%;
+    margin-left:auto;
+    overflow-wrap: anywhere;
+}
+
+.bot-message{
+    background:#f1f1f1;
+    padding:10px;
+    margin:10px;
+    border-radius:10px;
+    width:fit-content;
+    max-width:70%;
+    overflow-wrap: anywhere;
+}

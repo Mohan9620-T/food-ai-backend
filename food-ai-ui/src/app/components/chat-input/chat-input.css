@@ -1,0 +1,78 @@
+:host {
+    display: block;
+    flex-shrink: 0;
+}
+
+.chat-input{
+
+    display:flex;
+
+    gap:10px;
+
+    padding:20px;
+
+    border-top:1px solid #ddd;
+
+}
+
+input{
+
+    flex:1;
+
+    height:50px;
+
+    padding-left:15px;
+
+    border-radius:10px;
+
+}
+
+button{
+
+    width:120px;
+
+    border:none;
+
+    background:#10a37f;
+
+    color:white;
+
+    border-radius:10px;
+
+    cursor:pointer;
+
+}
+
+button:disabled,
+input:disabled {
+    cursor: wait;
+    opacity: 0.75;
+}
+
+.loading-status {
+    padding: 0 20px 12px;
+    color: #555;
+    font-size: 0.875rem;
+}
+
+.loading-bar {
+    height: 4px;
+    margin-bottom: 7px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #d9eee8;
+}
+
+.loading-bar::after {
+    display: block;
+    width: 35%;
+    height: 100%;
+    background: #10a37f;
+    content: '';
+    animation: loading 1s ease-in-out infinite;
+}
+
+@keyframes loading {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(300%); }
+}

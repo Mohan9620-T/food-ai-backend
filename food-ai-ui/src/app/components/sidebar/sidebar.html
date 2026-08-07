@@ -1,0 +1,22 @@
+<div class="sidebar">
+  <button class="new-chat" type="button" (click)="createConversation()">+ New Chat</button>
+
+  <h4>Recent Chats</h4>
+
+  <ul aria-label="Saved conversations">
+    @for (conversation of conversations(); track conversation.id) {
+      <li class="conversation-row" [class.active]="conversation.id === activeConversationId()">
+        <button type="button" class="conversation" (click)="selectConversation(conversation.id)">
+          {{ conversation.title }}
+        </button>
+        <button type="button" class="menu-trigger" [attr.aria-expanded]="openMenuId() === conversation.id" aria-label="Chat options for {{ conversation.title }}" (click)="toggleMenu(conversation.id)">•••</button>
+        @if (openMenuId() === conversation.id) {
+          <div class="conversation-menu" role="menu">
+            <button type="button" role="menuitem" (click)="renameConversation(conversation.id, conversation.title)">Rename</button>
+            <button type="button" role="menuitem" class="delete" (click)="deleteConversation(conversation.id)">Delete</button>
+          </div>
+        }
+      </li>
+    }
+  </ul>
+</div>

@@ -1,0 +1,13 @@
+<div class="chat-window">
+  @for (msg of messages(); track $index) {
+    @if (msg.sender === 'user') {
+    <div class="user-message">
+      {{msg.text}}
+    </div>
+    } @else {
+    <div class="bot-message">
+      {{msg.text}}
+    </div>
+    }
+  }
+</div>

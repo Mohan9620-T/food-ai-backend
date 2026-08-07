@@ -1,0 +1,19 @@
+<div class="chat-input">
+  <input
+    type="text"
+    [(ngModel)]="message"
+    (keyup.enter)="sendMessage()"
+    [disabled]="isSending()"
+    placeholder="Ask anything..." />
+
+  <button (click)="sendMessage()" [disabled]="isSending()">
+    {{ isSending() ? 'Sending...' : 'Send' }}
+  </button>
+</div>
+
+@if (isSending()) {
+  <div class="loading-status" role="status" aria-live="polite">
+    <div class="loading-bar"></div>
+    <span>Ungaloda message-ku reply prepare pannuthu...</span>
+  </div>
+}
