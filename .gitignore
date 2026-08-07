@@ -1,0 +1,22 @@
+# Environment / secrets
+.env
+*.env
+ 
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+ 
+# Node / Angular
+food-ai-ui/node_modules/
+food-ai-ui/dist/
+food-ai-ui/.angular/
+ 
+# IDE
+.vscode/
+.idea/
+ 
+# OS
+.DS_Store
+Thumbs.db
