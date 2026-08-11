@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database.database import Base, engine
 from app.models.user import User
+from app.models.chat import ChatSession, ChatMessageRecord
 from app.api.user_api import router as user_router
 from app.api.chat import router as chat_router
 
