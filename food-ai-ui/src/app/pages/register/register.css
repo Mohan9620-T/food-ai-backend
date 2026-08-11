@@ -1,6 +1,6 @@
-.login-container {
+.register-container {
   width: 360px;
-  margin: 120px auto;
+  margin: 80px auto;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -40,6 +40,12 @@ button:disabled {
 
 .error {
   color: #d33;
+  font-size: 14px;
+  margin: 0;
+}
+
+.success {
+  color: #10a37f;
   font-size: 14px;
   margin: 0;
 }

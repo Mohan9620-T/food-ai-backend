@@ -1,0 +1,46 @@
+<div class="register-container">
+
+  <h1>Food AI Assistant</h1>
+  <p class="subtitle">Create your account</p>
+
+  <input
+    type="text"
+    [(ngModel)]="fullname"
+    placeholder="Full name"
+    (keyup.enter)="submit()" />
+
+  <input
+    type="email"
+    [(ngModel)]="email"
+    placeholder="Email"
+    (keyup.enter)="submit()" />
+
+  <input
+    type="password"
+    [(ngModel)]="password"
+    placeholder="Password"
+    (keyup.enter)="submit()" />
+
+  <input
+    type="password"
+    [(ngModel)]="confirmPassword"
+    placeholder="Confirm password"
+    (keyup.enter)="submit()" />
+
+  @if (errorMessage()) {
+    <p class="error">{{ errorMessage() }}</p>
+  }
+
+  @if (successMessage()) {
+    <p class="success">{{ successMessage() }}</p>
+  }
+
+  <button (click)="submit()" [disabled]="loading()">
+    {{ loading() ? 'Creating account...' : 'Sign Up' }}
+  </button>
+
+  <p class="switch-link">
+    Already have an account? <a routerLink="/login">Login</a>
+  </p>
+
+</div>
