@@ -15,8 +15,9 @@ export class Login {
   private readonly authService = inject(AuthService);
   private readonly router = inject(Router);
 
-  email = '';
+  email = this.authService.getRememberedEmail();
   password = '';
+  rememberMe = !!this.email;
   readonly loading = signal(false);
   readonly errorMessage = signal('');
 
@@ -29,7 +30,10 @@ export class Login {
     this.loading.set(true);
     this.errorMessage.set('');
 
-    this.authService.login({ email: this.email, password: this.password }).subscribe({
+    this.authService.login(
+      { email: this.email.trim(), password: this.password, remember_me: this.rememberMe },
+      this.rememberMe
+    ).subscribe({
       next: () => {
         this.loading.set(false);
         this.router.navigate(['/']);

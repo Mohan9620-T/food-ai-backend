@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, ElementRef, inject, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { HttpErrorResponse } from '@angular/common/http';
@@ -14,10 +14,22 @@ import { ChatResponse } from '../../models/chat';
 })
 export class ChatInput {
   message = '';
-  readonly isSending = signal(false);
+  private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
   private readonly chatService = inject(ChatService);
+  readonly isSending = this.chatService.isResponding;
   private readonly authService = inject(AuthService);
   private readonly router = inject(Router);
+
+  resizeInput(event: Event): void {
+    this.resizeTextarea(event.target as HTMLTextAreaElement);
+  }
+
+  handleKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+
+    event.preventDefault();
+    this.sendMessage();
+  }
 
   sendMessage(): void {
     const userMessage = this.message.trim();
@@ -31,7 +43,12 @@ export class ChatInput {
 
     this.chatService.addMessage({ sender: 'user', text: userMessage }, conversationId);
     this.message = '';
-    this.isSending.set(true);
+    const textarea = this.messageInput()?.nativeElement;
+    if (textarea) {
+      textarea.style.height = '48px';
+      textarea.scrollTop = 0;
+    }
+    this.chatService.startResponse(conversationId);
 
     this.chatService.sendMessage({
       message: userMessage,
@@ -40,10 +57,10 @@ export class ChatInput {
     }).subscribe({
       next: (response: ChatResponse) => {
         this.chatService.addMessage({ sender: 'bot', text: response.response }, conversationId);
-        this.isSending.set(false);
+        this.chatService.finishResponse(conversationId);
       },
       error: (err: HttpErrorResponse) => {
-        this.isSending.set(false);
+        this.chatService.finishResponse(conversationId);
 
         if (err.status === 401) {
           this.authService.logout();
@@ -57,5 +74,10 @@ export class ChatInput {
         }, conversationId);
       }
     });
+  }
+
+  private resizeTextarea(textarea: HTMLTextAreaElement): void {
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
   }
 }

@@ -1,9 +1,10 @@
-import { computed, inject, Injectable, PLATFORM_ID, signal } from '@angular/core';
+import { computed, effect, inject, Injectable, PLATFORM_ID, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { isPlatformBrowser } from '@angular/common';
 import { Observable } from 'rxjs';
 import { ChatConversation, ChatHistoryMessage, ChatMessage, ChatRequest, ChatResponse } from '../models/chat';
 import { environment } from '../../environments/environment';
+import { AuthService } from './auth';
 
 @Injectable({
   providedIn: 'root'
@@ -11,30 +12,54 @@ import { environment } from '../../environments/environment';
 export class ChatService {
 
   private readonly apiUrl = `${environment.apiUrl}/chat/`;
-  private readonly storageKey = 'food-ai-chat-conversations';
+  private readonly storageKeyPrefix = 'food-ai-chat-conversations';
 
   private readonly http = inject(HttpClient);
+  private readonly authService = inject(AuthService);
   private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
 
   private readonly conversationsState = signal<ChatConversation[]>([]);
   private readonly activeConversationIdState = signal<string | null>(null);
+  private readonly pendingConversationIdState = signal<string | null>(null);
 
   readonly conversations = this.conversationsState.asReadonly();
   readonly activeConversationId = this.activeConversationIdState.asReadonly();
   readonly messages = computed(() => this.getActiveConversation()?.messages ?? []);
+  readonly isResponding = computed(() => {
+    const pendingConversationId = this.pendingConversationIdState();
+    return pendingConversationId !== null && pendingConversationId === this.activeConversationIdState();
+  });
 
   constructor() {
-    const conversations = this.readConversations();
+    effect(() => this.loadConversations(this.authService.currentUserId()));
+  }
+
+  private loadConversations(userId: string | null): void {
+    this.pendingConversationIdState.set(null);
+    const conversations = this.readConversations(userId);
+
     if (conversations.length > 0) {
       this.conversationsState.set(conversations);
       this.activeConversationIdState.set(conversations[0].id);
     } else {
+      this.conversationsState.set([]);
+      this.activeConversationIdState.set(null);
       this.createConversation();
     }
   }
 
   sendMessage(data: ChatRequest): Observable<ChatResponse> {
     return this.http.post<ChatResponse>(this.apiUrl, data);
+  }
+
+  startResponse(conversationId: string): void {
+    this.pendingConversationIdState.set(conversationId);
+  }
+
+  finishResponse(conversationId: string): void {
+    if (this.pendingConversationIdState() === conversationId) {
+      this.pendingConversationIdState.set(null);
+    }
   }
 
   createConversation(): void {
@@ -139,10 +164,10 @@ export class ChatService {
     return message.length > 32 ? `${message.slice(0, 32)}…` : message;
   }
 
-  private readConversations(): ChatConversation[] {
-    if (!this.isBrowser) return [];
+  private readConversations(userId: string | null): ChatConversation[] {
+    if (!this.isBrowser || !userId) return [];
     try {
-      const saved = localStorage.getItem(this.storageKey);
+      const saved = localStorage.getItem(this.getStorageKey(userId));
       return saved ? JSON.parse(saved) as ChatConversation[] : [];
     } catch {
       return [];
@@ -150,7 +175,14 @@ export class ChatService {
   }
 
   private persistConversations(): void {
-    if (this.isBrowser) localStorage.setItem(this.storageKey, JSON.stringify(this.conversationsState()));
+    const userId = this.authService.currentUserId();
+    if (this.isBrowser && userId) {
+      localStorage.setItem(this.getStorageKey(userId), JSON.stringify(this.conversationsState()));
+    }
+  }
+
+  private getStorageKey(userId: string): string {
+    return `${this.storageKeyPrefix}:${userId}`;
   }
 
 }

@@ -1,21 +1,15 @@
 <div class="chat-input">
-  <input
-    type="text"
+  <textarea
+    #messageInput
+    rows="1"
     [(ngModel)]="message"
-    (keyup.enter)="sendMessage()"
+    (input)="resizeInput($event)"
+    (keydown)="handleKeydown($event)"
     [disabled]="isSending()"
-    placeholder="Ask anything..." />
+    aria-label="Message"
+    placeholder="Ask anything..."></textarea>
 
-  <button (click)="sendMessage()" [disabled]="isSending()">
+  <button type="button" (click)="sendMessage()" [disabled]="isSending()">
     {{ isSending() ? 'Sending...' : 'Send' }}
   </button>
 </div>
-
-@if (isSending()) {
-  <div class="thinking-status" role="status" aria-live="polite">
-    <span class="thinking-dot"></span>
-    <span class="thinking-dot"></span>
-    <span class="thinking-dot"></span>
-    <span class="thinking-text">Thinking...</span>
-  </div>
-}

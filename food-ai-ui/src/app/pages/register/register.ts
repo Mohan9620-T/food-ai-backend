@@ -51,10 +51,13 @@ export class Register {
       email: this.email.trim(),
       password: this.password
     }).subscribe({
-      next: () => {
+      next: (response) => {
         this.loading.set(false);
-        this.successMessage.set('Account created! Redirecting to login...');
-        setTimeout(() => this.router.navigate(['/login']), 1200);
+        this.successMessage.set(response.email_sent
+          ? 'Account created and login details emailed! Redirecting to login...'
+          : 'Account created, but email was not sent because SMTP is not configured. Redirecting to login...'
+        );
+        setTimeout(() => this.router.navigate(['/login']), 2500);
       },
       error: (err: HttpErrorResponse) => {
         this.loading.set(false);

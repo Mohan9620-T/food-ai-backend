@@ -1,9 +1,11 @@
 <div class="sidebar">
-  <button class="new-chat" type="button" (click)="createConversation()">+ New Chat</button>
+  <nav class="primary-navigation" aria-label="Main navigation">
+    <button type="button" (click)="createConversation()"><span aria-hidden="true">✎</span> New chat</button>
+  </nav>
 
-  <h4>Recent Chats</h4>
+  <h2>Recents</h2>
 
-  <ul aria-label="Saved conversations">
+  <ul class="conversation-list" aria-label="Saved conversations">
     @for (conversation of conversations(); track conversation.id) {
       <li class="conversation-row" [class.active]="conversation.id === activeConversationId()">
         <button type="button" class="conversation" (click)="selectConversation(conversation.id)">
@@ -12,13 +14,62 @@
         <button type="button" class="menu-trigger" [attr.aria-expanded]="openMenuId() === conversation.id" aria-label="Chat options for {{ conversation.title }}" (click)="toggleMenu(conversation.id)">•••</button>
         @if (openMenuId() === conversation.id) {
           <div class="conversation-menu" role="menu">
-            <button type="button" role="menuitem" (click)="renameConversation(conversation.id, conversation.title)">Rename</button>
-            <button type="button" role="menuitem" class="delete" (click)="deleteConversation(conversation.id)">Delete</button>
+            <button type="button" role="menuitem" (click)="requestRenameConversation(conversation.id, conversation.title)">Rename</button>
+            <button type="button" role="menuitem" class="delete" (click)="requestDeleteConversation(conversation.id, conversation.title)">Delete</button>
           </div>
         }
       </li>
     }
   </ul>
 
-  <button class="logout" type="button" (click)="logout()">Logout</button>
+  <div class="profile-area">
+    @if (profileMenuOpen()) {
+      <div class="profile-menu" role="menu">
+        <div class="profile-details">
+          <strong>{{ userName() }}</strong>
+          <span>{{ userEmail() }}</span>
+        </div>
+        <button type="button" role="menuitem" (click)="logout()"><span aria-hidden="true">↪</span> Log out</button>
+      </div>
+    }
+
+    <button class="profile-trigger" type="button" [attr.aria-expanded]="profileMenuOpen()" aria-label="Open user profile menu" (click)="toggleProfileMenu()">
+      <span class="avatar" aria-hidden="true">{{ userInitials() }}</span>
+      <span class="profile-copy">
+        <strong>{{ userName() }}</strong>
+        <small>{{ userEmail() }}</small>
+      </span>
+      <span class="profile-options" aria-hidden="true">•••</span>
+    </button>
+  </div>
 </div>
+
+@if (pendingRenameId()) {
+  <div class="dialog-backdrop" (click)="cancelRenameConversation()">
+    <section class="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-dialog-title" (click)="$event.stopPropagation()">
+      <h2 id="rename-dialog-title">Rename chat</h2>
+      <form (ngSubmit)="confirmRenameConversation()">
+        <label for="conversation-title">Chat name</label>
+        <input id="conversation-title" name="conversationTitle" type="text" maxlength="100" required autofocus [(ngModel)]="renameTitle" />
+        <div class="dialog-actions">
+          <button class="cancel-button" type="button" (click)="cancelRenameConversation()">Cancel</button>
+          <button class="confirm-rename-button" type="submit" [disabled]="!renameTitle.trim()">Rename</button>
+        </div>
+      </form>
+    </section>
+  </div>
+}
+
+@if (pendingDelete(); as conversation) {
+  <div class="dialog-backdrop" (click)="cancelDeleteConversation()">
+    <section class="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-description" (click)="$event.stopPropagation()">
+      <h2 id="delete-dialog-title">Delete chat?</h2>
+      <p id="delete-dialog-description">This will delete <strong>{{ conversation.title }}</strong>.</p>
+      <p class="delete-note">This conversation and its messages will be permanently removed.</p>
+      <div class="dialog-actions">
+        <button class="cancel-button" type="button" autofocus (click)="cancelDeleteConversation()">Cancel</button>
+        <button class="confirm-delete-button" type="button" (click)="confirmDeleteConversation()">Delete</button>
+      </div>
+    </section>
+  </div>
+}

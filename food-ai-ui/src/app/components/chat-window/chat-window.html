@@ -1,14 +1,30 @@
 <div class="chat-window">
   @for (msg of messages(); track $index) {
     @if (msg.sender === 'user') {
-    <div class="user-message">
-      {{msg.text}}
-    </div>
+    <div class="message user-message">{{ msg.text }}</div>
     } @else {
-    <div class="bot-message">
-      {{msg.text}}
+    <div class="message bot-message">
+      @for (line of formattedLines(msg.text); track $index) {
+        <span class="message-line">
+          @for (segment of line; track $index) {
+            @if (segment.bold) {
+              <strong>{{ segment.text }}</strong>
+            } @else {
+              <span>{{ segment.text }}</span>
+            }
+          }
+        </span>
+      }
     </div>
     }
+  }
+  @if (isResponding()) {
+    <div class="thinking-status" role="status" aria-live="polite" aria-label="AI is thinking">
+      <span class="thinking-dot"></span>
+      <span class="thinking-dot"></span>
+      <span class="thinking-dot"></span>
+      <span class="thinking-text">Thinking...</span>
+    </div>
   }
   <div #scrollAnchor></div>
 </div>

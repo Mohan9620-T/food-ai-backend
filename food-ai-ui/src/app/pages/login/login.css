@@ -16,7 +16,7 @@ h1 {
   color: #666;
 }
 
-input {
+.login-container > input {
   padding: 12px;
   font-size: 15px;
   border-radius: 8px;
@@ -58,4 +58,27 @@ button:disabled {
 
 .switch-link a:hover {
   text-decoration: underline;
+}
+
+.remember-me {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 8px;
+  color: #444;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.remember-me input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #10a37f;
+}
+
+.remember-me:focus-within {
+  outline: 2px solid #0b7d62;
+  outline-offset: 3px;
+  border-radius: 2px;
 }
