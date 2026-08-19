@@ -8,6 +8,11 @@ export interface ChatResponse {
   response: string;
 }
 
+export interface PendingChatResponse {
+  conversationId: string;
+  request: ChatRequest;
+}
+
 export interface ChatMessage {
   sender: 'user' | 'bot';
   text: string;

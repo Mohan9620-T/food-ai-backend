@@ -9,7 +9,23 @@
     aria-label="Message"
     placeholder="Ask anything..."></textarea>
 
-  <button type="button" (click)="sendMessage()" [disabled]="isSending()">
-    {{ isSending() ? 'Sending...' : 'Send' }}
-  </button>
+  @if (isSending()) {
+    <button
+      type="button"
+      class="stop-button"
+      (click)="pauseResponse()"
+      aria-label="Stop generating response"
+      title="Stop generating">
+      <span class="stop-icon" aria-hidden="true"></span>
+    </button>
+  } @else {
+    @if (hasPausedResponse()) {
+      <button type="button" class="continue-button" (click)="continueResponse()">
+        Continue
+      </button>
+    }
+    <button type="button" (click)="sendMessage()">
+      {{ editingMessage() ? 'Update & Send' : 'Send' }}
+    </button>
+  }
 </div>

@@ -61,3 +61,31 @@
     opacity: 0.6;
     cursor: not-allowed;
 }
+
+.chat-input .stop-button {
+    width: 48px;
+    padding: 0;
+    border-radius: 50%;
+    background: #1f2937;
+    display: grid;
+    place-items: center;
+}
+
+.chat-input .stop-button:hover {
+    background: #111827;
+}
+
+.stop-icon {
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+    background: #fff;
+}
+
+.chat-input .continue-button {
+    background: #475467;
+}
+
+.chat-input .continue-button:hover {
+    background: #344054;
+}

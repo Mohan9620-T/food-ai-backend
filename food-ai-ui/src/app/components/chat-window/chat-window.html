@@ -1,7 +1,28 @@
-<div class="chat-window">
+<div #chatContainer class="chat-window">
   @for (msg of messages(); track $index) {
     @if (msg.sender === 'user') {
-    <div class="message user-message">{{ msg.text }}</div>
+    <div class="user-message-group">
+      <div class="message user-message" [attr.title]="msg.text">{{ msg.text }}</div>
+      <div class="message-actions">
+        <button
+          type="button"
+          class="message-menu-button"
+          (click)="toggleMessageMenu($index)"
+          [disabled]="isResponding()"
+          [attr.aria-expanded]="openMessageMenuIndex() === $index"
+          aria-haspopup="menu"
+          aria-label="Message actions">
+          <span aria-hidden="true">&#8230;</span>
+        </button>
+        @if (openMessageMenuIndex() === $index) {
+          <div class="message-menu" role="menu">
+            <button type="button" role="menuitem" (click)="editMessage($index)">
+              Edit
+            </button>
+          </div>
+        }
+      </div>
+    </div>
     } @else {
     <div class="message bot-message">
       @for (line of formattedLines(msg.text); track $index) {
@@ -26,5 +47,4 @@
       <span class="thinking-text">Thinking...</span>
     </div>
   }
-  <div #scrollAnchor></div>
 </div>
