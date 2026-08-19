@@ -9,6 +9,7 @@ def test_create_user_success(client):
     data = response.json()
     assert data["email"] == "test@example.com"
     assert data["fullname"] == "Test User"
+    assert data["email_sent"] is False
     assert "password" not in data
 
 
@@ -67,3 +68,27 @@ def test_login_nonexistent_user_fails(client):
     })
 
     assert response.status_code == 401
+
+
+def test_remember_me_creates_long_lived_token(client):
+    from datetime import datetime, timezone
+    from jose import jwt
+    from app.utils.security import ALGORITHM, SECRET_KEY
+
+    client.post("/users/", json={
+        "fullname": "Remembered User",
+        "email": "remember@example.com",
+        "password": "mypassword"
+    })
+
+    response = client.post("/users/login", json={
+        "email": "remember@example.com",
+        "password": "mypassword",
+        "remember_me": True,
+    })
+
+    payload = jwt.decode(response.json()["access_token"], SECRET_KEY, algorithms=[ALGORITHM])
+    remaining_days = (
+        datetime.fromtimestamp(payload["exp"], timezone.utc) - datetime.now(timezone.utc)
+    ).days
+    assert remaining_days >= 29

@@ -23,7 +23,12 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=Token)
 def login(credentials: UserLogin, db: Session = Depends(get_db)):
-    token = service.authenticate_user(db, credentials.email, credentials.password)
+    token = service.authenticate_user(
+        db,
+        credentials.email,
+        credentials.password,
+        credentials.remember_me,
+    )
     if not token:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     return Token(access_token=token)

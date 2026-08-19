@@ -8,6 +8,7 @@ from jose import JWTError, jwt
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-only-change-this-secret")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS = 30
 
 
 def hash_password(plain_password: str) -> str:
@@ -22,9 +23,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     )
 
 
-def create_access_token(data: dict) -> str:
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 

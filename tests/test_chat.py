@@ -131,6 +131,33 @@ def test_language_detection_uses_latest_message_only():
     )
 
 
+def test_language_detection_accepts_common_tanglish_spelling_variants():
+    assert ChatService.detect_language("vannakam mapla") == (
+        "Tanglish (Tamil written in Latin letters)"
+    )
+    assert ChatService.detect_language("can you explain this in tanglish") == (
+        "Tanglish (Tamil written in Latin letters)"
+    )
+
+
+def test_content_offer_gets_direct_natural_tanglish_reply(monkeypatch):
+    def unexpected_post(*args, **kwargs):
+        raise AssertionError("The simple content-offer intent should not call Ollama")
+
+    monkeypatch.setattr("app.services.chat_service.requests.post", unexpected_post)
+
+    answer = ChatService().chat(
+        "can I send some content, can you explain it in thanglish?",
+        [],
+        [],
+    )
+
+    assert answer == (
+        "Kandippa, content-a anuppunga. Adha simple-ah puriyura maadhiri "
+        "Thanglish-la explain panren."
+    )
+
+
 def test_latest_language_instruction_follows_old_tanglish_history(monkeypatch):
     captured = {}
 
@@ -165,3 +192,84 @@ def test_latest_language_instruction_follows_old_tanglish_history(monkeypatch):
         "role": "user",
         "content": "Which character has the best development?",
     }
+
+
+def test_tanglish_response_in_tamil_script_is_rewritten(monkeypatch):
+    captured_bodies = []
+
+    class FakeResponse:
+        def __init__(self, content):
+            self.content = content
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": self.content}}
+
+    responses = iter([
+        FakeResponse("உங்களுக்கு என்ன உணவு பிடிக்கும்?"),
+        FakeResponse("Ungalukku enna unavu pidikkum?"),
+    ])
+
+    def fake_post(url, json, timeout):
+        captured_bodies.append(json.copy())
+        return next(responses)
+
+    monkeypatch.setattr("app.services.chat_service.requests.post", fake_post)
+
+    answer = ChatService().chat("thanglish la oru kelvi kelu", [], [])
+
+    assert answer == "Ungalukku enna unavu pidikkum?"
+    assert len(captured_bodies) == 2
+    assert "Use Latin/English letters for every word" in (
+        captured_bodies[1]["messages"][-1]["content"]
+    )
+
+
+def test_system_prompt_separates_source_content_from_format_example():
+    prompt = ChatService.SYSTEM_PROMPT
+
+    assert "earlier user content as the source" in prompt
+    assert "later example only as the desired" in prompt
+    assert "example's subject" in prompt
+    assert "**Repro Steps:**" in prompt
+    assert "**Expected Result:**" in prompt
+    assert "do not write \"Not specified\"" in prompt
+    assert "only for a \"bug type sentence\"" in prompt
+
+
+def test_system_prompt_requires_natural_tanglish_without_inventing_content():
+    prompt = ChatService.SYSTEM_PROMPT
+
+    assert "Natural Tanglish means conversational Tamil" in prompt
+    assert "Never" in prompt and "word-by-word translations" in prompt
+    assert "Do not invent the content the user intends to send" in prompt
+    assert "content-a anuppunga" in prompt
+
+
+def test_latest_instruction_forbids_metadata_from_old_examples(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": "**Bug Type:** Functional Bug"}}
+
+    def fake_post(url, json, timeout):
+        captured["body"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.chat_service.requests.post", fake_post)
+
+    ChatService().chat(
+        "User can be created, but the email is not triggered. Give the bug type sentence.",
+        [],
+        [],
+    )
+
+    instruction = captured["body"]["messages"][-2]["content"]
+    assert "Use no timestamp, category, priority, issue number" in instruction
+    assert "Never copy metadata or facts from an example" in instruction

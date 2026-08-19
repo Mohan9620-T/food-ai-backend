@@ -11,6 +11,7 @@ class UserResponse(BaseModel):
     id: int
     fullname: str
     email: EmailStr
+    email_sent: bool = False
 
     class Config:
         from_attributes = True
@@ -19,6 +20,7 @@ class UserResponse(BaseModel):
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
+    remember_me: bool = False
 
 
 class Token(BaseModel):

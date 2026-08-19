@@ -54,7 +54,16 @@ food-ai-backend/
    DB_USER=postgres
    DB_PASSWORD=your_postgres_password
    JWT_SECRET_KEY=a_long_random_secret_string
+   SMTP_HOST=smtp.example.com
+   SMTP_PORT=587
+   SMTP_USERNAME=your_smtp_username
+   SMTP_PASSWORD=your_smtp_password
+   SMTP_FROM_EMAIL=no-reply@example.com
+   SMTP_USE_TLS=true
    \`\`\`
+
+   SMTP settings are optional for local development. When configured, a newly
+   registered user receives an email containing the submitted login credentials.
 
 4. Create the \`FoodAI_DB\` database in PostgreSQL (via pgAdmin or \`psql\`).
 
