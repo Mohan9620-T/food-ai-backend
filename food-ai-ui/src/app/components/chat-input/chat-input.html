@@ -5,7 +5,6 @@
     [(ngModel)]="message"
     (input)="resizeInput($event)"
     (keydown)="handleKeydown($event)"
-    [disabled]="isSending()"
     aria-label="Message"
     placeholder="Ask anything..."></textarea>
 
