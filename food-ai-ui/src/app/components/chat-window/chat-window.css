@@ -33,9 +33,7 @@
     color:white;
     text-align: left;
     max-width: min(75%, 900px);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: pre-wrap;
 }
 
 .user-message-group {

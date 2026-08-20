@@ -1,7 +1,7 @@
 from app.services.email_service import EmailService
 
 
-def test_send_new_account_credentials_uses_configured_smtp(monkeypatch):
+def test_send_new_account_welcome_uses_configured_smtp(monkeypatch):
     sent = {}
 
     class FakeSmtp:
@@ -31,25 +31,23 @@ def test_send_new_account_credentials_uses_configured_smtp(monkeypatch):
     monkeypatch.setattr("app.services.email_service.settings.SMTP_USE_TLS", True)
     monkeypatch.setattr("app.services.email_service.smtplib.SMTP", FakeSmtp)
 
-    result = EmailService().send_new_account_credentials(
+    result = EmailService().send_new_account_welcome(
         recipient="new.user@example.com",
         fullname="New User",
-        password="account-secret",
     )
 
     assert result is True
     assert sent["host"] == "smtp.example.com"
     assert sent["tls"] is True
     assert sent["message"]["To"] == "new.user@example.com"
-    assert "Email: new.user@example.com" in sent["message"].get_content()
-    assert "Password: account-secret" in sent["message"].get_content()
+    assert "account has been created successfully" in sent["message"].get_content()
+    assert "Password" not in sent["message"].get_content()
 
 
-def test_send_new_account_credentials_skips_when_not_configured(monkeypatch):
+def test_send_new_account_welcome_skips_when_not_configured(monkeypatch):
     monkeypatch.setattr("app.services.email_service.settings.SMTP_HOST", None)
 
-    assert EmailService().send_new_account_credentials(
+    assert EmailService().send_new_account_welcome(
         recipient="new.user@example.com",
         fullname="New User",
-        password="account-secret",
     ) is False

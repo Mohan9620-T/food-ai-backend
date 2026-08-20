@@ -10,27 +10,25 @@ logger = logging.getLogger(__name__)
 
 
 class EmailService:
-    def send_new_account_credentials(
+    def send_new_account_welcome(
         self,
         *,
         recipient: str,
         fullname: str,
-        password: str,
     ) -> bool:
         if not settings.SMTP_HOST or not settings.SMTP_FROM_EMAIL:
             logger.info("SMTP is not configured; account email was not sent")
             return False
 
         message = EmailMessage()
-        message["Subject"] = "Your Food AI Assistant account"
+        message["Subject"] = "Welcome to Food AI Assistant"
         message["From"] = settings.SMTP_FROM_EMAIL
         message["To"] = recipient
         message.set_content(
             f"Hello {fullname},\n\n"
-            "Your Food AI Assistant account has been created.\n\n"
-            f"Email: {recipient}\n"
-            f"Password: {password}\n\n"
-            "For your security, do not forward this email.\n"
+            "Your Food AI Assistant account has been created successfully.\n\n"
+            f"You can log in anytime using this email address: {recipient}\n\n"
+            "If you did not create this account, please ignore this email.\n"
         )
 
         try:

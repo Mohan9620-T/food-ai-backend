@@ -2,7 +2,7 @@
   @for (msg of messages(); track $index) {
     @if (msg.sender === 'user') {
     <div class="user-message-group">
-      <div class="message user-message" [attr.title]="msg.text">{{ msg.text }}</div>
+      <div class="message user-message">{{ msg.text }}</div>
       <div class="message-actions">
         <button
           type="button"

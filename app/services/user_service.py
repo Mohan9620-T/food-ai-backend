@@ -17,7 +17,7 @@ class UserService:
         self.repository = UserRepository()
         self.email_service = email_service or EmailService()
 
-    def create_user(self, db: Session, user: UserCreate):
+       def create_user(self, db: Session, user: UserCreate):
 
         existing_user = self.repository.get_user_by_email(
             db,
@@ -34,10 +34,9 @@ class UserService:
             password=user.password
         )
 
-        email_sent = self.email_service.send_new_account_credentials(
+        email_sent = self.email_service.send_new_account_welcome(
             recipient=user.email,
             fullname=user.fullname,
-            password=user.password,
         )
         return {
             "id": created_user.id,
