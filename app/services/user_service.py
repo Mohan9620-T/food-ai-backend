@@ -17,7 +17,7 @@ class UserService:
         self.repository = UserRepository()
         self.email_service = email_service or EmailService()
 
-       def create_user(self, db: Session, user: UserCreate):
+    def create_user(self, db: Session, user: UserCreate):
 
         existing_user = self.repository.get_user_by_email(
             db,
