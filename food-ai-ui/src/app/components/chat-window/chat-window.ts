@@ -43,6 +43,11 @@ export class ChatWindow implements AfterViewChecked {
     this.chatService.beginEditingMessage(index);
   }
 
+  retryMessage(index: number): void {
+    this.openMessageMenuIndex.set(null);
+    this.chatService.requestMessageRetry(index);
+  }
+
   toggleMessageMenu(index: number): void {
     this.openMessageMenuIndex.update((openIndex) => openIndex === index ? null : index);
   }

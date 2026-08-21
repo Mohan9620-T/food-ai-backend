@@ -42,6 +42,11 @@ export class ChatInput {
         textarea.setSelectionRange(textarea.value.length, textarea.value.length);
       });
     });
+    effect(() => {
+      if (!this.chatService.retryMessage()) return;
+
+      queueMicrotask(() => this.retryPendingMessage());
+    });
   }
 
   resizeInput(event: Event): void {
@@ -114,6 +119,22 @@ export class ChatInput {
     if (!pendingResponse) return;
 
     this.requestResponse(pendingResponse.conversationId, pendingResponse.request);
+  }
+
+  private retryPendingMessage(): void {
+    const retryMessage = this.chatService.consumeRetryMessage();
+    if (!retryMessage || this.isSending()) return;
+
+    const request: ChatRequest = {
+      message: retryMessage.text,
+      history: this.chatService.getHistory(retryMessage.conversationId),
+      referenceHistory: this.chatService.getReferenceHistory(
+        retryMessage.text,
+        retryMessage.conversationId
+      )
+    };
+    this.chatService.startResponse(retryMessage.conversationId, request);
+    this.requestResponse(retryMessage.conversationId, request);
   }
 
   private requestResponse(conversationId: string, request: ChatRequest): void {

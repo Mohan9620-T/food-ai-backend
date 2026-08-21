@@ -25,11 +25,13 @@ export class ChatService {
   private readonly pendingConversationIdState = signal<string | null>(null);
   private readonly pendingResponseState = signal<PendingChatResponse | null>(null);
   private readonly editingMessageState = signal<{ conversationId: string; index: number; text: string } | null>(null);
+  private readonly retryMessageState = signal<{ conversationId: string; text: string } | null>(null);
 
   readonly conversations = this.conversationsState.asReadonly();
   readonly activeConversationId = this.activeConversationIdState.asReadonly();
   readonly messages = computed(() => this.getActiveConversation()?.messages ?? []);
   readonly editingMessage = this.editingMessageState.asReadonly();
+  readonly retryMessage = this.retryMessageState.asReadonly();
   readonly hasPausedResponse = computed(() => {
     const pendingResponse = this.pendingResponseState();
     return pendingResponse !== null && this.pendingConversationIdState() === null
@@ -153,6 +155,26 @@ export class ChatService {
     if (!conversation || !message || message.sender !== 'user' || this.isResponding()) return;
 
     this.editingMessageState.set({ conversationId: conversation.id, index, text: message.text });
+  }
+
+  requestMessageRetry(index: number): void {
+    const conversation = this.getActiveConversation();
+    const message = conversation?.messages[index];
+    if (!conversation || !message || message.sender !== 'user' || this.isResponding()) return;
+
+    this.conversationsState.update((conversations) => conversations.map((item) =>
+      item.id === conversation.id
+        ? { ...item, messages: item.messages.slice(0, index + 1), updatedAt: Date.now() }
+        : item
+    ).sort((first, second) => second.updatedAt - first.updatedAt));
+    this.persistConversations();
+    this.retryMessageState.set({ conversationId: conversation.id, text: message.text });
+  }
+
+  consumeRetryMessage(): { conversationId: string; text: string } | null {
+    const retryMessage = this.retryMessageState();
+    this.retryMessageState.set(null);
+    return retryMessage;
   }
 
   replaceEditingMessage(text: string): string | null {

@@ -16,6 +16,9 @@
         </button>
         @if (openMessageMenuIndex() === $index) {
           <div class="message-menu" role="menu">
+            <button type="button" role="menuitem" (click)="retryMessage($index)">
+              Retry
+            </button>
             <button type="button" role="menuitem" (click)="editMessage($index)">
               Edit
             </button>
