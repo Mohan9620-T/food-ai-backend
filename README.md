@@ -53,21 +53,58 @@ food-ai-backend/
    DB_NAME=FoodAI_DB
    DB_USER=postgres
    DB_PASSWORD=your_postgres_password
+   DATABASE_URL=postgresql://postgres:your_postgres_password@localhost:5432/FoodAI_DB
    JWT_SECRET_KEY=a_long_random_secret_string
+   ACCESS_TOKEN_EXPIRE_MINUTES=30
+   REFRESH_TOKEN_EXPIRE_DAYS=7
+   REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS=30
    SMTP_HOST=smtp.example.com
    SMTP_PORT=587
    SMTP_USERNAME=your_smtp_username
    SMTP_PASSWORD=your_smtp_password
    SMTP_FROM_EMAIL=no-reply@example.com
    SMTP_USE_TLS=true
+   ALLOWED_ORIGINS=http://localhost:4200
+   LOGIN_RATE_LIMIT=5/minute
+   REGISTER_RATE_LIMIT=5/minute
+   MEAL_CREATE_RATE_LIMIT=10/minute
+   USDA_API_KEY=your_fooddata_central_api_key
+   OLLAMA_VISION_MODEL=llava:latest
+   OLLAMA_VISION_TIMEOUT_SECONDS=180
    \`\`\`
 
    SMTP settings are optional for local development. When configured, a newly
    registered user receives an email containing the submitted login credentials.
 
+   Meal nutrition lookup requires a free USDA FoodData Central API key from
+   [the USDA API key signup page](https://fdc.nal.usda.gov/api-key-signup.html).
+   The API still starts without the key and logs a warning; meal items are then
+   saved as unmatched with no calorie or macro values until a key is configured.
+
+   Image meal logging also requires the configured Ollama vision model locally:
+   \`\`\`
+   ollama pull llava
+   \`\`\`
+   If it is unavailable, text meal logging and the rest of the application continue
+   working; image uploads return a clear service-unavailable response.
+
 4. Create the \`FoodAI_DB\` database in PostgreSQL (via pgAdmin or \`psql\`).
 
-5. Run the server:
+5. Apply all database migrations. This is required before starting the API:
+   \`\`\`
+   alembic -c app/alembic.ini upgrade head
+   \`\`\`
+
+   For an existing database that was created by the former automatic
+   `Base.metadata.create_all` startup path, first verify that it matches the
+   baseline tables (`users`, `chat_sessions`, and `chat_messages`), then adopt
+   the baseline and apply later migrations:
+   \`\`\`
+   alembic -c app/alembic.ini stamp 0001_initial_schema
+   alembic -c app/alembic.ini upgrade head
+   \`\`\`
+
+6. Run the server:
    \`\`\`
    python -m uvicorn app.main:app --reload
    \`\`\`
@@ -95,10 +132,13 @@ python -m pytest -v
 ## Authentication flow
 
 1. \`POST /users/\` — register a new user (password is hashed with bcrypt before storage).
-2. \`POST /users/login\` — returns a JWT access token (\`Bearer\` type, 60-minute expiry).
-3. \`POST /chat/\` — requires \`Authorization: Bearer <token>\` header.
+2. \`POST /users/login\` — returns a short-lived JWT access token and an opaque refresh token.
+3. \`POST /users/refresh\` — exchanges an active refresh token for a new access token.
+4. \`POST /users/logout\` — revokes the stored refresh-token hash.
+5. \`POST /chat/\` — requires \`Authorization: Bearer <access-token>\`.
+6. `POST /meals/` — parses meal text with Ollama, then obtains nutrition values only from USDA FoodData Central.
 
-The Angular frontend handles this automatically via an HTTP interceptor and route guard — login once, and the token is attached to every request until it expires or you log out.
+The Angular frontend attaches access tokens automatically and performs one silent refresh-and-retry when an API request returns 401.
 
 ## Security notes
 

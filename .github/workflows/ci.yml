@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: food_ai_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d food_ai_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/food_ai_test
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: food_ai_test
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      JWT_SECRET_KEY: ci-only-secret
+      MIGRATION_CHECK_ENABLED: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+      - name: Apply database migrations
+        run: alembic -c app/alembic.ini upgrade head
+      - name: Run backend tests
+        run: python -m pytest -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: food-ai-ui/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: food-ai-ui
+        run: npm ci
+      - name: Build frontend
+        working-directory: food-ai-ui
+        run: npx ng build

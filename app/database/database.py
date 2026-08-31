@@ -1,12 +1,7 @@
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from urllib.parse import quote_plus
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-from app.config.settings import *
-
-DATABASE_URL = (
-    f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-)
+from app.config.settings import DATABASE_URL
 
 engine = create_engine(DATABASE_URL)
 
@@ -22,5 +17,8 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

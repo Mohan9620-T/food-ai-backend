@@ -1,14 +1,19 @@
-import os
 import bcrypt
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
 
-# In production, load this from .env — never hardcode a real secret.
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-only-change-this-secret")
+from app.config.settings import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    JWT_SECRET_KEY,
+    REFRESH_TOKEN_EXPIRE_DAYS,
+    REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS,
+)
+
+SECRET_KEY = JWT_SECRET_KEY
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS = 30
 
 
 def hash_password(plain_password: str) -> str:
@@ -28,12 +33,27 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "token_type": "access"})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def decode_access_token(token: str) -> dict | None:
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload if payload.get("token_type") == "access" else None
     except JWTError:
         return None
+
+
+def create_refresh_token(remember_me: bool = False) -> tuple[str, datetime]:
+    raw_token = secrets.token_urlsafe(48)
+    lifetime_days = (
+        REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS
+        if remember_me
+        else REFRESH_TOKEN_EXPIRE_DAYS
+    )
+    return raw_token, datetime.now(timezone.utc) + timedelta(days=lifetime_days)
+
+
+def hash_refresh_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()

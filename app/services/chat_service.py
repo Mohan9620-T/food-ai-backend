@@ -1,5 +1,8 @@
+import json
 import re
+from collections.abc import AsyncIterator
 
+import httpx
 import requests
 
 from app.config import settings
@@ -11,7 +14,7 @@ class ChatService:
         "aama", "athu", "enna", "enakku", "enga", "epdi", "eppadi", "irukku",
         "iruken", "kaatu", "kooda", "la", "na", "nalla", "pannu", "pesu",
         "puriyala", "sollu", "sapadu", "seri", "tanglish", "thanglish", "ungal",
-        "vanakam", "vanakkam", "vannakam", "venum", "yen", "yenna",
+        "vanakam", "vanakkam", "vannakam", "venum", "yen", "yenna", "kissa"
     }
     HINDI_LATIN_WORDS = {
         "aap", "accha", "acha", "aur", "batao", "hai", "hain", "kaise", "kya",
@@ -26,6 +29,7 @@ class ChatService:
 Language handling:
 - Understand the user's meaning even when they use a non-English language, mixed
   languages, spelling mistakes, or transliteration (for example, Tanglish: Tamil
+
   written with Latin letters).
 - Silently interpret transliterated text as its intended language before answering.
 - Reply in the language and writing style of the latest user message. For Tanglish,
@@ -131,6 +135,74 @@ Content-versus-format rules:
         history: list[ChatHistoryMessage],
         reference_history: list[ChatHistoryMessage],
     ) -> str:
+        immediate_answer = self._immediate_answer(message)
+        if immediate_answer:
+            return immediate_answer
+
+        response_language, body = self._build_request_body(
+            message, history, reference_history, stream=False
+        )
+
+        response = requests.post(
+            settings.OLLAMA_URL,
+            json=body,
+            timeout=settings.OLLAMA_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        answer = response.json()["message"]["content"]
+
+        # Smaller local models can acknowledge the requested transliteration but still
+        # answer in the native script. Give them one focused correction opportunity.
+        if self.response_uses_wrong_script(answer, response_language):
+            body["messages"].extend([
+                {"role": "assistant", "content": answer},
+                {
+                    "role": "system",
+                    "content": (
+                        f"Rewrite the previous answer only in {response_language}. "
+                        "Use Latin/English letters for every word. Do not use Tamil or "
+                        "Devanagari characters. Preserve the meaning and answer directly."
+                    ),
+                },
+            ])
+            response = requests.post(
+                settings.OLLAMA_URL,
+                json=body,
+                timeout=settings.OLLAMA_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            answer = response.json()["message"]["content"]
+
+        return answer
+
+    async def stream_chat(
+        self,
+        message: str,
+        history: list[ChatHistoryMessage],
+        reference_history: list[ChatHistoryMessage],
+    ) -> AsyncIterator[str]:
+        """Yield Ollama response text and close its socket when iteration stops."""
+        immediate_answer = self._immediate_answer(message)
+        if immediate_answer:
+            yield immediate_answer
+            return
+
+        _, body = self._build_request_body(message, history, reference_history, stream=True)
+        timeout = httpx.Timeout(settings.OLLAMA_TIMEOUT_SECONDS)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("POST", settings.OLLAMA_URL, json=body) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    event = json.loads(line)
+                    content = event.get("message", {}).get("content", "")
+                    if content:
+                        yield content
+                    if event.get("done"):
+                        break
+
+    def _immediate_answer(self, message: str) -> str | None:
         response_language = self.detect_language(message)
         if (
             response_language == "Tanglish (Tamil written in Latin letters)"
@@ -140,8 +212,17 @@ Content-versus-format rules:
                 "Kandippa, content-a anuppunga. Adha simple-ah puriyura maadhiri "
                 "Thanglish-la explain panren."
             )
+        return None
 
-        url = settings.OLLAMA_URL
+    def _build_request_body(
+        self,
+        message: str,
+        history: list[ChatHistoryMessage],
+        reference_history: list[ChatHistoryMessage],
+        *,
+        stream: bool,
+    ) -> tuple[str, dict]:
+        response_language = self.detect_language(message)
         messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
 
         if reference_history:
@@ -177,30 +258,8 @@ Content-versus-format rules:
         body = {
             "model": settings.OLLAMA_MODEL,
             "messages": messages,
-            "stream": False,
+            "stream": stream,
             "options": {"temperature": 0.2},
         }
 
-        response = requests.post(url, json=body, timeout=settings.OLLAMA_TIMEOUT_SECONDS)
-        response.raise_for_status()
-        answer = response.json()["message"]["content"]
-
-        # Smaller local models can acknowledge the requested transliteration but still
-        # answer in the native script. Give them one focused correction opportunity.
-        if self.response_uses_wrong_script(answer, response_language):
-            body["messages"].extend([
-                {"role": "assistant", "content": answer},
-                {
-                    "role": "system",
-                    "content": (
-                        f"Rewrite the previous answer only in {response_language}. "
-                        "Use Latin/English letters for every word. Do not use Tamil or "
-                        "Devanagari characters. Preserve the meaning and answer directly."
-                    ),
-                },
-            ])
-            response = requests.post(url, json=body, timeout=settings.OLLAMA_TIMEOUT_SECONDS)
-            response.raise_for_status()
-            answer = response.json()["message"]["content"]
-
-        return answer
+        return response_language, body

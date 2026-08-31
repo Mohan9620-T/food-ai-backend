@@ -1,5 +1,7 @@
 from datetime import datetime
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class ChatMessageOut(BaseModel):
@@ -31,3 +33,12 @@ class ChatSessionCreate(BaseModel):
 
 class ChatSessionRename(BaseModel):
     title: str
+
+
+class ChatMessageImport(BaseModel):
+    sender: Literal["user", "bot"]
+    content: str
+
+
+class ChatSessionImport(BaseModel):
+    messages: list[ChatMessageImport] = Field(default_factory=list)

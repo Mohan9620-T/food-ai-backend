@@ -1,4 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+import json
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
@@ -7,6 +11,7 @@ from app.schemas.chat_session import (
     ChatSessionOut,
     ChatSessionDetailOut,
     ChatSessionCreate,
+    ChatSessionImport,
     ChatSessionRename,
 )
 from app.services.chat_service import ChatService
@@ -20,6 +25,7 @@ router = APIRouter(
 
 service = ChatService()
 repository = ChatRepository()
+logger = logging.getLogger(__name__)
 
 
 def _get_user_id(current_user: dict) -> int:
@@ -50,6 +56,27 @@ def get_session(
     if not session:
         raise HTTPException(status_code=404, detail="Chat session not found")
     return session
+
+
+@router.post("/sessions/{session_id}/import", response_model=ChatSessionDetailOut)
+def import_session_messages(
+    session_id: int,
+    payload: ChatSessionImport,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _get_user_id(current_user)
+    logger.info("chat.requested", extra={"user_id": user_id, "session_id": session_id})
+    session = repository.get_session(db, session_id, user_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    repository.import_messages(
+        db,
+        session.id,
+        [(message.sender, message.content) for message in payload.messages],
+    )
+    return repository.get_session(db, session.id, user_id)
 
 
 @router.put("/sessions/{session_id}", response_model=ChatSessionOut)
@@ -101,4 +128,66 @@ def chat(
 
     repository.add_message(db, session.id, "bot", answer)
 
-    return ChatResponse(response=answer)
+    logger.info("chat.completed", extra={"user_id": user_id, "session_id": session.id})
+
+    return ChatResponse(response=answer, session_id=session.id)
+
+
+@router.post("/stream")
+async def stream_chat(
+    payload: ChatRequest,
+    request: Request,
+    session_id: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _get_user_id(current_user)
+    if session_id:
+        session = repository.get_session(db, session_id, user_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+    else:
+        title = payload.message[:60] if len(payload.message) <= 60 else f"{payload.message[:57]}..."
+        session = repository.create_session(db, user_id, title)
+
+    repository.add_message(db, session.id, "user", payload.message)
+    logger.info("chat.stream_started", extra={"user_id": user_id, "session_id": session.id})
+
+    async def generate():
+        chunks: list[str] = []
+        iterator = service.stream_chat(
+            payload.message,
+            payload.history,
+            payload.reference_history,
+        )
+        try:
+            yield json.dumps({"type": "session", "session_id": session.id}) + "\n"
+            while True:
+                if await request.is_disconnected():
+                    logger.info(
+                        "chat.stream_disconnected",
+                        extra={"user_id": user_id, "session_id": session.id},
+                    )
+                    return
+                try:
+                    chunk = await anext(iterator)
+                except StopAsyncIteration:
+                    break
+                chunks.append(chunk)
+                yield json.dumps({"type": "token", "content": chunk}) + "\n"
+
+            answer = "".join(chunks)
+            if answer:
+                repository.add_message(db, session.id, "bot", answer)
+            logger.info("chat.stream_completed", extra={"user_id": user_id, "session_id": session.id})
+            yield json.dumps({"type": "done"}) + "\n"
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if close:
+                await close()
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

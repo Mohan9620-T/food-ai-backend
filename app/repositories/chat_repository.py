@@ -40,6 +40,22 @@ class ChatRepository:
 
         return message
 
+    def import_messages(
+        self,
+        db: Session,
+        session_id: int,
+        messages: list[tuple[str, str]],
+    ) -> list[ChatMessageRecord]:
+        records = [
+            ChatMessageRecord(session_id=session_id, sender=sender, content=content)
+            for sender, content in messages
+        ]
+        db.add_all(records)
+        db.commit()
+        for record in records:
+            db.refresh(record)
+        return records
+
     def rename_session(self, db: Session, session_id: int, user_id: int, title: str) -> ChatSession | None:
         session = self.get_session(db, session_id, user_id)
         if not session:

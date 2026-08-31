@@ -61,6 +61,116 @@ def test_chat_success_with_valid_token(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["response"] == "Vanakkam! Nalla irukeenga?"
+    assert isinstance(response.json()["session_id"], int)
+
+
+def test_chat_stream_returns_session_tokens_and_persists_answer(client, monkeypatch):
+    token = _register_and_login(client, email="stream@example.com")
+
+    async def fake_stream(self, message, history, reference_history):
+        yield "Hello "
+        yield "there"
+
+    monkeypatch.setattr(ChatService, "stream_chat", fake_stream)
+    response = client.post(
+        "/chat/stream",
+        json={"message": "Hi", "history": [], "reference_history": []},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    assert events[0]["type"] == "session"
+    assert [event.get("content") for event in events if event["type"] == "token"] == [
+        "Hello ", "there"
+    ]
+    assert events[-1] == {"type": "done"}
+
+    session_response = client.get(
+        f"/chat/sessions/{events[0]['session_id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert session_response.json()["messages"][-1]["content"] == "Hello there"
+
+
+def test_chat_stream_checks_disconnect_before_pulling_ollama(client, monkeypatch):
+    from starlette.requests import Request
+
+    token = _register_and_login(client, email="disconnect@example.com")
+    pulled = False
+
+    async def fake_stream(self, message, history, reference_history):
+        nonlocal pulled
+        pulled = True
+        yield "must not be read"
+
+    async def disconnected(self):
+        return True
+
+    monkeypatch.setattr(ChatService, "stream_chat", fake_stream)
+    monkeypatch.setattr(Request, "is_disconnected", disconnected)
+    response = client.post(
+        "/chat/stream",
+        json={"message": "Stop", "history": [], "reference_history": []},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert pulled is False
+    assert '"type": "token"' not in response.text
+
+
+def test_import_chat_session_messages(client):
+    token = _register_and_login(client, email="migration@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_response = client.post(
+        "/chat/sessions",
+        json={"title": "Imported chat"},
+        headers=headers,
+    )
+    assert create_response.status_code == 200
+    session_id = create_response.json()["id"]
+
+    import_response = client.post(
+        f"/chat/sessions/{session_id}/import",
+        json={
+            "messages": [
+                {"sender": "user", "content": "Old question"},
+                {"sender": "bot", "content": "Old answer"},
+            ]
+        },
+        headers=headers,
+    )
+
+    assert import_response.status_code == 200
+    assert import_response.json()["id"] == session_id
+    assert [
+        {"sender": message["sender"], "content": message["content"]}
+        for message in import_response.json()["messages"]
+    ] == [
+        {"sender": "user", "content": "Old question"},
+        {"sender": "bot", "content": "Old answer"},
+    ]
+
+
+def test_import_chat_session_rejects_another_users_session(client):
+    first_token = _register_and_login(client, email="first-migration@example.com")
+    second_token = _register_and_login(client, email="second-migration@example.com")
+    create_response = client.post(
+        "/chat/sessions",
+        json={"title": "Private chat"},
+        headers={"Authorization": f"Bearer {first_token}"},
+    )
+    session_id = create_response.json()["id"]
+
+    response = client.post(
+        f"/chat/sessions/{session_id}/import",
+        json={"messages": [{"sender": "user", "content": "Private"}]},
+        headers={"Authorization": f"Bearer {second_token}"},
+    )
+
+    assert response.status_code == 404
 
 
 def test_chat_service_uses_request_message_when_history_is_stale(monkeypatch):
