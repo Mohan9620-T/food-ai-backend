@@ -109,7 +109,9 @@ export class ChatService {
       message: data.message,
       history: data.history,
       reference_history: data.referenceHistory
-    });
+    }).pipe(tap((response) => {
+      if (conversationId) this.acceptResponse(conversationId, response);
+    }));
   }
 
   async streamMessage(data: ChatRequest, conversationId: string): Promise<void> {
@@ -137,45 +139,29 @@ export class ChatService {
   }
 
   acceptResponse(conversationId: string, response: ChatResponse): void {
-    const serverConversationId = String(response.session_id);
     this.conversationsState.update((conversations) => conversations.map((conversation) => {
       if (conversation.id !== conversationId) return conversation;
       return {
         ...conversation,
-        id: serverConversationId,
+        sessionId: response.session_id,
         messages: [...conversation.messages, { sender: 'bot' as const, text: response.response }],
         updatedAt: Date.now()
       };
     }).sort((first, second) => second.updatedAt - first.updatedAt));
-
-    if (this.activeConversationIdState() === conversationId) {
-      this.activeConversationIdState.set(serverConversationId);
-    }
   }
 
   private acceptStreamSession(conversationId: string, sessionId: number): string {
-    const serverId = String(sessionId);
     this.conversationsState.update((conversations) => conversations.map((conversation) =>
       conversation.id === conversationId
         ? {
             ...conversation,
-            id: serverId,
+            sessionId,
             messages: [...conversation.messages, { sender: 'bot' as const, text: '' }],
             updatedAt: Date.now()
           }
         : conversation
     ));
-    if (this.activeConversationIdState() === conversationId) {
-      this.activeConversationIdState.set(serverId);
-    }
-    if (this.pendingConversationIdState() === conversationId) {
-      this.pendingConversationIdState.set(serverId);
-    }
-    const pending = this.pendingResponseState();
-    if (pending?.conversationId === conversationId) {
-      this.pendingResponseState.set({ ...pending, conversationId: serverId });
-    }
-    return serverId;
+    return conversationId;
   }
 
   private appendStreamChunk(conversationId: string, chunk: string): void {
@@ -512,6 +498,7 @@ export class ChatService {
   private fromApiSession(session: ChatSessionDetailApi): ChatConversation {
     return {
       id: String(session.id),
+      sessionId: session.id,
       title: session.title,
       messages: session.messages.map((message) => ({ sender: message.sender, text: message.content })),
       updatedAt: Date.parse(session.updated_at)
@@ -552,7 +539,10 @@ export class ChatService {
   }
 
   private toServerSessionId(conversationId: string | null): number | null {
-    return conversationId && /^\d+$/.test(conversationId) ? Number(conversationId) : null;
+    if (!conversationId) return null;
+    const conversation = this.conversationsState().find((item) => item.id === conversationId);
+    if (conversation?.sessionId !== undefined) return conversation.sessionId;
+    return /^\d+$/.test(conversationId) ? Number(conversationId) : null;
   }
 
   private toTitle(message: string): string {

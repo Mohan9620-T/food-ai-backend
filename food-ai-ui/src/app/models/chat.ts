@@ -26,6 +26,7 @@ export interface ChatHistoryMessage {
 
 export interface ChatConversation {
   id: string;
+  sessionId?: number;
   title: string;
   messages: ChatMessage[];
   updatedAt: number;
