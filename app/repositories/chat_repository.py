@@ -5,6 +5,39 @@ from app.models.chat import ChatSession, ChatMessageRecord
 
 class ChatRepository:
 
+    def consolidate_sessions(self, db: Session, user_id: int) -> list[ChatSession]:
+        sessions = (
+            db.query(ChatSession)
+            .filter(ChatSession.user_id == user_id)
+            .order_by(ChatSession.created_at.asc(), ChatSession.id.asc())
+            .all()
+        )
+        if not sessions:
+            return []
+        primary = sessions[0]
+        redundant_ids = [session.id for session in sessions[1:]]
+        if redundant_ids:
+            db.query(ChatMessageRecord).filter(
+                ChatMessageRecord.session_id.in_(redundant_ids)
+            ).update(
+                {ChatMessageRecord.session_id: primary.id},
+                synchronize_session=False,
+            )
+            db.query(ChatSession).filter(ChatSession.id.in_(redundant_ids)).delete(
+                synchronize_session=False
+            )
+            newest_message = (
+                db.query(ChatMessageRecord)
+                .filter(ChatMessageRecord.session_id == primary.id)
+                .order_by(ChatMessageRecord.created_at.desc(), ChatMessageRecord.id.desc())
+                .first()
+            )
+            if newest_message is not None:
+                primary.updated_at = newest_message.created_at
+        db.commit()
+        db.expire_all()
+        return self.get_sessions_for_user(db, user_id)
+
     def create_session(self, db: Session, user_id: int, title: str = "New chat") -> ChatSession:
         session = ChatSession(user_id=user_id, title=title)
         db.add(session)

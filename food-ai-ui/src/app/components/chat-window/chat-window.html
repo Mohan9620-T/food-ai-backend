@@ -7,6 +7,11 @@
     </section>
   }
   @for (msg of messages(); track $index) {
+    @if (shouldShowDateSeparator($index)) {
+      <div class="date-separator" role="separator" [attr.aria-label]="formatMessageDate(msg.createdAt)">
+        <span>{{ formatMessageDate(msg.createdAt) }}</span>
+      </div>
+    }
     @if (msg.sender === 'user') {
     <div class="user-message-group">
       <div class="message user-message">{{ msg.text }}</div>

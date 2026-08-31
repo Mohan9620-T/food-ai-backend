@@ -35,6 +35,7 @@ interface ChatSessionSummaryApi {
 interface ChatMessageApi {
   sender: 'user' | 'bot';
   content: string;
+  created_at: string;
 }
 
 interface ChatSessionDetailApi extends ChatSessionSummaryApi {
@@ -54,6 +55,7 @@ export class ChatService {
   private readonly legacyActiveStorageKeyPrefix = 'food-ai-active-chat';
   private readonly legacyPendingStorageKeyPrefix = 'food-ai-pending-response';
   private readonly migrationFlagPrefix = 'food-ai-migrated-v1';
+  private readonly consolidationFlagPrefix = 'food-ai-sessions-consolidated-single-v3';
 
   private readonly http = inject(HttpClient);
   private readonly authService = inject(AuthService);
@@ -89,6 +91,7 @@ export class ChatService {
       this.loadingSessionsState.set(true);
 
       const subscription = this.migrateLegacyConversations(userId).pipe(
+        switchMap(() => this.consolidateExistingSessions(userId)),
         switchMap(() => this.fetchConversations()),
         finalize(() => this.loadingSessionsState.set(false))
       ).subscribe({
@@ -144,7 +147,7 @@ export class ChatService {
       return {
         ...conversation,
         sessionId: response.session_id,
-        messages: [...conversation.messages, { sender: 'bot' as const, text: response.response }],
+        messages: [...conversation.messages, { sender: 'bot' as const, text: response.response, createdAt: new Date().toISOString() }],
         updatedAt: Date.now()
       };
     }).sort((first, second) => second.updatedAt - first.updatedAt));
@@ -156,7 +159,7 @@ export class ChatService {
         ? {
             ...conversation,
             sessionId,
-            messages: [...conversation.messages, { sender: 'bot' as const, text: '' }],
+            messages: [...conversation.messages, { sender: 'bot' as const, text: '', createdAt: new Date().toISOString() }],
             updatedAt: Date.now()
           }
         : conversation
@@ -275,7 +278,7 @@ export class ChatService {
         title: conversation.messages.length === 0 && message.sender === 'user'
           ? this.toTitle(message.text)
           : conversation.title,
-        messages: [...conversation.messages, message],
+        messages: [...conversation.messages, { ...message, createdAt: message.createdAt ?? new Date().toISOString() }],
         updatedAt: Date.now()
       };
     }).sort((first, second) => second.updatedAt - first.updatedAt));
@@ -319,7 +322,7 @@ export class ChatService {
         ...conversation,
         messages: [
           ...conversation.messages.slice(0, editingMessage.index),
-          { sender: 'user' as const, text }
+          { sender: 'user' as const, text, createdAt: originalMessage.createdAt }
         ],
         updatedAt: Date.now()
       };
@@ -404,6 +407,25 @@ export class ChatService {
         ))
       ),
       map((sessions) => sessions.map((session) => this.fromApiSession(session)))
+    );
+  }
+
+  private consolidateExistingSessions(userId: string): Observable<void> {
+    if (!this.isBrowser) return of(undefined);
+    const flagKey = `${this.consolidationFlagPrefix}:${userId}`;
+    if (localStorage.getItem(flagKey)) return of(undefined);
+    return this.http.post<ChatSessionSummaryApi[]>(
+      `${this.sessionsUrl}/consolidate`,
+      {}
+    ).pipe(
+      tap(() => localStorage.setItem(flagKey, 'true')),
+      map(() => undefined),
+      catchError(() => {
+        this.migrationNoticeState.set(
+          'Old chats could not be combined. They are still saved and consolidation will retry next login.'
+        );
+        return of(undefined);
+      })
     );
   }
 
@@ -500,7 +522,11 @@ export class ChatService {
       id: String(session.id),
       sessionId: session.id,
       title: session.title,
-      messages: session.messages.map((message) => ({ sender: message.sender, text: message.content })),
+      messages: session.messages.map((message) => ({
+        sender: message.sender,
+        text: message.content,
+        createdAt: message.created_at
+      })),
       updatedAt: Date.parse(session.updated_at)
     };
   }

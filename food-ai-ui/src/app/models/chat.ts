@@ -17,6 +17,7 @@ export interface PendingChatResponse {
 export interface ChatMessage {
   sender: 'user' | 'bot';
   text: string;
+  createdAt?: string;
 }
 
 export interface ChatHistoryMessage {

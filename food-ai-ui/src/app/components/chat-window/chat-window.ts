@@ -82,6 +82,36 @@ export class ChatWindow implements AfterViewChecked {
     this.openMessageMenuIndex.update((openIndex) => openIndex === index ? null : index);
   }
 
+  shouldShowDateSeparator(index: number): boolean {
+    const current = this.messages()[index]?.createdAt;
+    if (!current) return false;
+    const previous = index > 0 ? this.messages()[index - 1]?.createdAt : null;
+    return !previous || this.dateKey(current) !== this.dateKey(previous);
+  }
+
+  formatMessageDate(value: string | undefined): string {
+    if (!value) return '';
+    const date = new Date(value);
+    const today = new Date();
+    if (this.dateKey(value) === this.dateKey(today.toISOString())) return 'Today';
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (this.dateKey(value) === this.dateKey(yesterday.toISOString())) return 'Yesterday';
+    const daysAgo = Math.floor((this.localDayStart(today).getTime() - this.localDayStart(date).getTime()) / 86_400_000);
+    return daysAgo >= 0 && daysAgo < 7
+      ? new Intl.DateTimeFormat(undefined, { weekday: 'long' }).format(date)
+      : new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+  }
+
+  private dateKey(value: string): string {
+    const date = new Date(value);
+    return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+  }
+
+  private localDayStart(value: Date): Date {
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  }
+
   renderMarkdown(text: string): string {
     const html = marked.parse(text, { async: false, gfm: true, breaks: true }) as string;
     return this.sanitizer.sanitize(SecurityContext.HTML, html) ?? '';

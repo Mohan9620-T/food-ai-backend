@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+
+from app.models.chat import ChatMessageRecord, ChatSession
 from app.services.chat_service import ChatService
 
 
@@ -38,6 +41,50 @@ def test_chat_rejects_invalid_token(client):
     )
 
     assert response.status_code == 401
+
+
+def test_consolidate_sessions_preserves_messages_from_different_dates_in_one_conversation(client, db_session):
+    token = _register_and_login(client, "consolidate@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_ids = []
+    for index in range(3):
+        session = client.post(
+            "/chat/sessions",
+            headers=headers,
+            json={"title": f"Message {index + 1}"},
+        ).json()
+        session_ids.append(session["id"])
+        imported = client.post(
+            f"/chat/sessions/{session['id']}/import",
+            headers=headers,
+            json={"messages": [
+                {"sender": "user", "content": f"Question {index + 1}"},
+                {"sender": "bot", "content": f"Answer {index + 1}"},
+            ]},
+        )
+        assert imported.status_code == 200
+
+        day = 10 if index < 2 else 11
+        timestamp = datetime(2026, 8, day, 9 + index, tzinfo=timezone.utc)
+        db_session.query(ChatSession).filter(ChatSession.id == session["id"]).update({
+            ChatSession.created_at: timestamp,
+            ChatSession.updated_at: timestamp,
+        })
+        db_session.query(ChatMessageRecord).filter(
+            ChatMessageRecord.session_id == session["id"]
+        ).update({ChatMessageRecord.created_at: timestamp})
+        db_session.commit()
+
+    response = client.post("/chat/sessions/consolidate", headers=headers)
+    assert response.status_code == 200
+    sessions = client.get("/chat/sessions", headers=headers).json()
+    assert len(sessions) == 1
+    history = client.get(
+        f"/chat/sessions/{sessions[0]['id']}", headers=headers
+    ).json()["messages"]
+    assert [message["content"] for message in history] == [
+        "Question 1", "Answer 1", "Question 2", "Answer 2", "Question 3", "Answer 3",
+    ]
 
 
 def test_chat_success_with_valid_token(client, monkeypatch):

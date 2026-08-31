@@ -46,6 +46,20 @@ def create_session(
     return repository.create_session(db, _get_user_id(current_user), payload.title)
 
 
+@router.post("/sessions/consolidate", response_model=list[ChatSessionOut])
+def consolidate_sessions(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _get_user_id(current_user)
+    session = repository.consolidate_sessions(db, user_id)
+    logger.info(
+        "chat.sessions_consolidated",
+        extra={"user_id": user_id, "session_count": len(session)},
+    )
+    return session
+
+
 @router.get("/sessions/{session_id}", response_model=ChatSessionDetailOut)
 def get_session(
     session_id: int,

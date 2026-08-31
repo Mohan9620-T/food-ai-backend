@@ -21,6 +21,26 @@
   overflow-wrap: anywhere;
   line-height: 1.6;
 }
+.date-separator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  margin: var(--space-5) 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-align: center;
+}
+.date-separator::before,
+.date-separator::after {
+  height: 1px;
+  flex: 1;
+  background: var(--border);
+  content: '';
+}
+.date-separator span {
+  flex: 0 0 auto;
+}
 .user-message {
   background: var(--accent);
   color: var(--accent-contrast);

@@ -54,6 +54,7 @@ export class Sidebar {
     this.chatService.selectConversation(conversationId);
     this.openMenuId.set(null);
     this.mobileOpen.set(false);
+    this.router.navigate(['/']);
   }
 
   toggleMenu(conversationId: string): void {
