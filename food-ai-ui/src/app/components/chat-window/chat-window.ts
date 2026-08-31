@@ -1,5 +1,8 @@
-import { AfterViewChecked, Component, ElementRef, inject, signal, viewChild } from '@angular/core';
+import { DOCUMENT } from '@angular/common';
+import { DomSanitizer } from '@angular/platform-browser';
+import { AfterViewChecked, afterNextRender, Component, DestroyRef, effect, ElementRef, inject, SecurityContext, signal, viewChild } from '@angular/core';
 import { ChatService } from '../../services/chat';
+import { marked } from 'marked';
 
 @Component({
   selector: 'app-chat-window',
@@ -8,13 +11,36 @@ import { ChatService } from '../../services/chat';
 })
 export class ChatWindow implements AfterViewChecked {
   private readonly chatService = inject(ChatService);
+  private readonly document = inject(DOCUMENT);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly sanitizer = inject(DomSanitizer);
   readonly messages = this.chatService.messages;
   readonly isResponding = this.chatService.isResponding;
   private readonly chatContainer = viewChild<ElementRef<HTMLDivElement>>('chatContainer');
   private previousConversationId: string | null | undefined;
   private previousMessageCount = -1;
+  private previousContentLength = -1;
   private previousRespondingState = false;
   readonly openMessageMenuIndex = signal<number | null>(null);
+
+  constructor() {
+    effect(() => {
+      this.chatService.activeConversationId();
+      queueMicrotask(() => this.chatContainer()?.nativeElement.focus({ preventScroll: true }));
+    });
+    afterNextRender(() => {
+      const closeMenuOnOutsideClick = (event: PointerEvent): void => {
+        const target = event.target;
+        if (!(target instanceof Element) || target.closest('.message-actions')) return;
+        this.openMessageMenuIndex.set(null);
+      };
+
+      this.document.addEventListener('pointerdown', closeMenuOnOutsideClick);
+      this.destroyRef.onDestroy(() => {
+        this.document.removeEventListener('pointerdown', closeMenuOnOutsideClick);
+      });
+    });
+  }
 
   ngAfterViewChecked(): void {
     const container = this.chatContainer()?.nativeElement;
@@ -22,12 +48,15 @@ export class ChatWindow implements AfterViewChecked {
 
     const conversationId = this.chatService.getActiveConversationId();
     const messageCount = this.messages().length;
+    const contentLength = this.messages().reduce((total, message) => total + message.text.length, 0);
     const responding = this.isResponding();
     const conversationChanged = conversationId !== this.previousConversationId;
     const contentChanged = messageCount !== this.previousMessageCount
+      || contentLength !== this.previousContentLength
       || responding !== this.previousRespondingState;
 
     if (conversationChanged) {
+      this.openMessageMenuIndex.set(null);
       container.scrollTop = container.scrollHeight;
     } else if (contentChanged) {
       container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
@@ -35,6 +64,7 @@ export class ChatWindow implements AfterViewChecked {
 
     this.previousConversationId = conversationId;
     this.previousMessageCount = messageCount;
+    this.previousContentLength = contentLength;
     this.previousRespondingState = responding;
   }
 
@@ -52,52 +82,8 @@ export class ChatWindow implements AfterViewChecked {
     this.openMessageMenuIndex.update((openIndex) => openIndex === index ? null : index);
   }
 
-  formattedLines(text: string): Array<Array<{ text: string; bold: boolean }>> {
-    return this.toDisplayLines(text).map((line) => {
-      const segments: Array<{ text: string; bold: boolean }> = [];
-      const expression = /\*\*(.+?)\*\*/g;
-      let position = 0;
-      let match: RegExpExecArray | null;
-
-      while ((match = expression.exec(line)) !== null) {
-        if (match.index > position) {
-          segments.push({ text: line.slice(position, match.index), bold: false });
-        }
-        segments.push({ text: match[1], bold: true });
-        position = match.index + match[0].length;
-      }
-
-      if (position < line.length) {
-        segments.push({ text: line.slice(position), bold: false });
-      }
-      return segments.length > 0 ? segments : [{ text: '\u00a0', bold: false }];
-    });
-  }
-
-  private toDisplayLines(text: string): string[] {
-    const displayLines: string[] = [];
-    let insideCodeBlock = false;
-
-    for (const sourceLine of text.replace(/\\n/g, '\n').split(/\r?\n/)) {
-      const line = sourceLine.trimEnd();
-
-      if (line.trimStart().startsWith('```')) {
-        insideCodeBlock = !insideCodeBlock;
-        displayLines.push(line);
-        continue;
-      }
-
-      if (insideCodeBlock || !line.trim() || /^\s*(?:[-*+] |\d+[.)] )/.test(line)) {
-        displayLines.push(line);
-        continue;
-      }
-
-      const sentences = line.match(/.*?(?:[.!?](?=\s|$)|$)/g)
-        ?.map((sentence) => sentence.trim())
-        .filter(Boolean) ?? [];
-      displayLines.push(...(sentences.length > 0 ? sentences : [line]));
-    }
-
-    return displayLines;
+  renderMarkdown(text: string): string {
+    const html = marked.parse(text, { async: false, gfm: true, breaks: true }) as string;
+    return this.sanitizer.sanitize(SecurityContext.HTML, html) ?? '';
   }
 }

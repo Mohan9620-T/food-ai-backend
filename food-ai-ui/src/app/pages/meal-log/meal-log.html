@@ -1,0 +1,58 @@
+<div class="meal-layout">
+  <app-sidebar></app-sidebar>
+  <main class="meal-page">
+    <header class="page-header">
+      <div><span class="eyebrow">Nutrition journal</span><h1>Meal Log</h1><p>Nutrition values come from USDA FoodData Central.</p></div>
+      <label class="date-control">Day<input type="date" [(ngModel)]="selectedDate" (change)="changeDate()" aria-label="Meal log date" /></label>
+    </header>
+
+    @if (error(); as message) { <div class="error-banner" role="alert">{{ message }}</div> }
+
+    <section class="entry-card" aria-labelledby="log-meal-title">
+      <h2 id="log-meal-title">Log a meal</h2>
+      <form (ngSubmit)="submit()">
+        <label for="meal-description">What did you eat?</label>
+        <textarea id="meal-description" name="description" rows="3" maxlength="2000" required [(ngModel)]="description" placeholder="Example: 2 large eggs and 100 g oatmeal"></textarea>
+        <div class="entry-footer"><small>Food names and portions are parsed first; nutrition is looked up separately.</small><button type="submit" [disabled]="!description.trim() || saving()">{{ saving() ? 'Looking up…' : 'Log meal' }}</button></div>
+      </form>
+      <div class="entry-divider"><span>or use a photo</span></div>
+      <div class="photo-actions">
+        <label class="photo-button" [class.disabled]="saving()">{{ saving() ? 'Processing…' : 'Upload photo' }}<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" [disabled]="saving()" (change)="uploadPhoto($event)" /></label>
+        <label class="photo-button secondary" [class.disabled]="saving()">Take photo<input type="file" accept="image/*" capture="environment" [disabled]="saving()" (change)="uploadPhoto($event)" /></label>
+        <small>JPEG, PNG, WebP, or GIF · maximum 8 MB. Photos are processed in memory and not stored.</small>
+      </div>
+    </section>
+
+    @if (loading()) {
+      <section class="totals-skeleton skeleton" aria-label="Loading daily totals"></section>
+      @for (item of [1,2,3]; track item) { <section class="meal-skeleton skeleton" aria-hidden="true"></section> }
+    } @else {
+      @if (totals(); as summary) {
+        <section class="totals-card" aria-labelledby="daily-totals-title">
+          <div><h2 id="daily-totals-title">Daily totals</h2><p>{{ summary.matched_items }} matched item{{ summary.matched_items === 1 ? '' : 's' }} included</p></div>
+          <dl><div><dt>Calories</dt><dd>{{ summary.calories | number:'1.0-0' }}</dd></div><div><dt>Protein</dt><dd>{{ summary.protein_g | number:'1.0-1' }} g</dd></div><div><dt>Carbs</dt><dd>{{ summary.carbs_g | number:'1.0-1' }} g</dd></div><div><dt>Fat</dt><dd>{{ summary.fat_g | number:'1.0-1' }} g</dd></div></dl>
+          @if (summary.unmatched_items) { <p class="totals-note">{{ summary.unmatched_items }} unmatched item{{ summary.unmatched_items === 1 ? '' : 's' }} excluded from totals.</p> }
+        </section>
+      }
+
+      @if (meals().length === 0) {
+        <section class="empty-meals"><span aria-hidden="true">◇</span><h2>No meals logged</h2><p>Describe a meal above to add the first entry for this day.</p></section>
+      } @else {
+        <section class="meal-list" aria-labelledby="meals-title"><h2 id="meals-title">Meals</h2>
+          @for (meal of meals(); track meal.id) {
+            <article class="meal-card">
+              <header><div><div class="meal-meta"><time [attr.datetime]="meal.logged_at">{{ formatTime(meal.logged_at) }}</time><span class="source-badge">{{ meal.source === 'image' ? 'Photo' : 'Text' }}</span></div><h3>{{ meal.raw_description }}</h3></div><button type="button" class="delete-meal" (click)="deleteMeal(meal.id)" aria-label="Delete meal">Delete</button></header>
+              <ul>
+                @for (item of meal.items; track item.id) {
+                  <li><div class="food-copy"><strong>{{ item.quantity }} {{ item.unit }} {{ item.food_name }}</strong>@if (item.fdc_id === null) { <span class="unmatched">Unmatched</span> } @else { <a href="https://fdc.nal.usda.gov/fdc-app.html#/food-details/{{ item.fdc_id }}/nutrients" target="_blank" rel="noopener">USDA FDC {{ item.fdc_id }}</a> }</div>
+                    @if (item.fdc_id !== null) { <dl class="item-macros"><div><dt>kcal</dt><dd>{{ item.calories | number:'1.0-0' }}</dd></div><div><dt>P</dt><dd>{{ item.protein_g | number:'1.0-1' }}g</dd></div><div><dt>C</dt><dd>{{ item.carbs_g | number:'1.0-1' }}g</dd></div><div><dt>F</dt><dd>{{ item.fat_g | number:'1.0-1' }}g</dd></div></dl> } @else { <span class="no-data">Not included in totals</span> }
+                  </li>
+                }
+              </ul>
+            </article>
+          }
+        </section>
+      }
+    }
+  </main>
+</div>

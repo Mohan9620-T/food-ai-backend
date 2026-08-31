@@ -1,4 +1,11 @@
-<div #chatContainer class="chat-window">
+<div #chatContainer class="chat-window" tabindex="-1" aria-label="Conversation messages">
+  @if (messages().length === 0 && !isResponding()) {
+    <section class="empty-state">
+      <span class="empty-icon" aria-hidden="true">✦</span>
+      <h1>How can I help?</h1>
+      <p>Ask a question, paste code, or start exploring an idea.</p>
+    </section>
+  }
   @for (msg of messages(); track $index) {
     @if (msg.sender === 'user') {
     <div class="user-message-group">
@@ -27,27 +34,13 @@
       </div>
     </div>
     } @else {
-    <div class="message bot-message">
-      @for (line of formattedLines(msg.text); track $index) {
-        <span class="message-line">
-          @for (segment of line; track $index) {
-            @if (segment.bold) {
-              <strong>{{ segment.text }}</strong>
-            } @else {
-              <span>{{ segment.text }}</span>
-            }
-          }
-        </span>
-      }
+    <div class="message bot-message markdown-body" [innerHTML]="renderMarkdown(msg.text)">
     </div>
     }
   }
   @if (isResponding()) {
-    <div class="thinking-status" role="status" aria-live="polite" aria-label="AI is thinking">
-      <span class="thinking-dot"></span>
-      <span class="thinking-dot"></span>
-      <span class="thinking-dot"></span>
-      <span class="thinking-text">Thinking...</span>
+    <div class="response-skeleton" role="status" aria-live="polite" aria-label="AI is preparing a response">
+      <span></span><span></span><span></span>
     </div>
   }
 </div>

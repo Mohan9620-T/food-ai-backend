@@ -1,7 +1,7 @@
 import { computed, inject, Injectable, PLATFORM_ID, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { isPlatformBrowser } from '@angular/common';
-import { Observable, tap } from 'rxjs';
+import { finalize, Observable, shareReplay, tap, throwError } from 'rxjs';
 import { environment } from '../../environments/environment';
 
 export interface LoginRequest {
@@ -19,22 +19,21 @@ export interface RegisterResponse {
 
 export interface TokenResponse {
   access_token: string;
+  refresh_token: string;
   token_type: string;
 }
 
-@Injectable({
-  providedIn: 'root'
-})
+@Injectable({ providedIn: 'root' })
 export class AuthService {
-
   private readonly apiUrl = `${environment.apiUrl}/users`;
-  private readonly tokenKey = 'food-ai-access-token';
+  private readonly accessTokenKey = 'food-ai-access-token';
+  private readonly refreshTokenKey = 'food-ai-refresh-token';
   private readonly rememberedEmailKey = 'food-ai-remembered-email';
 
   private readonly http = inject(HttpClient);
   private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
-
-  private readonly tokenState = signal<string | null>(this.readToken());
+  private readonly tokenState = signal<string | null>(this.readStoredValue(this.accessTokenKey));
+  private refreshRequest: Observable<TokenResponse> | null = null;
 
   readonly isLoggedIn = signal(!!this.tokenState());
   private readonly currentUser = computed(() => this.readUser(this.tokenState()));
@@ -56,11 +55,27 @@ export class AuthService {
       ...credentials,
       remember_me: rememberMe
     }).pipe(
-      tap((res) => {
+      tap((response) => {
         this.saveRememberedEmail(credentials.email, rememberMe);
-        this.setToken(res.access_token, rememberMe);
+        this.setTokens(response, rememberMe);
       })
     );
+  }
+
+  refreshAccessToken(): Observable<TokenResponse> {
+    if (this.refreshRequest) return this.refreshRequest;
+    const refreshToken = this.getRefreshToken();
+    if (!refreshToken) return throwError(() => new Error('No refresh token is available'));
+
+    const rememberMe = this.isBrowser && localStorage.getItem(this.refreshTokenKey) !== null;
+    this.refreshRequest = this.http.post<TokenResponse>(`${this.apiUrl}/refresh`, {
+      refresh_token: refreshToken
+    }).pipe(
+      tap((response) => this.setTokens(response, rememberMe)),
+      finalize(() => this.refreshRequest = null),
+      shareReplay({ bufferSize: 1, refCount: false })
+    );
+    return this.refreshRequest;
   }
 
   getRememberedEmail(): string {
@@ -73,9 +88,23 @@ export class AuthService {
   }
 
   logout(): void {
+    const refreshToken = this.getRefreshToken();
+    if (!refreshToken) {
+      this.clearSession();
+      return;
+    }
+
+    this.http.post(`${this.apiUrl}/logout`, { refresh_token: refreshToken }).pipe(
+      finalize(() => this.clearSession())
+    ).subscribe({ error: () => undefined });
+  }
+
+  clearSession(): void {
     if (this.isBrowser) {
-      localStorage.removeItem(this.tokenKey);
-      sessionStorage.removeItem(this.tokenKey);
+      for (const storage of [localStorage, sessionStorage]) {
+        storage.removeItem(this.accessTokenKey);
+        storage.removeItem(this.refreshTokenKey);
+      }
     }
     this.tokenState.set(null);
     this.isLoggedIn.set(false);
@@ -85,39 +114,40 @@ export class AuthService {
     return this.tokenState();
   }
 
-  private setToken(token: string, rememberMe: boolean): void {
+  getRefreshToken(): string | null {
+    return this.readStoredValue(this.refreshTokenKey);
+  }
+
+  private setTokens(tokens: TokenResponse, rememberMe: boolean): void {
     if (this.isBrowser) {
-      localStorage.removeItem(this.tokenKey);
-      sessionStorage.removeItem(this.tokenKey);
+      for (const storage of [localStorage, sessionStorage]) {
+        storage.removeItem(this.accessTokenKey);
+        storage.removeItem(this.refreshTokenKey);
+      }
       const storage = rememberMe ? localStorage : sessionStorage;
-      storage.setItem(this.tokenKey, token);
+      storage.setItem(this.accessTokenKey, tokens.access_token);
+      storage.setItem(this.refreshTokenKey, tokens.refresh_token);
     }
-    this.tokenState.set(token);
+    this.tokenState.set(tokens.access_token);
     this.isLoggedIn.set(true);
   }
 
   private saveRememberedEmail(email: string, rememberMe: boolean): void {
     if (!this.isBrowser) return;
-
-    if (rememberMe) {
-      localStorage.setItem(this.rememberedEmailKey, email);
-    } else {
-      localStorage.removeItem(this.rememberedEmailKey);
-    }
+    if (rememberMe) localStorage.setItem(this.rememberedEmailKey, email);
+    else localStorage.removeItem(this.rememberedEmailKey);
   }
 
-  private readToken(): string | null {
+  private readStoredValue(key: string): string | null {
     if (!this.isBrowser) return null;
-    return localStorage.getItem(this.tokenKey) ?? sessionStorage.getItem(this.tokenKey);
+    return localStorage.getItem(key) ?? sessionStorage.getItem(key);
   }
 
   private readUser(token: string | null): { sub: string; email: string; fullname?: string } | null {
     if (!this.isBrowser || !token) return null;
-
     try {
       const payloadPart = token.split('.')[1];
       if (!payloadPart) return null;
-
       const base64 = payloadPart.replace(/-/g, '+').replace(/_/g, '/');
       const payload = JSON.parse(atob(base64)) as {
         sub?: unknown;
@@ -125,7 +155,6 @@ export class AuthService {
         fullname?: unknown;
       };
       if (typeof payload.sub !== 'string') return null;
-
       return {
         sub: payload.sub,
         email: typeof payload.email === 'string' ? payload.email : '',

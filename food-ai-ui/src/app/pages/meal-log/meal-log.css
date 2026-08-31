@@ -1,0 +1,256 @@
+:host {
+  display: block;
+  height: 100dvh;
+}
+.meal-layout {
+  display: flex;
+  height: 100%;
+  background: var(--surface);
+}
+.meal-page {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-6) max(var(--space-4), calc((100% - 980px) / 2));
+  overflow: auto;
+}
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+.eyebrow {
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.page-header h1 {
+  margin: var(--space-1) 0;
+  font-size: 2rem;
+}
+.page-header p,
+.totals-card p {
+  margin: 0;
+  color: var(--text-muted);
+}
+.date-control {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+.date-control input,
+textarea {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.date-control input {
+  padding: var(--space-2) var(--space-3);
+}
+.entry-card,
+.totals-card,
+.meal-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-raised);
+  box-shadow: 0 2px 8px rgb(16 24 40/5%);
+}
+.entry-card {
+  padding: var(--space-5);
+  margin-bottom: var(--space-4);
+}
+h2 {
+  margin: 0 0 var(--space-4);
+  font-size: 1.05rem;
+}
+.entry-card label {
+  display: block;
+  margin-bottom: var(--space-2);
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+.entry-card textarea {
+  width: 100%;
+  padding: var(--space-3);
+  resize: vertical;
+  line-height: 1.5;
+}
+.entry-card textarea:focus,
+.date-control input:focus {
+  border-color: var(--focus);
+  outline: 3px solid color-mix(in srgb, var(--focus) 18%, transparent);
+}
+.entry-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+.entry-footer small {
+  color: var(--text-muted);
+}
+.entry-footer button {
+  padding: var(--space-3) var(--space-5);
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 700;
+  cursor: pointer;
+}
+.entry-footer button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.totals-card {
+  padding: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+.totals-card dl {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+.totals-card dl div {
+  padding: var(--space-3);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+}
+dt {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+dd {
+  margin: var(--space-1) 0 0;
+  font-size: 1.35rem;
+  font-weight: 750;
+}
+.totals-note {
+  font-size: 0.8rem;
+}
+.meal-list > h2 {
+  margin-top: var(--space-5);
+}
+.meal-card {
+  padding: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.meal-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.meal-card time {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.meal-card h3 {
+  margin: var(--space-1) 0 0;
+  font-size: 1rem;
+}
+.delete-meal {
+  border: 0;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+}
+.meal-card ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.meal-card li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+.meal-card li:last-child {
+  border: 0;
+}
+.food-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.food-copy a {
+  color: var(--accent);
+  font-size: 0.7rem;
+}
+.unmatched {
+  width: max-content;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.item-macros {
+  display: flex;
+  gap: var(--space-4);
+  margin: 0;
+  text-align: right;
+}
+.item-macros dd {
+  font-size: 0.875rem;
+}
+.no-data {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.empty-meals {
+  display: grid;
+  padding: var(--space-6);
+  place-items: center;
+  color: var(--text-muted);
+  text-align: center;
+}
+.empty-meals span {
+  font-size: 2rem;
+}
+.empty-meals h2 {
+  margin: var(--space-3) 0 var(--space-1);
+  color: var(--text);
+}
+.empty-meals p {
+  margin: 0;
+}
+@media (max-width: 767px) {
+  .meal-page {
+    padding: 72px var(--space-3) var(--space-5);
+  }
+  .page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .entry-footer,
+  .meal-card li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .entry-footer button {
+    width: 100%;
+  }
+  .totals-card dl {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .item-macros {
+    justify-content: space-between;
+    text-align: left;
+  }
+}

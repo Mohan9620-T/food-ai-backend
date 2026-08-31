@@ -12,18 +12,13 @@
     <button
       type="button"
       class="stop-button"
-      (click)="pauseResponse()"
+      (click)="stopResponse()"
       aria-label="Stop generating response"
       title="Stop generating">
       <span class="stop-icon" aria-hidden="true"></span>
     </button>
   } @else {
-    @if (hasPausedResponse()) {
-      <button type="button" class="continue-button" (click)="continueResponse()">
-        Continue
-      </button>
-    }
-    <button type="button" (click)="sendMessage()">
+    <button type="button" (click)="sendMessage()" aria-label="Send message">
       {{ editingMessage() ? 'Update & Send' : 'Send' }}
     </button>
   }

@@ -6,6 +6,7 @@ export interface ChatRequest {
 
 export interface ChatResponse {
   response: string;
+  session_id: number;
 }
 
 export interface PendingChatResponse {
