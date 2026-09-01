@@ -21,6 +21,7 @@ idna==3.18
 iniconfig==2.3.0
 ollama==0.6.2
 packaging==26.3
+Pillow==11.3.0
 pluggy==1.6.0
 psycopg2-binary==2.9.12
 pyasn1==0.6.4
@@ -29,6 +30,7 @@ pydantic==2.13.4
 pydantic_core==2.46.4
 Pygments==2.20.0
 pytest==9.1.1
+pytesseract==0.3.13
 python-dotenv==1.2.2
 python-json-logger==3.3.0
 python-jose==3.5.0

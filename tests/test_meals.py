@@ -204,14 +204,16 @@ def test_parser_rejects_llm_invented_nutrition_fields(monkeypatch):
     }
 
 
-def test_create_meal_from_image_uses_existing_usda_pipeline(client, monkeypatch):
+def test_create_meal_from_image_uses_existing_usda_pipeline(
+    client, monkeypatch, valid_png_bytes
+):
     headers = _register_and_login(client, "image@example.com")
     _mock_grounded_calls(monkeypatch)
 
     response = client.post(
         "/meals/from-image",
         headers=headers,
-        files={"image": ("meal.jpg", b"fake-jpeg-bytes", "image/jpeg")},
+        files={"image": ("meal.png", valid_png_bytes, "image/png")},
         data={"logged_at": "2026-08-31T09:00:00Z"},
     )
 
@@ -223,7 +225,7 @@ def test_create_meal_from_image_uses_existing_usda_pipeline(client, monkeypatch)
     assert meal["items"][0]["calories"] == 71.0
 
 
-def test_unparseable_image_retries_and_is_not_saved(client, monkeypatch):
+def test_unparseable_image_retries_and_is_not_saved(client, monkeypatch, valid_png_bytes):
     headers = _register_and_login(client, "bad-image@example.com")
     attempts = 0
 
@@ -236,7 +238,7 @@ def test_unparseable_image_retries_and_is_not_saved(client, monkeypatch):
     response = client.post(
         "/meals/from-image",
         headers=headers,
-        files={"image": ("empty.png", b"image-data", "image/png")},
+        files={"image": ("empty.png", valid_png_bytes, "image/png")},
     )
 
     assert response.status_code == 422
@@ -265,7 +267,26 @@ def test_image_upload_rejects_invalid_type_and_oversized_file(client):
     assert "Maximum size is 8 MB" in oversized.json()["detail"]
 
 
-def test_vision_model_unavailable_returns_clear_error(client, monkeypatch):
+def test_meal_image_upload_rejects_spoofed_content(client, monkeypatch):
+    headers = _register_and_login(client, "spoofed-meal@example.com")
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("Spoofed image reached Ollama")
+
+    monkeypatch.setattr(ImageParserService, "parse", must_not_run)
+    response = client.post(
+        "/meals/from-image",
+        headers=headers,
+        files={"image": ("meal.png", b"not actually a PNG", "image/png")},
+    )
+
+    assert response.status_code == 422
+    assert "valid supported image" in response.json()["detail"].lower()
+
+
+def test_vision_model_unavailable_returns_clear_error(
+    client, monkeypatch, valid_png_bytes
+):
     headers = _register_and_login(client, "vision-down@example.com")
 
     def unavailable(url, **kwargs):
@@ -275,7 +296,7 @@ def test_vision_model_unavailable_returns_clear_error(client, monkeypatch):
     response = client.post(
         "/meals/from-image",
         headers=headers,
-        files={"image": ("meal.webp", b"image-data", "image/webp")},
+        files={"image": ("meal.png", valid_png_bytes, "image/png")},
     )
 
     assert response.status_code == 503
@@ -305,6 +326,7 @@ def test_image_parser_rejects_vision_invented_nutrition_fields(monkeypatch):
         nonlocal attempts
         attempts += 1
         assert kwargs["json"]["messages"][-1]["images"]
+        assert kwargs["json"]["keep_alive"] == settings.OLLAMA_KEEP_ALIVE
         return next(responses)
 
     monkeypatch.setattr("requests.post", post)

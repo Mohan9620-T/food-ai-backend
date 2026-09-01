@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from collections.abc import AsyncIterator
 
@@ -7,6 +8,12 @@ import requests
 
 from app.config import settings
 from app.schemas.chat import ChatHistoryMessage
+
+logger = logging.getLogger(__name__)
+
+
+class ChatModelUnavailableError(RuntimeError):
+    pass
 
 
 class ChatService:
@@ -143,12 +150,18 @@ Content-versus-format rules:
             message, history, reference_history, stream=False
         )
 
-        response = requests.post(
-            settings.OLLAMA_URL,
-            json=body,
-            timeout=settings.OLLAMA_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
+        try:
+            response = requests.post(
+                settings.OLLAMA_URL,
+                json=body,
+                timeout=settings.OLLAMA_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+        except (requests.Timeout, requests.ConnectionError) as error:
+            logger.warning("chat.text_model_unavailable")
+            raise ChatModelUnavailableError(
+                "Text chat model is still loading or unavailable. Please try again shortly."
+            ) from error
         answer = response.json()["message"]["content"]
 
         # Smaller local models can acknowledge the requested transliteration but still
@@ -165,12 +178,18 @@ Content-versus-format rules:
                     ),
                 },
             ])
-            response = requests.post(
-                settings.OLLAMA_URL,
-                json=body,
-                timeout=settings.OLLAMA_TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
+            try:
+                response = requests.post(
+                    settings.OLLAMA_URL,
+                    json=body,
+                    timeout=settings.OLLAMA_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+            except (requests.Timeout, requests.ConnectionError) as error:
+                logger.warning("chat.text_model_unavailable")
+                raise ChatModelUnavailableError(
+                    "Text chat model is still loading or unavailable. Please try again shortly."
+                ) from error
             answer = response.json()["message"]["content"]
 
         return answer
@@ -189,18 +208,24 @@ Content-versus-format rules:
 
         _, body = self._build_request_body(message, history, reference_history, stream=True)
         timeout = httpx.Timeout(settings.OLLAMA_TIMEOUT_SECONDS)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", settings.OLLAMA_URL, json=body) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line:
-                        continue
-                    event = json.loads(line)
-                    content = event.get("message", {}).get("content", "")
-                    if content:
-                        yield content
-                    if event.get("done"):
-                        break
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", settings.OLLAMA_URL, json=body) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        event = json.loads(line)
+                        content = event.get("message", {}).get("content", "")
+                        if content:
+                            yield content
+                        if event.get("done"):
+                            break
+        except (httpx.TimeoutException, httpx.ConnectError) as error:
+            logger.warning("chat.text_stream_model_unavailable")
+            raise ChatModelUnavailableError(
+                "Text chat model is still loading or unavailable. Please try again shortly."
+            ) from error
 
     def _immediate_answer(self, message: str) -> str | None:
         response_language = self.detect_language(message)
@@ -259,6 +284,7 @@ Content-versus-format rules:
             "model": settings.OLLAMA_MODEL,
             "messages": messages,
             "stream": stream,
+            "keep_alive": settings.OLLAMA_KEEP_ALIVE,
             "options": {"temperature": 0.2},
         }
 

@@ -14,7 +14,12 @@
     }
     @if (msg.sender === 'user') {
     <div class="user-message-group">
-      <div class="message user-message">{{ msg.text }}</div>
+      <div class="message user-message">
+        @if (msg.imageUrl) {
+          <img class="message-image" [src]="msg.imageUrl" alt="Attached image preview" />
+        }
+        @if (msg.text !== '[Image]') { <span>{{ msg.text }}</span> }
+      </div>
       <div class="message-actions">
         <button
           type="button"
@@ -43,7 +48,13 @@
     </div>
     }
   }
-  @if (isResponding()) {
+  @if (analyzingImage()) {
+    <div class="response-skeleton image-analysis" role="status" aria-live="polite">
+      <strong>Analyzing image…</strong>
+      <small>CPU image analysis can take 15–40 seconds or longer.</small>
+      <span></span><span></span><span></span>
+    </div>
+  } @else if (isResponding()) {
     <div class="response-skeleton" role="status" aria-live="polite" aria-label="AI is preparing a response">
       <span></span><span></span><span></span>
     </div>

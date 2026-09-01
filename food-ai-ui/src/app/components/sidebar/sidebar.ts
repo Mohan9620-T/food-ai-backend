@@ -42,14 +42,6 @@ export class Sidebar {
     this.router.navigate(['/']);
   }
 
-  openMeals(): void {
-    this.mobileOpen.set(false);
-    this.router.navigate(['/meals']);
-  }
-
-  openProfile(): void { this.mobileOpen.set(false); this.router.navigate(['/profile']); }
-  openDietPlan(): void { this.mobileOpen.set(false); this.router.navigate(['/diet-plan']); }
-
   selectConversation(conversationId: string): void {
     this.chatService.selectConversation(conversationId);
     this.openMenuId.set(null);

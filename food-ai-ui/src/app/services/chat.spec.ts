@@ -77,4 +77,26 @@ describe('ChatService session continuity', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it('attaches an image and sends it to the current backend session', () => {
+    const conversationId = service.getActiveConversationId()!;
+    const textRequest = { message: 'Start', history: [], referenceHistory: [] };
+    service.sendMessage(textRequest, conversationId).subscribe();
+    http.expectOne((candidate) => candidate.urlWithParams.endsWith('/chat/')).flush({
+      response: 'Ready', session_id: 64
+    });
+
+    const image = new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' });
+    service.sendVisionMessage(image, 'What is shown?', conversationId).subscribe();
+    expect(service.analyzingImage()).toBe(true);
+    const request = http.expectOne((candidate) => candidate.url.endsWith('/chat/vision'));
+    expect(request.request.method).toBe('POST');
+    const form = request.request.body as FormData;
+    expect((form.get('image') as File).name).toBe('photo.png');
+    expect(form.get('message')).toBe('What is shown?');
+    expect(form.get('session_id')).toBe('64');
+    request.flush({ response: 'A landscape.', session_id: 64 });
+    expect(service.analyzingImage()).toBe(false);
+    expect(service.messages().at(-1)?.text).toBe('A landscape.');
+  });
 });

@@ -1,0 +1,15 @@
+.git
+.github
+.pytest_cache
+**/__pycache__
+**/*.py[cod]
+*.env
+**/.env
+venv
+.venv
+food-ai-ui
+tests
+docs
+*.log
+Dockerfile*
+docker-compose*.yml

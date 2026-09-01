@@ -1,7 +1,13 @@
 from datetime import datetime, timezone
 
+import httpx
+import requests
+
+from app.config import settings
 from app.models.chat import ChatMessageRecord, ChatSession
 from app.services.chat_service import ChatService
+from app.services.chat_vision_service import ChatVisionService
+from app.services.image_parser_service import VisionModelUnavailableError
 
 
 def _register_and_login(client, email="chatuser@example.com", password="chat12345"):
@@ -41,6 +47,148 @@ def test_chat_rejects_invalid_token(client):
     )
 
     assert response.status_code == 401
+
+
+def test_chat_vision_creates_session_and_persists_both_turns(client, monkeypatch, valid_png_bytes):
+    token = _register_and_login(client, "vision-upload@example.com")
+    monkeypatch.setattr(
+        ChatVisionService,
+        "describe",
+        lambda self, image_bytes, user_message: "The image shows a red bicycle.",
+    )
+    response = client.post(
+        "/chat/vision",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"image": ("sample.png", valid_png_bytes, "image/png")},
+        data={"message": "What is in this image?"},
+    )
+    assert response.status_code == 200
+    assert response.json()["response"] == "The image shows a red bicycle."
+    session_id = response.json()["session_id"]
+    history = client.get(
+        f"/chat/sessions/{session_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()["messages"]
+    assert [(item["sender"], item["content"]) for item in history] == [
+        ("user", "What is in this image?"),
+        ("bot", "The image shows a red bicycle."),
+    ]
+
+
+def test_chat_vision_continues_existing_session_without_storing_image(
+    client, monkeypatch, valid_png_bytes
+):
+    token = _register_and_login(client, "vision-continue@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    existing = client.post(
+        "/chat/sessions", headers=headers, json={"title": "Existing chat"}
+    ).json()
+    monkeypatch.setattr(
+        ChatVisionService,
+        "describe",
+        lambda self, image_bytes, user_message: "It contains a blue logo.",
+    )
+    response = client.post(
+        "/chat/vision",
+        headers=headers,
+        files={"image": ("logo.png", valid_png_bytes, "image/png")},
+        data={"session_id": str(existing["id"])},
+    )
+    assert response.status_code == 200
+    assert response.json()["session_id"] == existing["id"]
+    history = client.get(
+        f"/chat/sessions/{existing['id']}", headers=headers
+    ).json()["messages"]
+    assert [(item["sender"], item["content"]) for item in history] == [
+        ("user", "[Image]"),
+        ("bot", "It contains a blue logo."),
+    ]
+    assert all("private-image-bytes" not in item["content"] for item in history)
+
+
+def test_chat_vision_returns_503_when_model_is_unavailable(
+    client, monkeypatch, valid_png_bytes
+):
+    token = _register_and_login(client, "vision-unavailable@example.com")
+
+    def unavailable(self, image_bytes, user_message):
+        raise VisionModelUnavailableError("Chat vision model unavailable. Pull the model.")
+
+    monkeypatch.setattr(ChatVisionService, "describe", unavailable)
+    response = client.post(
+        "/chat/vision",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"image": ("sample.png", valid_png_bytes, "image/png")},
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Chat vision model unavailable. Pull the model."
+
+
+def test_chat_vision_rejects_oversized_image(client):
+    token = _register_and_login(client, "vision-large@example.com")
+    response = client.post(
+        "/chat/vision",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"image": ("large.jpg", b"x" * (8 * 1024 * 1024 + 1), "image/jpeg")},
+    )
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Image is too large. Maximum size is 8 MB."
+
+
+def test_chat_vision_rejects_invalid_content_type(client):
+    token = _register_and_login(client, "vision-type@example.com")
+    response = client.post(
+        "/chat/vision",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"image": ("payload.txt", b"not-an-image", "text/plain")},
+    )
+    assert response.status_code == 415
+    assert "Unsupported file type" in response.json()["detail"]
+
+
+def test_chat_vision_rejects_spoofed_image_content(client, monkeypatch):
+    token = _register_and_login(client, "vision-spoof@example.com")
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("Spoofed image reached the vision model")
+
+    monkeypatch.setattr(ChatVisionService, "describe", must_not_run)
+    response = client.post(
+        "/chat/vision",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"image": ("fake.png", b"this is not a real image", "image/png")},
+    )
+    assert response.status_code == 422
+    assert "valid supported image" in response.json()["detail"].lower()
+
+
+def test_chat_vision_has_strict_rate_limit(client, monkeypatch, valid_png_bytes):
+    token = _register_and_login(client, "vision-limit@example.com")
+    monkeypatch.setattr(
+        ChatVisionService,
+        "describe",
+        lambda self, image_bytes, user_message: "Description",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    responses = [
+        client.post(
+            "/chat/vision",
+            headers=headers,
+            files={"image": ("sample.png", valid_png_bytes, "image/png")},
+        )
+        for _ in range(3)
+    ]
+
+    assert [response.status_code for response in responses] == [200, 200, 429]
+
+
+def test_chat_vision_requires_authentication(client):
+    response = client.post(
+        "/chat/vision",
+        files={"image": ("sample.webp", b"image", "image/webp")},
+    )
+    assert response.status_code in (401, 403)
 
 
 def test_consolidate_sessions_preserves_messages_from_different_dates_in_one_conversation(client, db_session):
@@ -109,6 +257,70 @@ def test_chat_success_with_valid_token(client, monkeypatch):
     assert response.status_code == 200
     assert response.json()["response"] == "Vanakkam! Nalla irukeenga?"
     assert isinstance(response.json()["session_id"], int)
+
+
+def test_chat_timeout_returns_clean_503(client, monkeypatch):
+    token = _register_and_login(client, email="text-timeout@example.com")
+
+    def timeout(*args, **kwargs):
+        assert kwargs["timeout"] == settings.OLLAMA_TIMEOUT_SECONDS
+        assert kwargs["json"]["keep_alive"] == settings.OLLAMA_KEEP_ALIVE
+        raise requests.ReadTimeout("cold model load exceeded the deadline")
+
+    monkeypatch.setattr("app.services.chat_service.requests.post", timeout)
+    response = client.post(
+        "/chat/",
+        json={"message": "Explain this", "history": [], "reference_history": []},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 503
+    assert "still loading or unavailable" in response.json()["detail"]
+
+
+def test_chat_stream_timeout_returns_error_chunk_and_closes_cleanly(client, monkeypatch):
+    token = _register_and_login(client, email="stream-timeout@example.com")
+    closed = False
+
+    class TimeoutStream:
+        async def __aenter__(self):
+            raise httpx.ReadTimeout(
+                "cold model load exceeded the deadline",
+                request=httpx.Request("POST", settings.OLLAMA_URL),
+            )
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout):
+            assert timeout.read == settings.OLLAMA_TIMEOUT_SECONDS
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            nonlocal closed
+            closed = True
+
+        def stream(self, method, url, *, json):
+            assert method == "POST"
+            assert json["keep_alive"] == settings.OLLAMA_KEEP_ALIVE
+            return TimeoutStream()
+
+    monkeypatch.setattr("app.services.chat_service.httpx.AsyncClient", FakeAsyncClient)
+    response = client.post(
+        "/chat/stream",
+        json={"message": "Explain this", "history": [], "reference_history": []},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    assert events[0]["type"] == "session"
+    assert events[-1]["type"] == "error"
+    assert "still loading or unavailable" in events[-1]["message"]
+    assert closed is True
 
 
 def test_chat_stream_returns_session_tokens_and_persists_answer(client, monkeypatch):
@@ -243,6 +455,7 @@ def test_chat_service_uses_request_message_when_history_is_stale(monkeypatch):
         "role": "user",
         "content": "enakku menu kaatu",
     }
+    assert captured["body"]["keep_alive"] == settings.OLLAMA_KEEP_ALIVE
 
 
 def test_chat_service_does_not_duplicate_latest_message(monkeypatch):

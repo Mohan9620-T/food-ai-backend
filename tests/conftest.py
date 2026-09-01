@@ -1,6 +1,8 @@
 import os
+from io import BytesIO
 
 import pytest
+from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -21,6 +23,13 @@ engine = create_engine(
     poolclass=StaticPool
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+@pytest.fixture
+def valid_png_bytes():
+    buffer = BytesIO()
+    Image.new("RGB", (2, 2), color="red").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 @pytest.fixture(scope="function")

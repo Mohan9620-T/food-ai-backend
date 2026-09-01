@@ -18,6 +18,7 @@ export interface ChatMessage {
   sender: 'user' | 'bot';
   text: string;
   createdAt?: string;
+  imageUrl?: string;
 }
 
 export interface ChatHistoryMessage {

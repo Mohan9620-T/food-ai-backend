@@ -28,6 +28,13 @@ logger = logging.getLogger(__name__)
 async def lifespan(application: FastAPI):
     if not settings.USDA_API_KEY:
         logger.warning("usda_api_key_missing")
+    if not settings.OLLAMA_CHAT_VISION_MODEL:
+        logger.warning(
+            "ollama_chat_vision_model_missing",
+            extra={
+                "setup": "Set OLLAMA_CHAT_VISION_MODEL and pull it with Ollama before using general image chat."
+            },
+        )
     if settings.MIGRATION_CHECK_ENABLED:
         warn_if_migrations_pending(engine)
     yield

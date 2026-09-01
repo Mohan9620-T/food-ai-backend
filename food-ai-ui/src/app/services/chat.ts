@@ -1,4 +1,4 @@
-import { computed, effect, inject, Injectable, PLATFORM_ID, signal } from '@angular/core';
+import { computed, effect, inject, Injectable, PLATFORM_ID, signal, untracked } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { isPlatformBrowser } from '@angular/common';
 import {
@@ -69,6 +69,7 @@ export class ChatService {
   private readonly retryMessageState = signal<{ conversationId: string; text: string } | null>(null);
   private readonly migrationNoticeState = signal<string | null>(null);
   private readonly loadingSessionsState = signal(false);
+  private readonly analyzingImageState = signal(false);
   private streamAbortController: AbortController | null = null;
 
   readonly conversations = this.conversationsState.asReadonly();
@@ -78,6 +79,7 @@ export class ChatService {
   readonly retryMessage = this.retryMessageState.asReadonly();
   readonly migrationNotice = this.migrationNoticeState.asReadonly();
   readonly loadingSessions = this.loadingSessionsState.asReadonly();
+  readonly analyzingImage = this.analyzingImageState.asReadonly();
   readonly isResponding = computed(() => {
     const pendingConversationId = this.pendingConversationIdState();
     return pendingConversationId !== null && pendingConversationId === this.activeConversationIdState();
@@ -115,6 +117,26 @@ export class ChatService {
     }).pipe(tap((response) => {
       if (conversationId) this.acceptResponse(conversationId, response);
     }));
+  }
+
+  sendVisionMessage(
+    image: File,
+    message: string | null,
+    conversationId = this.activeConversationIdState()
+  ): Observable<ChatResponse> {
+    const form = new FormData();
+    form.append('image', image, image.name);
+    const text = message?.trim();
+    if (text) form.append('message', text);
+    const sessionId = this.toServerSessionId(conversationId);
+    if (sessionId !== null) form.append('session_id', String(sessionId));
+    this.analyzingImageState.set(true);
+    return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/vision`, form).pipe(
+      tap((response) => {
+        if (conversationId) this.acceptResponse(conversationId, response);
+      }),
+      finalize(() => this.analyzingImageState.set(false))
+    );
   }
 
   async streamMessage(data: ChatRequest, conversationId: string): Promise<void> {
@@ -532,6 +554,12 @@ export class ChatService {
   }
 
   private resetUserState(): void {
+    const existingConversations = untracked(() => this.conversationsState());
+    for (const conversation of existingConversations) {
+      for (const message of conversation.messages) {
+        if (message.imageUrl?.startsWith('blob:')) URL.revokeObjectURL(message.imageUrl);
+      }
+    }
     this.conversationsState.set([]);
     this.activeConversationIdState.set(null);
     this.pendingConversationIdState.set(null);
@@ -539,6 +567,7 @@ export class ChatService {
     this.editingMessageState.set(null);
     this.retryMessageState.set(null);
     this.migrationNoticeState.set(null);
+    this.analyzingImageState.set(false);
   }
 
   private updateConversationTitle(conversationId: string, title: string): void {

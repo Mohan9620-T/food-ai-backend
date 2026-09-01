@@ -16,6 +16,7 @@ from app.services.image_parser_service import (
     ImageParserService,
     VisionModelUnavailableError,
 )
+from app.services.image_validation import InvalidImageError, validate_image_content
 from app.services.usda_nutrition_service import UsdaNutritionService
 from app.utils.auth_dependency import get_current_user
 
@@ -111,6 +112,10 @@ async def create_meal_from_image(
             raise HTTPException(status_code=413, detail="Image is too large. Maximum size is 8 MB.")
         if not image_bytes:
             raise HTTPException(status_code=422, detail="The uploaded image is empty.")
+        try:
+            validate_image_content(image_bytes, content_type)
+        except InvalidImageError as error:
+            raise HTTPException(status_code=422, detail=str(error))
 
         try:
             parsed_items = image_parser.parse(image_bytes)

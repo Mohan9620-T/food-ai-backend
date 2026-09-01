@@ -16,6 +16,7 @@ export class ChatWindow implements AfterViewChecked {
   private readonly sanitizer = inject(DomSanitizer);
   readonly messages = this.chatService.messages;
   readonly isResponding = this.chatService.isResponding;
+  readonly analyzingImage = this.chatService.analyzingImage;
   private readonly chatContainer = viewChild<ElementRef<HTMLDivElement>>('chatContainer');
   private previousConversationId: string | null | undefined;
   private previousMessageCount = -1;

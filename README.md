@@ -31,6 +31,7 @@ food-ai-backend/
 - Node.js 18+ and Angular CLI
 - PostgreSQL running locally
 - [Ollama](https://ollama.com) running locally with a chat model pulled (e.g. \`llama3.2\`)
+- Tesseract OCR (optional, for more accurate text recognition in chat images)
 
 ## Backend setup
 
@@ -71,6 +72,7 @@ food-ai-backend/
    USDA_API_KEY=your_fooddata_central_api_key
    OLLAMA_VISION_MODEL=llava:latest
    OLLAMA_VISION_TIMEOUT_SECONDS=180
+   CHAT_VISION_RATE_LIMIT=2/minute
    \`\`\`
 
    SMTP settings are optional for local development. When configured, a newly
@@ -87,6 +89,12 @@ food-ai-backend/
    \`\`\`
    If it is unavailable, text meal logging and the rest of the application continue
    working; image uploads return a clear service-unavailable response.
+
+   General chat image OCR uses the `pytesseract` Python package plus the separate
+   Tesseract system executable. Install Tesseract and ensure its executable is on
+   `PATH` (for example, install Tesseract OCR on Windows or `tesseract-ocr` through
+   your Linux package manager). If the executable is missing, image chat continues
+   with vision-only analysis and logs a warning; the application does not fail.
 
 4. Create the \`FoodAI_DB\` database in PostgreSQL (via pgAdmin or \`psql\`).
 
@@ -110,6 +118,65 @@ food-ai-backend/
    \`\`\`
 
    API docs available at \`http://127.0.0.1:8000/docs\`.
+
+## Docker Compose deployment
+
+The Compose stack runs the FastAPI backend, PostgreSQL, and Ollama as separate
+services. Ollama is intentionally not bundled into the backend image: its runtime and
+multi-gigabyte models would make the application image impractical, and updating a model
+would otherwise require rebuilding the application. The official `ollama/ollama` image
+stores downloaded models in the named `ollama_models` volume so they survive container
+replacement and restarts.
+
+Create the runtime environment file from the existing example and replace every secret or
+deployment-specific value before starting the stack:
+
+```powershell
+Copy-Item app/.env.example .env
+```
+
+At minimum, set strong values for `DB_PASSWORD` and `JWT_SECRET_KEY`. Configure
+`ALLOWED_ORIGINS`, SMTP credentials, and `USDA_API_KEY` for the deployment as needed.
+The root `.env` is read by Compose at runtime and is excluded by both `.gitignore` and
+`.dockerignore`; it is never copied into an image layer. Do not put credentials in the
+Dockerfile or `docker-compose.yml`.
+
+The timeout/residency settings are important on CPU hosts, especially after an Ollama or
+full-stack restart, when the first request for each model is guaranteed to load that model
+from disk into RAM:
+
+- `OLLAMA_KEEP_ALIVE=30m` keeps a recently used model resident between requests.
+- `OLLAMA_TIMEOUT_SECONDS=300` covers cold text-model loads and inference.
+- `OLLAMA_CHAT_VISION_TIMEOUT_SECONDS=180` covers general image-chat cold starts.
+- `OLLAMA_VISION_TIMEOUT_SECONDS=180` covers meal-photo cold starts.
+
+Start PostgreSQL and Ollama first, pull the configured models once into the persistent
+volume, and then start the full stack:
+
+```powershell
+docker compose up -d postgres ollama
+docker compose exec ollama ollama pull qwen3:8b
+docker compose exec ollama ollama pull qwen2.5vl:7b
+docker compose up -d --build
+docker compose ps
+curl.exe --fail http://localhost:8000/health
+```
+
+The backend connects to `postgres:5432` and `ollama:11434` over the Compose network—not
+to `localhost`. Its entrypoint runs `alembic -c app/alembic.ini upgrade head` before
+Uvicorn. The shell uses fail-fast mode, so a failed migration exits the container and the
+API never starts against a stale schema. Inspect failures with `docker compose logs backend`.
+
+After startup, verify authenticated text chat, text meal logging, and image chat through
+the API at `http://localhost:8000/docs`. Meal nutrition requires `USDA_API_KEY`; without
+it, the existing graceful unmatched-item behavior remains in effect. The first request for
+each Ollama model can take several minutes on a CPU-only 16 GB machine; later requests in
+the keep-alive window should be faster.
+
+This Compose configuration uses Ollama on CPU. GPU passthrough is intentionally not enabled
+for this laptop. When deploying to GPU-backed infrastructure, add the platform-appropriate
+GPU device/runtime configuration to the Ollama service; no GPU runtime belongs in the
+FastAPI image.
 
 ## Frontend setup
 
@@ -145,3 +212,42 @@ The Angular frontend attaches access tokens automatically and performs one silen
 - Passwords are hashed with \`bcrypt\` — never stored in plain text.
 - \`.env\` is excluded from version control via \`.gitignore\`.
 - If you ever commit a real secret by mistake, rotate it immediately (change the password / regenerate the JWT secret) rather than relying on removing it from git history.
+
+## Vision request hardening and local load check
+
+Chat-image uploads default to a stricter `2/minute` limit. Meal-photo and chat-image
+inference also share one in-process queue slot. This deliberately makes later requests
+wait under load, but on a CPU-only host it prevents parallel Ollama jobs from competing
+for the same cores and making every inference substantially slower. The queue is local
+to each API process; a multi-worker deployment needs a distributed queue or semaphore.
+
+Both paths reject files larger than 8 MB and verify the decoded image and its real format
+with Pillow before sending bytes to Ollama. Ollama calls have hard request timeouts:
+`OLLAMA_VISION_TIMEOUT_SECONDS` for meal photos and
+`OLLAMA_CHAT_VISION_TIMEOUT_SECONDS` for general chat images. A timeout returns a clear
+503 response instead of leaving the HTTP request hanging indefinitely.
+
+To record a sequential local baseline, start the API, obtain an access token, and run the
+following from PowerShell with a genuine test image. Keep the image and prompt unchanged
+between runs:
+
+```powershell
+$headers = @{ Authorization = "Bearer $env:FOOD_AI_TEST_TOKEN" }
+1..5 | ForEach-Object {
+    $elapsed = Measure-Command {
+        curl.exe -sS -o NUL -H "Authorization: $($headers.Authorization)" `
+          -F "image=@C:\path\to\test-image.png;type=image/png" `
+          -F "message=Describe this image" http://127.0.0.1:8000/chat/vision
+    }
+    "run=$($_) elapsed_seconds=$([math]::Round($elapsed.TotalSeconds, 2))"
+}
+```
+
+Baseline history on 2026-09-01 (Windows, CPU-only, 16 GB RAM): before the larger models
+were installed, the chat-vision availability check returned the graceful unavailable error
+in 2.099 seconds and the meal-vision check returned it in 2.026 seconds. After installing
+`qwen3:8b` and `qwen2.5vl:7b`, a real cold text request exceeded the full 300-second
+deadline and returned the typed `ChatModelUnavailableError` instead of crashing the API.
+This verifies graceful degradation but also shows that successful cold inference is not
+guaranteed within 300 seconds on this machine. Repeat the five-request command above after
+the model is warm to record representative successful inference timings.

@@ -7,6 +7,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.config import settings
 from app.services.nutrition_parser_service import ParsedFoodItem
+from app.services.vision_runtime import vision_inference_slot
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,10 @@ If no food or drink can be identified, return an empty JSON array.
 
     def parse(self, image_bytes: bytes) -> list[ParsedFoodItem]:
         encoded_image = base64.b64encode(image_bytes).decode("ascii")
+        with vision_inference_slot():
+            return self._parse_with_slot(encoded_image)
+
+    def _parse_with_slot(self, encoded_image: str) -> list[ParsedFoodItem]:
         for attempt in range(2):
             messages = [
                 {"role": "system", "content": self.SYSTEM_PROMPT},
@@ -53,6 +58,7 @@ If no food or drink can be identified, return an empty JSON array.
                     json={
                         "model": settings.OLLAMA_VISION_MODEL,
                         "stream": False,
+                        "keep_alive": settings.OLLAMA_KEEP_ALIVE,
                         "format": "json",
                         "options": {"temperature": 0},
                         "messages": messages,

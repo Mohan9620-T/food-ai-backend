@@ -4,9 +4,6 @@
   <nav class="primary-navigation" aria-label="Main navigation">
     <button type="button" (click)="createConversation()"><span aria-hidden="true">＋</span> New chat</button>
     <button type="button" (click)="openChat()"><span aria-hidden="true">◌</span> Chat</button>
-    <button type="button" (click)="openMeals()"><span aria-hidden="true">◇</span> Meal Log</button>
-    <button type="button" (click)="openDietPlan()"><span aria-hidden="true">▦</span> Diet Plan</button>
-    <button type="button" (click)="openProfile()"><span aria-hidden="true">○</span> Profile</button>
     <button type="button" (click)="themeService.toggle()" [attr.aria-label]="themeService.isDark() ? 'Use light theme' : 'Use dark theme'">
       <span aria-hidden="true">{{ themeService.isDark() ? '☀' : '☾' }}</span> {{ themeService.isDark() ? 'Light mode' : 'Dark mode' }}
     </button>

@@ -1,11 +1,13 @@
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database.database import get_db
+from app.rate_limit import limiter
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.chat_session import (
     ChatSessionOut,
@@ -14,7 +16,10 @@ from app.schemas.chat_session import (
     ChatSessionImport,
     ChatSessionRename,
 )
-from app.services.chat_service import ChatService
+from app.services.chat_service import ChatModelUnavailableError, ChatService
+from app.services.chat_vision_service import ChatVisionService
+from app.services.image_parser_service import VisionModelUnavailableError
+from app.services.image_validation import InvalidImageError, validate_image_content
 from app.repositories.chat_repository import ChatRepository
 from app.utils.auth_dependency import get_current_user
 
@@ -24,12 +29,30 @@ router = APIRouter(
 )
 
 service = ChatService()
+vision_service = ChatVisionService()
 repository = ChatRepository()
 logger = logging.getLogger(__name__)
+MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024
+ALLOWED_CHAT_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 
 def _get_user_id(current_user: dict) -> int:
     return int(current_user["sub"])
+
+
+def _get_or_create_chat_session(
+    db: Session,
+    user_id: int,
+    session_id: int | None,
+    title_source: str,
+):
+    if session_id:
+        session = repository.get_session(db, session_id, user_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        return session
+    title = title_source if len(title_source) <= 60 else f"{title_source[:57]}..."
+    return repository.create_session(db, user_id, title)
 
 
 @router.get("/sessions", response_model=list[ChatSessionOut])
@@ -127,24 +150,94 @@ def chat(
 ):
     user_id = _get_user_id(current_user)
 
-    session = None
-    if session_id:
-        session = repository.get_session(db, session_id, user_id)
-        if not session:
-            raise HTTPException(status_code=404, detail="Chat session not found")
-    else:
-        title = request.message[:60] if len(request.message) <= 60 else f"{request.message[:57]}..."
-        session = repository.create_session(db, user_id, title)
+    session = _get_or_create_chat_session(
+        db, user_id, session_id, request.message
+    )
 
     repository.add_message(db, session.id, "user", request.message)
 
-    answer = service.chat(request.message, request.history, request.reference_history)
+    try:
+        answer = service.chat(request.message, request.history, request.reference_history)
+    except ChatModelUnavailableError as error:
+        logger.warning(
+            "chat.text_model_unavailable",
+            extra={"user_id": user_id, "session_id": session.id},
+        )
+        raise HTTPException(status_code=503, detail=str(error))
 
     repository.add_message(db, session.id, "bot", answer)
 
     logger.info("chat.completed", extra={"user_id": user_id, "session_id": session.id})
 
     return ChatResponse(response=answer, session_id=session.id)
+
+
+@router.post("/vision", response_model=ChatResponse)
+@limiter.limit(settings.CHAT_VISION_RATE_LIMIT)
+async def chat_vision(
+    request: Request,
+    image: UploadFile = File(...),
+    message: str | None = Form(default=None),
+    session_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        content_type = (image.content_type or "").lower().split(";", 1)[0]
+        if content_type not in ALLOWED_CHAT_IMAGE_TYPES:
+            raise HTTPException(
+                status_code=415,
+                detail="Unsupported file type. Upload a JPEG, PNG, WebP, or GIF image.",
+            )
+        image_bytes = await image.read(MAX_CHAT_IMAGE_BYTES + 1)
+        if len(image_bytes) > MAX_CHAT_IMAGE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Image is too large. Maximum size is 8 MB.",
+            )
+        if not image_bytes:
+            raise HTTPException(status_code=422, detail="The uploaded image is empty.")
+        try:
+            validate_image_content(image_bytes, content_type)
+        except InvalidImageError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+
+        logger.info(
+            "chat.vision_upload_validated",
+            extra={
+                "user_id": _get_user_id(current_user),
+                "session_id": session_id,
+                "has_message": bool(message and message.strip()),
+                "content_type": content_type,
+                "image_size_bytes": len(image_bytes),
+            },
+        )
+        user_id = _get_user_id(current_user)
+        message_text = (message or "").strip()
+        persisted_user_message = message_text or "[Image]"
+        session = _get_or_create_chat_session(
+            db,
+            user_id,
+            session_id,
+            persisted_user_message,
+        )
+        repository.add_message(db, session.id, "user", persisted_user_message)
+        try:
+            answer = vision_service.describe(image_bytes, message_text or None)
+        except VisionModelUnavailableError as error:
+            logger.warning(
+                "chat.vision_unavailable",
+                extra={"user_id": user_id, "session_id": session.id},
+            )
+            raise HTTPException(status_code=503, detail=str(error))
+        repository.add_message(db, session.id, "bot", answer)
+        logger.info(
+            "chat.vision_completed",
+            extra={"user_id": user_id, "session_id": session.id},
+        )
+        return ChatResponse(response=answer, session_id=session.id)
+    finally:
+        await image.close()
 
 
 @router.post("/stream")
@@ -156,13 +249,9 @@ async def stream_chat(
     current_user: dict = Depends(get_current_user),
 ):
     user_id = _get_user_id(current_user)
-    if session_id:
-        session = repository.get_session(db, session_id, user_id)
-        if not session:
-            raise HTTPException(status_code=404, detail="Chat session not found")
-    else:
-        title = payload.message[:60] if len(payload.message) <= 60 else f"{payload.message[:57]}..."
-        session = repository.create_session(db, user_id, title)
+    session = _get_or_create_chat_session(
+        db, user_id, session_id, payload.message
+    )
 
     repository.add_message(db, session.id, "user", payload.message)
     logger.info("chat.stream_started", extra={"user_id": user_id, "session_id": session.id})
@@ -187,6 +276,13 @@ async def stream_chat(
                     chunk = await anext(iterator)
                 except StopAsyncIteration:
                     break
+                except ChatModelUnavailableError as error:
+                    logger.warning(
+                        "chat.stream_model_unavailable",
+                        extra={"user_id": user_id, "session_id": session.id},
+                    )
+                    yield json.dumps({"type": "error", "message": str(error)}) + "\n"
+                    return
                 chunks.append(chunk)
                 yield json.dumps({"type": "token", "content": chunk}) + "\n"
 

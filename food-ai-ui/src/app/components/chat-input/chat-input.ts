@@ -1,9 +1,11 @@
-import { afterNextRender, Component, effect, ElementRef, inject, viewChild } from '@angular/core';
+import { afterNextRender, Component, DestroyRef, effect, ElementRef, inject, viewChild } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ChatService } from '../../services/chat';
 import { AuthService } from '../../services/auth';
 import { ChatRequest } from '../../models/chat';
+import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-chat-input',
@@ -14,11 +16,17 @@ import { ChatRequest } from '../../models/chat';
 export class ChatInput {
   message = '';
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
+  private readonly destroyRef = inject(DestroyRef);
   private readonly chatService = inject(ChatService);
   readonly isSending = this.chatService.isResponding;
   readonly editingMessage = this.chatService.editingMessage;
+  readonly analyzingImage = this.chatService.analyzingImage;
   private readonly authService = inject(AuthService);
   private readonly router = inject(Router);
+  selectedImage: File | null = null;
+  imagePreviewUrl: string | null = null;
+  imageError: string | null = null;
+  private visionSubscription: Subscription | null = null;
 
   constructor() {
     afterNextRender(() => this.messageInput()?.nativeElement.focus());
@@ -40,6 +48,35 @@ export class ChatInput {
 
       queueMicrotask(() => this.retryPendingMessage());
     });
+    this.destroyRef.onDestroy(() => {
+      this.visionSubscription?.unsubscribe();
+      if (this.imagePreviewUrl) URL.revokeObjectURL(this.imagePreviewUrl);
+    });
+  }
+
+  selectImage(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    input.value = '';
+    if (!file) return;
+    this.imageError = null;
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+      this.imageError = 'Unsupported file type. Upload a JPEG, PNG, WebP, or GIF image.';
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      this.imageError = 'Image is too large. Maximum size is 8 MB.';
+      return;
+    }
+    this.removeImage();
+    this.selectedImage = file;
+    this.imagePreviewUrl = URL.createObjectURL(file);
+  }
+
+  removeImage(): void {
+    if (this.imagePreviewUrl) URL.revokeObjectURL(this.imagePreviewUrl);
+    this.selectedImage = null;
+    this.imagePreviewUrl = null;
   }
 
   resizeInput(event: Event): void {
@@ -58,7 +95,7 @@ export class ChatInput {
 
     const userMessage = this.message.trim();
 
-    if (!userMessage) {
+    if (!userMessage && !this.selectedImage) {
       return;
     }
 
@@ -68,9 +105,14 @@ export class ChatInput {
       : this.chatService.getActiveConversationId();
     if (!conversationId) return;
 
+    const image = this.selectedImage;
+    const previewUrl = this.imagePreviewUrl;
     if (!isEditing) {
-      this.chatService.addMessage({ sender: 'user', text: userMessage }, conversationId);
+      this.chatService.addMessage({ sender: 'user', text: userMessage || '[Image]', imageUrl: previewUrl ?? undefined }, conversationId);
     }
+    this.selectedImage = null;
+    this.imagePreviewUrl = null;
+    this.imageError = null;
     this.message = '';
     const textarea = this.messageInput()?.nativeElement;
     if (textarea) {
@@ -83,14 +125,38 @@ export class ChatInput {
       referenceHistory: this.chatService.getReferenceHistory(userMessage, conversationId)
     };
     this.chatService.startResponse(conversationId, request);
-    this.requestResponse(conversationId, request);
+    if (image) this.requestVisionResponse(conversationId, image, userMessage || null);
+    else this.requestResponse(conversationId, request);
   }
 
   stopResponse(): void {
     if (!this.isSending()) return;
-    this.chatService.stopStreaming();
+    if (this.analyzingImage()) {
+      this.visionSubscription?.unsubscribe();
+      this.visionSubscription = null;
+      this.imageError = 'Image analysis was cancelled.';
+    } else {
+      this.chatService.stopStreaming();
+    }
     const pending = this.chatService.getPendingResponse();
     if (pending) this.chatService.finishResponse(pending.conversationId);
+    queueMicrotask(() => this.messageInput()?.nativeElement.focus());
+  }
+
+  private requestVisionResponse(conversationId: string, image: File, message: string | null): void {
+    this.visionSubscription = this.chatService.sendVisionMessage(image, message, conversationId).subscribe({
+      error: (error: HttpErrorResponse) => {
+        const detail = typeof error.error?.detail === 'string' ? error.error.detail : null;
+        this.imageError = error.status === 503 ? detail ?? 'Vision model unavailable. Please start Ollama and try again.' : detail ?? 'The image could not be analyzed. Please try again.';
+        this.finishVisionResponse(conversationId);
+      },
+      complete: () => this.finishVisionResponse(conversationId)
+    });
+  }
+
+  private finishVisionResponse(conversationId: string): void {
+    this.visionSubscription = null;
+    this.chatService.finishResponse(conversationId);
     queueMicrotask(() => this.messageInput()?.nativeElement.focus());
   }
 
