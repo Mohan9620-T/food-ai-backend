@@ -1,4 +1,5 @@
 #!/bin/sh
+# Linux container entrypoint; keep LF line endings (see .gitattributes).
 set -eu
 
 echo "Applying database migrations..."

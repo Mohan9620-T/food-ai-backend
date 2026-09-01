@@ -1,4 +1,7 @@
-FROM python:3.13-slim AS builder
+# syntax=docker/dockerfile:1.7
+
+ARG PYTHON_VERSION=3.13
+FROM python:${PYTHON_VERSION}-slim AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
@@ -13,7 +16,7 @@ COPY requirements.txt .
 RUN python -m pip wheel --wheel-dir /wheels -r requirements.txt
 
 
-FROM python:3.13-slim AS runtime
+FROM python:${PYTHON_VERSION}-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

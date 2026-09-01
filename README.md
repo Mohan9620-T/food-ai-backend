@@ -27,7 +27,8 @@ food-ai-backend/
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.13
+- Docker Engine 24+ with Docker Compose v2.20+ (for the containerized setup)
 - Node.js 18+ and Angular CLI
 - PostgreSQL running locally
 - [Ollama](https://ollama.com) running locally with a chat model pulled (e.g. \`llama3.2\`)
