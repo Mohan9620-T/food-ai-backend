@@ -9,6 +9,7 @@ from app.config import settings
 from app.database.database import get_db
 from app.rate_limit import limiter
 from app.schemas.chat import ChatRequest, ChatResponse
+from app.schemas.chat import ChatHistoryMessage
 from app.schemas.chat_session import (
     ChatSessionOut,
     ChatSessionDetailOut,
@@ -53,6 +54,16 @@ def _get_or_create_chat_session(
         return session
     title = title_source if len(title_source) <= 60 else f"{title_source[:57]}..."
     return repository.create_session(db, user_id, title)
+
+
+def _get_persisted_history(db: Session, session_id: int) -> list[ChatHistoryMessage]:
+    return [
+        ChatHistoryMessage(
+            role="assistant" if message.sender == "bot" else "user",
+            content=message.content,
+        )
+        for message in repository.get_message_history(db, session_id)
+    ]
 
 
 @router.get("/sessions", response_model=list[ChatSessionOut])
@@ -155,9 +166,10 @@ def chat(
     )
 
     repository.add_message(db, session.id, "user", request.message)
+    history = _get_persisted_history(db, session.id)
 
     try:
-        answer = service.chat(request.message, request.history, request.reference_history)
+        answer = service.chat(request.message, history, request.reference_history)
     except ChatModelUnavailableError as error:
         logger.warning(
             "chat.text_model_unavailable",
@@ -254,13 +266,14 @@ async def stream_chat(
     )
 
     repository.add_message(db, session.id, "user", payload.message)
+    history = _get_persisted_history(db, session.id)
     logger.info("chat.stream_started", extra={"user_id": user_id, "session_id": session.id})
 
     async def generate():
         chunks: list[str] = []
         iterator = service.stream_chat(
             payload.message,
-            payload.history,
+            history,
             payload.reference_history,
         )
         try:

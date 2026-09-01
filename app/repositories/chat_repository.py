@@ -5,6 +5,21 @@ from app.models.chat import ChatSession, ChatMessageRecord
 
 class ChatRepository:
 
+    def get_message_history(
+        self,
+        db: Session,
+        session_id: int,
+        limit: int = 12,
+    ) -> list[ChatMessageRecord]:
+        messages = (
+            db.query(ChatMessageRecord)
+            .filter(ChatMessageRecord.session_id == session_id)
+            .order_by(ChatMessageRecord.created_at.desc(), ChatMessageRecord.id.desc())
+            .limit(limit)
+            .all()
+        )
+        return list(reversed(messages))
+
     def consolidate_sessions(self, db: Session, user_id: int) -> list[ChatSession]:
         sessions = (
             db.query(ChatSession)

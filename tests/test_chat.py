@@ -259,6 +259,37 @@ def test_chat_success_with_valid_token(client, monkeypatch):
     assert isinstance(response.json()["session_id"], int)
 
 
+def test_chat_uses_saved_session_history_instead_of_browser_history(client, monkeypatch):
+    token = _register_and_login(client, email="saved-history@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    captured_histories = []
+
+    def fake_chat(self, message, history, reference_history):
+        captured_histories.append([(item.role, item.content) for item in history])
+        return "Understood, boss." if len(captured_histories) == 1 else "Here you go, boss."
+
+    monkeypatch.setattr(ChatService, "chat", fake_chat)
+    first = client.post(
+        "/chat/",
+        json={"message": "Call me boss", "history": [], "reference_history": []},
+        headers=headers,
+    )
+    session_id = first.json()["session_id"]
+
+    second = client.post(
+        f"/chat/?session_id={session_id}",
+        json={"message": "Suggest a meal", "history": [], "reference_history": []},
+        headers=headers,
+    )
+
+    assert second.status_code == 200
+    assert captured_histories[1] == [
+        ("user", "Call me boss"),
+        ("assistant", "Understood, boss."),
+        ("user", "Suggest a meal"),
+    ]
+
+
 def test_chat_timeout_returns_clean_503(client, monkeypatch):
     token = _register_and_login(client, email="text-timeout@example.com")
 
@@ -456,6 +487,8 @@ def test_chat_service_uses_request_message_when_history_is_stale(monkeypatch):
         "content": "enakku menu kaatu",
     }
     assert captured["body"]["keep_alive"] == settings.OLLAMA_KEEP_ALIVE
+    assert captured["body"]["think"] is settings.OLLAMA_CHAT_THINK
+    assert captured["body"]["options"]["num_predict"] == settings.OLLAMA_CHAT_MAX_TOKENS
 
 
 def test_chat_service_does_not_duplicate_latest_message(monkeypatch):

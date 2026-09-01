@@ -56,6 +56,9 @@ Language handling:
 
 Accuracy rules:
 - Answer the latest user message directly and use conversation history only as context.
+- Preserve explicit user preferences and standing instructions throughout the current
+  chat. For example, if the user asks to be called "boss", naturally use "boss" in
+  later replies until the user changes or withdraws that preference.
 - Do not invent the content the user intends to send. If the user asks whether they
   can send content but has not supplied it yet, briefly ask them to send it and stop.
 - Never invent facts, records, quantities, dates, links, or personal details.
@@ -285,7 +288,11 @@ Content-versus-format rules:
             "messages": messages,
             "stream": stream,
             "keep_alive": settings.OLLAMA_KEEP_ALIVE,
-            "options": {"temperature": 0.2},
+            "think": settings.OLLAMA_CHAT_THINK,
+            "options": {
+                "temperature": 0.2,
+                "num_predict": settings.OLLAMA_CHAT_MAX_TOKENS,
+            },
         }
 
         return response_language, body
