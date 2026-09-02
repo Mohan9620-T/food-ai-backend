@@ -65,7 +65,17 @@ def _save_parsed_meal(
     return meal
 
 
-@router.post("/", response_model=MealLogOut)
+@router.post(
+    "/",
+    response_model=MealLogOut,
+    summary="Log a meal from text",
+    description="Parse a meal description, resolve nutrition data, and save it for the current user.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        422: {"description": "The payload is invalid or the description cannot be parsed."},
+        429: {"description": "The meal creation rate limit was exceeded."},
+    },
+)
 @limiter.limit(settings.MEAL_CREATE_RATE_LIMIT)
 def create_meal(
     request: Request,
@@ -90,7 +100,20 @@ def create_meal(
     )
 
 
-@router.post("/from-image", response_model=MealLogOut)
+@router.post(
+    "/from-image",
+    response_model=MealLogOut,
+    summary="Log a meal from an image",
+    description="Identify foods in an uploaded image, resolve nutrition data, and save the meal.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        413: {"description": "The uploaded image exceeds 8 MB."},
+        415: {"description": "The uploaded file is not a supported image type."},
+        422: {"description": "The image or form data is invalid, empty, or cannot be parsed."},
+        429: {"description": "The meal creation rate limit was exceeded."},
+        503: {"description": "The configured Ollama vision model is unavailable."},
+    },
+)
 @limiter.limit(settings.MEAL_CREATE_RATE_LIMIT)
 async def create_meal_from_image(
     request: Request,
@@ -141,7 +164,16 @@ async def create_meal_from_image(
         await image.close()
 
 
-@router.get("/", response_model=list[MealLogOut])
+@router.get(
+    "/",
+    response_model=list[MealLogOut],
+    summary="List meal logs",
+    description="Return the authenticated user's meal logs, optionally filtered by date range.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        422: {"description": "A date is invalid or the end date precedes the start date."},
+    },
+)
 def list_meals(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
@@ -153,7 +185,16 @@ def list_meals(
     return repository.list_for_user(db, _user_id(current_user), start_date, end_date)
 
 
-@router.get("/totals", response_model=DailyTotalsOut)
+@router.get(
+    "/totals",
+    response_model=DailyTotalsOut,
+    summary="Get daily nutrition totals",
+    description="Aggregate calories and macronutrients for the current user on one date.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        422: {"description": "The required date is missing or invalid."},
+    },
+)
 def daily_totals(
     date: date = Query(...),
     db: Session = Depends(get_db),
@@ -162,7 +203,16 @@ def daily_totals(
     return repository.get_daily_totals(db, _user_id(current_user), date)
 
 
-@router.delete("/{meal_id}")
+@router.delete(
+    "/{meal_id}",
+    summary="Delete a meal log",
+    description="Delete one meal log when it belongs to the authenticated user.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        404: {"description": "The meal log does not exist or belongs to another user."},
+        422: {"description": "The meal ID failed validation."},
+    },
+)
 def delete_meal(
     meal_id: int,
     db: Session = Depends(get_db),

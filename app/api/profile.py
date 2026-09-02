@@ -10,7 +10,16 @@ router = APIRouter(prefix="/profile", tags=["Profile"])
 service = ProfileService()
 
 
-@router.get("/", response_model=UserProfileOut)
+@router.get(
+    "/",
+    response_model=UserProfileOut,
+    summary="Get the current user's profile",
+    description="Return the authenticated user's nutrition and lifestyle profile.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        404: {"description": "The user has not created a profile."},
+    },
+)
 def get_profile(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     profile = service.get(db, int(current_user["sub"]))
     if profile is None:
@@ -18,6 +27,15 @@ def get_profile(db: Session = Depends(get_db), current_user: dict = Depends(get_
     return service.serialize(profile)
 
 
-@router.put("/", response_model=UserProfileOut)
+@router.put(
+    "/",
+    response_model=UserProfileOut,
+    summary="Create or update the current user's profile",
+    description="Persist the authenticated user's nutrition and lifestyle profile.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        422: {"description": "The profile payload failed validation."},
+    },
+)
 def upsert_profile(payload: UserProfileUpsert, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     return service.serialize(service.upsert(db, int(current_user["sub"]), payload))

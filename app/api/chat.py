@@ -66,12 +66,27 @@ def _get_persisted_history(db: Session, session_id: int) -> list[ChatHistoryMess
     ]
 
 
-@router.get("/sessions", response_model=list[ChatSessionOut])
+@router.get(
+    "/sessions",
+    response_model=list[ChatSessionOut],
+    summary="List chat sessions",
+    description="Return all chat sessions belonging to the authenticated user.",
+    responses={401: {"description": "Missing, invalid, or expired access token."}},
+)
 def list_sessions(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     return repository.get_sessions_for_user(db, _get_user_id(current_user))
 
 
-@router.post("/sessions", response_model=ChatSessionOut)
+@router.post(
+    "/sessions",
+    response_model=ChatSessionOut,
+    summary="Create a chat session",
+    description="Create an empty chat session with the supplied title for the current user.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        422: {"description": "The session payload failed validation."},
+    },
+)
 def create_session(
     payload: ChatSessionCreate,
     db: Session = Depends(get_db),
@@ -80,7 +95,13 @@ def create_session(
     return repository.create_session(db, _get_user_id(current_user), payload.title)
 
 
-@router.post("/sessions/consolidate", response_model=list[ChatSessionOut])
+@router.post(
+    "/sessions/consolidate",
+    response_model=list[ChatSessionOut],
+    summary="Consolidate chat sessions",
+    description="Merge compatible chat-session data for the authenticated user and return the result.",
+    responses={401: {"description": "Missing, invalid, or expired access token."}},
+)
 def consolidate_sessions(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -94,7 +115,17 @@ def consolidate_sessions(
     return session
 
 
-@router.get("/sessions/{session_id}", response_model=ChatSessionDetailOut)
+@router.get(
+    "/sessions/{session_id}",
+    response_model=ChatSessionDetailOut,
+    summary="Get a chat session",
+    description="Return a chat session and its persisted messages when it belongs to the current user.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        404: {"description": "The chat session does not exist or belongs to another user."},
+        422: {"description": "The session ID failed validation."},
+    },
+)
 def get_session(
     session_id: int,
     db: Session = Depends(get_db),
@@ -106,7 +137,17 @@ def get_session(
     return session
 
 
-@router.post("/sessions/{session_id}/import", response_model=ChatSessionDetailOut)
+@router.post(
+    "/sessions/{session_id}/import",
+    response_model=ChatSessionDetailOut,
+    summary="Import chat messages",
+    description="Append supplied messages to a chat session owned by the authenticated user.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        404: {"description": "The chat session does not exist or belongs to another user."},
+        422: {"description": "The session ID or import payload failed validation."},
+    },
+)
 def import_session_messages(
     session_id: int,
     payload: ChatSessionImport,
@@ -127,7 +168,17 @@ def import_session_messages(
     return repository.get_session(db, session.id, user_id)
 
 
-@router.put("/sessions/{session_id}", response_model=ChatSessionOut)
+@router.put(
+    "/sessions/{session_id}",
+    response_model=ChatSessionOut,
+    summary="Rename a chat session",
+    description="Change the title of a chat session owned by the authenticated user.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        404: {"description": "The chat session does not exist or belongs to another user."},
+        422: {"description": "The session ID or rename payload failed validation."},
+    },
+)
 def rename_session(
     session_id: int,
     payload: ChatSessionRename,
@@ -140,7 +191,16 @@ def rename_session(
     return session
 
 
-@router.delete("/sessions/{session_id}")
+@router.delete(
+    "/sessions/{session_id}",
+    summary="Delete a chat session",
+    description="Delete a chat session and its messages when it belongs to the current user.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        404: {"description": "The chat session does not exist or belongs to another user."},
+        422: {"description": "The session ID failed validation."},
+    },
+)
 def delete_session(
     session_id: int,
     db: Session = Depends(get_db),
@@ -152,7 +212,18 @@ def delete_session(
     return {"detail": "Chat session deleted"}
 
 
-@router.post("/", response_model=ChatResponse)
+@router.post(
+    "/",
+    response_model=ChatResponse,
+    summary="Send a chat message",
+    description="Generate a text response and persist the completed turn in a new or existing chat session.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        404: {"description": "The requested chat session does not exist or belongs to another user."},
+        422: {"description": "The message or session ID failed validation."},
+        503: {"description": "The configured Ollama text model is unavailable."},
+    },
+)
 def chat(
     request: ChatRequest,
     session_id: int | None = None,
@@ -183,7 +254,21 @@ def chat(
     return ChatResponse(response=answer, session_id=session.id)
 
 
-@router.post("/vision", response_model=ChatResponse)
+@router.post(
+    "/vision",
+    response_model=ChatResponse,
+    summary="Send an image chat message",
+    description="Analyze an uploaded image and persist the image, prompt, and response in a chat session.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        404: {"description": "The requested chat session does not exist or belongs to another user."},
+        413: {"description": "The uploaded image exceeds 8 MB."},
+        415: {"description": "The uploaded file is not a supported image type."},
+        422: {"description": "The image or form data is invalid or empty."},
+        429: {"description": "The image-chat rate limit was exceeded."},
+        503: {"description": "The configured Ollama vision model is unavailable."},
+    },
+)
 @limiter.limit(settings.CHAT_VISION_RATE_LIMIT)
 async def chat_vision(
     request: Request,
@@ -263,7 +348,19 @@ async def chat_vision(
         await image.close()
 
 
-@router.post("/stream")
+@router.post(
+    "/stream",
+    summary="Stream a chat response",
+    description=(
+        "Stream newline-delimited JSON events for a text chat turn. Events contain the session ID, "
+        "generated tokens, completion, or a model-unavailable error; completed turns are persisted."
+    ),
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        404: {"description": "The requested chat session does not exist or belongs to another user."},
+        422: {"description": "The message or session ID failed validation."},
+    },
+)
 async def stream_chat(
     payload: ChatRequest,
     request: Request,
