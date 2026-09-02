@@ -2,6 +2,109 @@
 
 A full-stack food & nutrition assistant with a FastAPI backend, Angular frontend, JWT authentication, and a local Ollama-powered AI chat.
 
+## Quickstart with Docker
+
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Docker Compose.
+- Windows 11 users: WSL2 enabled and integrated with Docker Desktop.
+- Git for cloning the repository.
+
+Clone the repository and enter it:
+
+```powershell
+git clone https://github.com/Mohan9620-T/food-ai-backend.git
+cd food-ai-backend
+```
+
+Create the runtime configuration from the sanitized template:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Open `.env` and replace at least `DB_PASSWORD` and `JWT_SECRET_KEY` with strong,
+non-empty values. Never commit `.env`.
+
+Build and start the FastAPI backend, PostgreSQL, and Ollama services:
+
+```powershell
+docker compose up --build
+```
+
+In a second terminal, pull the configured vision model into Ollama's persistent volume:
+
+```powershell
+docker compose exec ollama ollama pull llava
+```
+
+Verify the stack:
+
+```powershell
+docker compose ps
+curl.exe --fail http://localhost:8000/health
+```
+
+The health response should be `{"status":"Healthy"}`. Swagger UI is available at
+<http://localhost:8000/docs>. The Angular frontend is run separately; see
+[Frontend setup](#frontend-setup).
+
+### Common Windows setup issues
+
+- **PowerShell blocks script execution:** for the current terminal only, run
+  `Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned`, then activate the
+  virtual environment again. Docker-only setup does not require Python activation.
+- **WSL2 is not enabled:** open PowerShell as Administrator, run `wsl --install` and
+  `wsl --update`, then reboot Windows before reopening Docker Desktop.
+- **Docker reports “virtualization support not detected”:** enable Intel VT-x or AMD-V
+  in BIOS/UEFI, enable the Windows features **Virtual Machine Platform** and
+  **Windows Subsystem for Linux**, and reboot. Confirm virtualization shows as enabled
+  in Task Manager before starting Docker Desktop again.
+
+## Environment variables
+
+Copy `.env.example` to `.env`, then adjust the values for your environment. “Required”
+means the value must be supplied for the normal local/Compose setup; optional settings
+use the documented default or disable the associated integration when empty.
+
+| Variable | Requirement | Purpose / default |
+| --- | --- | --- |
+| `DB_HOST` | Required | PostgreSQL hostname; use `localhost` for local Uvicorn and `postgres` inside Compose. |
+| `DB_PORT` | Required | PostgreSQL port; normally `5432`. |
+| `DB_NAME` | Required | PostgreSQL database name. |
+| `DB_USER` | Required | PostgreSQL user name. |
+| `DB_PASSWORD` | Required | PostgreSQL password; must be non-empty for Compose. |
+| `DATABASE_URL` | Optional | Full SQLAlchemy connection URL; when empty, the `DB_*` values are used. |
+| `JWT_SECRET_KEY` | Required | Long random secret used to sign access tokens; must be non-empty for Compose. |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional | Standard access-token lifetime; default `30`. |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | Optional | Refresh-token lifetime; default `7`. |
+| `REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS` | Optional | Remember-me access-token lifetime; default `30`. |
+| `SMTP_HOST` | Optional | SMTP server hostname; leaving it empty disables account email delivery. |
+| `SMTP_PORT` | Optional | SMTP server port; default `587`. |
+| `SMTP_USERNAME` | Optional | SMTP account user name. |
+| `SMTP_PASSWORD` | Optional | SMTP password or provider app password. |
+| `SMTP_FROM_EMAIL` | Optional | Sender address; defaults to `SMTP_USERNAME` when empty. |
+| `SMTP_USE_TLS` | Optional | Enables SMTP STARTTLS; default `true`. |
+| `OLLAMA_URL` | Optional | Ollama chat endpoint; host-run default `http://localhost:11434/api/chat` (Compose overrides it). |
+| `OLLAMA_MODEL` | Optional | Text-chat model; default `qwen3:8b`. |
+| `OLLAMA_TIMEOUT_SECONDS` | Optional | Text-model request timeout; default `300`. |
+| `OLLAMA_KEEP_ALIVE` | Optional | How long Ollama keeps a loaded model resident; default `30m`. |
+| `OLLAMA_CHAT_THINK` | Optional | Enables Qwen reasoning mode; default `false` for faster chat. |
+| `OLLAMA_CHAT_MAX_TOKENS` | Optional | Maximum generated text-chat tokens; default `768`. |
+| `OLLAMA_VISION_MODEL` | Optional | Meal-image vision model; default `llava:latest`. |
+| `OLLAMA_VISION_TIMEOUT_SECONDS` | Optional | Meal-image request timeout; default `180`. |
+| `OLLAMA_CHAT_VISION_MODEL` | Optional | General image-chat model; default `llava:latest`. |
+| `OLLAMA_CHAT_VISION_TIMEOUT_SECONDS` | Optional | General image-chat timeout; default `180`. |
+| `USDA_API_KEY` | Optional | USDA FoodData Central key; nutrition matches are unavailable when empty. |
+| `USDA_API_URL` | Optional | USDA API base URL; default `https://api.nal.usda.gov/fdc/v1`. |
+| `USDA_TIMEOUT_SECONDS` | Optional | USDA request timeout; default `15`. |
+| `ALLOWED_ORIGINS` | Optional | Comma-separated browser origins allowed by CORS; default `http://localhost:4200`. |
+| `LOGIN_RATE_LIMIT` | Optional | Login limit in SlowAPI format; default `5/minute`. |
+| `REGISTER_RATE_LIMIT` | Optional | Registration limit; default `5/minute`. |
+| `MEAL_CREATE_RATE_LIMIT` | Optional | Meal-creation limit; default `10/minute`. |
+| `CHAT_VISION_RATE_LIMIT` | Optional | Image-chat limit; default `2/minute`. |
+| `MIGRATION_CHECK_ENABLED` | Optional | Enables the startup warning for pending Alembic migrations; default `true`. |
+
 ## Project structure
 
 \`\`\`
@@ -29,9 +132,9 @@ food-ai-backend/
 
 - Python 3.13
 - Docker Engine 24+ with Docker Compose v2.20+ (for the containerized setup)
-- Node.js 18+ and Angular CLI
+- Node.js 22.12+ and Angular CLI 22 (for frontend development)
 - PostgreSQL running locally
-- [Ollama](https://ollama.com) running locally with a chat model pulled (e.g. \`llama3.2\`)
+- [Ollama](https://ollama.com) running locally with `qwen3:8b` and `llava:latest` pulled
 - Tesseract OCR (optional, for more accurate text recognition in chat images)
 
 ## Backend setup
@@ -48,33 +151,13 @@ food-ai-backend/
    pip install -r requirements.txt
    \`\`\`
 
-3. Create a \`.env\` file in the project root (never commit this file):
-   \`\`\`
-   DB_HOST=localhost
-   DB_PORT=5432
-   DB_NAME=FoodAI_DB
-   DB_USER=postgres
-   DB_PASSWORD=your_postgres_password
-   DATABASE_URL=postgresql://postgres:your_postgres_password@localhost:5432/FoodAI_DB
-   JWT_SECRET_KEY=a_long_random_secret_string
-   ACCESS_TOKEN_EXPIRE_MINUTES=30
-   REFRESH_TOKEN_EXPIRE_DAYS=7
-   REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS=30
-   SMTP_HOST=smtp.example.com
-   SMTP_PORT=587
-   SMTP_USERNAME=your_smtp_username
-   SMTP_PASSWORD=your_smtp_password
-   SMTP_FROM_EMAIL=no-reply@example.com
-   SMTP_USE_TLS=true
-   ALLOWED_ORIGINS=http://localhost:4200
-   LOGIN_RATE_LIMIT=5/minute
-   REGISTER_RATE_LIMIT=5/minute
-   MEAL_CREATE_RATE_LIMIT=10/minute
-   USDA_API_KEY=your_fooddata_central_api_key
-   OLLAMA_VISION_MODEL=llava:latest
-   OLLAMA_VISION_TIMEOUT_SECONDS=180
-   CHAT_VISION_RATE_LIMIT=2/minute
-   \`\`\`
+3. Copy the complete root configuration template (never commit the resulting `.env`):
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+   Replace `DB_PASSWORD` and `JWT_SECRET_KEY`, then review the
+   [environment variable reference](#environment-variables) for optional integrations.
 
    SMTP settings are optional for local development. When configured, a newly
    registered user receives an email containing the submitted login credentials.
@@ -133,7 +216,7 @@ Create the runtime environment file from the existing example and replace every 
 deployment-specific value before starting the stack:
 
 ```powershell
-Copy-Item app/.env.example .env
+Copy-Item .env.example .env
 ```
 
 At minimum, set strong values for `DB_PASSWORD` and `JWT_SECRET_KEY`. Configure
@@ -157,7 +240,7 @@ volume, and then start the full stack:
 ```powershell
 docker compose up -d postgres ollama
 docker compose exec ollama ollama pull qwen3:8b
-docker compose exec ollama ollama pull qwen2.5vl:7b
+docker compose exec ollama ollama pull llava
 docker compose up -d --build
 docker compose ps
 curl.exe --fail http://localhost:8000/health
@@ -184,7 +267,7 @@ FastAPI image.
 \`\`\`
 cd food-ai-ui
 npm install
-ng serve
+npm start
 \`\`\`
 
 App available at \`http://localhost:4200\`.
