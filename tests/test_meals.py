@@ -242,6 +242,76 @@ def test_create_meal_from_image_uses_existing_usda_pipeline(
     assert meal["items"][0]["calories"] == 71.0
 
 
+def test_image_food_alias_is_normalized_before_usda_lookup(
+    client, monkeypatch, valid_png_bytes
+):
+    headers = _register_and_login(client, "normalized-image@example.com")
+    _mock_grounded_calls(monkeypatch)
+
+    def vision_with_alias(url, **kwargs):
+        if url == settings.OLLAMA_URL:
+            return FakeResponse({"message": {"content": json.dumps({
+                "image_type": "food",
+                "items": [{
+                    "name": "steamed rice cakes",
+                    "confidence": "high",
+                    "visual_evidence": "round white steamed cakes",
+                }],
+                "uncertain_items": [],
+            })}})
+        assert kwargs["json"]["query"] == "idli"
+        return FakeResponse({"foods": [{
+            "fdcId": 12345,
+            "description": "Idli",
+            "dataType": "Foundation",
+        }]})
+
+    monkeypatch.setattr("requests.post", vision_with_alias)
+    response = client.post(
+        "/meals/from-image",
+        headers=headers,
+        files={"image": ("meal.png", valid_png_bytes, "image/png")},
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["food_name"] == "idli"
+    assert item["fdc_id"] == 12345
+
+
+def test_unmapped_image_food_is_saved_as_unidentified(
+    client, monkeypatch, valid_png_bytes
+):
+    headers = _register_and_login(client, "unmapped-image@example.com")
+    monkeypatch.setattr(settings, "USDA_API_KEY", "test-key")
+
+    def post(url, **kwargs):
+        if url == settings.OLLAMA_URL:
+            return FakeResponse({"message": {"content": json.dumps({
+                "image_type": "food",
+                "items": [{
+                    "name": "regional mystery dumpling",
+                    "confidence": "low",
+                    "visual_evidence": "partially hidden dumpling",
+                }],
+                "uncertain_items": ["exact dish is unclear"],
+            })}})
+        return FakeResponse({"foods": []})
+
+    monkeypatch.setattr("requests.post", post)
+    response = client.post(
+        "/meals/from-image",
+        headers=headers,
+        files={"image": ("meal.png", valid_png_bytes, "image/png")},
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["food_name"] == "Unidentified food (regional mystery dumpling)"
+    assert item["fdc_id"] is None
+    assert item["calories"] is None
+
+
 def test_unparseable_image_retries_and_is_not_saved(client, monkeypatch, valid_png_bytes):
     headers = _register_and_login(client, "bad-image@example.com")
     attempts = 0

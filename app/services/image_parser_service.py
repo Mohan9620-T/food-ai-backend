@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.config import settings
 from app.schemas.vision_result import VisionResult
+from app.services.food_name_normalizer import normalize_food_name
 from app.services.nutrition_parser_service import ParsedFoodItem
 from app.services.vision_runtime import vision_inference_slot
 
@@ -76,7 +77,11 @@ If no food or drink can be identified, return an empty items array.
                 if result.image_type != "food" or not result.items:
                     raise ValueError("No food identified")
                 return [
-                    ParsedFoodItem(food_name=item.name, quantity=1, unit="serving")
+                    ParsedFoodItem(
+                        food_name=normalize_food_name(item.name),
+                        quantity=1,
+                        unit="serving",
+                    )
                     for item in result.items
                 ]
             except (KeyError, TypeError, ValueError, ValidationError):

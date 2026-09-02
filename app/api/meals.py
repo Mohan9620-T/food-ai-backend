@@ -1,4 +1,5 @@
 import logging
+from dataclasses import replace
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -43,6 +44,13 @@ def _save_parsed_meal(
     source: str,
 ):
     resolved_items = [nutrition.lookup(item) for item in parsed_items]
+    if source == "image":
+        resolved_items = [
+            replace(item, food_name=f"Unidentified food ({item.food_name})")
+            if item.fdc_id is None
+            else item
+            for item in resolved_items
+        ]
     unmatched_count = sum(item.fdc_id is None for item in resolved_items)
     meal = repository.create(
         db,
