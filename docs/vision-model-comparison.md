@@ -134,7 +134,15 @@ image took 9 minutes 41 seconds and its red fixture took 1 minute 44 seconds.
 > text, or food items. There are no discernible details beyond the red color filling
 > the entire frame.
 
-## Decision status
+## Conclusion and recommendation
 
-No winner is selected in this Phase 1-2 report. Phase 3 will weigh the accuracy gain
-against latency, memory saturation, and the 8b high-context failure.
+Use **`qwen3-vl:4b`** for both meal-image parsing and general image chat. It delivered
+the clearest material accuracy improvement on the food sample by identifying six idlis
+and the South Indian context. Its latency is high and must be addressed through bounded
+output and production timeout/residency tuning in later phases, but it completed every
+sample without exhausting Docker's memory allocation.
+
+Do not use `qwen3-vl:8b` on this machine. Its accuracy was not meaningfully better than
+4b, it counted fewer idlis, used about 91% of Docker's 7.518 GiB memory limit, and failed
+the higher-context image with `unexpected EOF`. LLaVA remains faster, but its generic
+food identification misses the project's core regional-food use case.

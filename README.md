@@ -35,7 +35,7 @@ docker compose up --build
 In a second terminal, pull the configured vision model into Ollama's persistent volume:
 
 ```powershell
-docker compose exec ollama ollama pull llava
+docker compose exec ollama ollama pull qwen3-vl:4b
 ```
 
 Verify the stack:
@@ -91,9 +91,9 @@ use the documented default or disable the associated integration when empty.
 | `OLLAMA_KEEP_ALIVE` | Optional | How long Ollama keeps a loaded model resident; default `30m`. |
 | `OLLAMA_CHAT_THINK` | Optional | Enables Qwen reasoning mode; default `false` for faster chat. |
 | `OLLAMA_CHAT_MAX_TOKENS` | Optional | Maximum generated text-chat tokens; default `768`. |
-| `OLLAMA_VISION_MODEL` | Optional | Meal-image vision model; default `llava:latest`. |
+| `OLLAMA_VISION_MODEL` | Optional | Meal-image vision model; default `qwen3-vl:4b`. |
 | `OLLAMA_VISION_TIMEOUT_SECONDS` | Optional | Meal-image request timeout; default `180`. |
-| `OLLAMA_CHAT_VISION_MODEL` | Optional | General image-chat model; default `llava:latest`. |
+| `OLLAMA_CHAT_VISION_MODEL` | Optional | General image-chat model; default `qwen3-vl:4b`. |
 | `OLLAMA_CHAT_VISION_TIMEOUT_SECONDS` | Optional | General image-chat timeout; default `180`. |
 | `USDA_API_KEY` | Optional | USDA FoodData Central key; nutrition matches are unavailable when empty. |
 | `USDA_API_URL` | Optional | USDA API base URL; default `https://api.nal.usda.gov/fdc/v1`. |
@@ -134,7 +134,7 @@ food-ai-backend/
 - Docker Engine 24+ with Docker Compose v2.20+ (for the containerized setup)
 - Node.js 22.12+ and Angular CLI 22 (for frontend development)
 - PostgreSQL running locally
-- [Ollama](https://ollama.com) running locally with `qwen3:8b` and `llava:latest` pulled
+- [Ollama](https://ollama.com) running locally with `qwen3:8b` and `qwen3-vl:4b` pulled
 - Tesseract OCR (optional, for more accurate text recognition in chat images)
 
 ## Backend setup
@@ -169,7 +169,7 @@ food-ai-backend/
 
    Image meal logging also requires the configured Ollama vision model locally:
    \`\`\`
-   ollama pull llava
+   ollama pull qwen3-vl:4b
    \`\`\`
    If it is unavailable, text meal logging and the rest of the application continue
    working; image uploads return a clear service-unavailable response.
@@ -240,7 +240,7 @@ volume, and then start the full stack:
 ```powershell
 docker compose up -d postgres ollama
 docker compose exec ollama ollama pull qwen3:8b
-docker compose exec ollama ollama pull llava
+docker compose exec ollama ollama pull qwen3-vl:4b
 docker compose up -d --build
 docker compose ps
 curl.exe --fail http://localhost:8000/health
