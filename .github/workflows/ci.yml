@@ -52,6 +52,9 @@ jobs:
       - name: Install frontend dependencies
         working-directory: food-ai-ui
         run: npm ci
+      - name: Run frontend tests
+        working-directory: food-ai-ui
+        run: npx ng test --watch=false
       - name: Build frontend
         working-directory: food-ai-ui
         run: npx ng build

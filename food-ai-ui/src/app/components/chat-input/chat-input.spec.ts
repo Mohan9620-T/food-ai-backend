@@ -49,6 +49,11 @@ describe('ChatInput image drag and drop', () => {
     } as unknown as DragEvent;
   }
 
+  it('renders the message composer and attachment control', () => {
+    expect(fixture.nativeElement.querySelector('textarea[aria-label="Message"]')).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('button[aria-label="Attach image"]')).toBeTruthy();
+  });
+
   it('attaches a valid image dropped from the file system', () => {
     const image = new File([new Uint8Array([1, 2, 3])], 'meal.png', {
       type: 'image/png'
@@ -70,5 +75,13 @@ describe('ChatInput image drag and drop', () => {
 
     expect(component.selectedImage).toBeNull();
     expect(component.imageError).toContain('Unsupported file type');
+  });
+
+  it('rejects dropping more than one image', () => {
+    const first = new File([new Uint8Array([1])], 'one.png', { type: 'image/png' });
+    const second = new File([new Uint8Array([2])], 'two.png', { type: 'image/png' });
+    component.handleDrop(dropEvent([first, second]));
+    expect(component.selectedImage).toBeNull();
+    expect(component.imageError).toBe('Drop one image at a time.');
   });
 });
