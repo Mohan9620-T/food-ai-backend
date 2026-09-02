@@ -35,11 +35,16 @@ def test_meal_and_chat_vision_requests_share_one_inference_slot(monkeypatch):
         time.sleep(0.05)
         with counter_lock:
             active -= 1
-        if kwargs["json"].get("format") == "json":
-            return FakeResponse(json.dumps([
-                {"food_name": "apple", "quantity": 1, "unit": "piece"}
-            ]))
-        return FakeResponse("The image shows an apple.")
+        content = json.dumps({
+            "image_type": "food",
+            "items": [{
+                "name": "apple",
+                "confidence": "high",
+                "visual_evidence": "round red fruit",
+            }],
+            "uncertain_items": [],
+        })
+        return FakeResponse(content)
 
     monkeypatch.setattr("requests.post", post)
     monkeypatch.setattr(ChatVisionService, "_extract_ocr_text", lambda self, data: None)
@@ -48,7 +53,7 @@ def test_meal_and_chat_vision_requests_share_one_inference_slot(monkeypatch):
         meal_future = executor.submit(ImageParserService().parse, b"meal-image")
         chat_future = executor.submit(ChatVisionService().describe, b"chat-image", None)
         assert meal_future.result()[0].food_name == "apple"
-        assert chat_future.result() == "The image shows an apple."
+        assert chat_future.result() == "I can see apple (round red fruit)."
 
     assert maximum_active == 1
 
