@@ -88,6 +88,29 @@ class ChatRepository:
 
         return message
 
+    def add_turn(
+        self,
+        db: Session,
+        session_id: int,
+        user_content: str,
+        bot_content: str,
+    ) -> tuple[ChatMessageRecord, ChatMessageRecord]:
+        user_message = ChatMessageRecord(
+            session_id=session_id,
+            sender="user",
+            content=user_content,
+        )
+        bot_message = ChatMessageRecord(
+            session_id=session_id,
+            sender="bot",
+            content=bot_content,
+        )
+        db.add_all([user_message, bot_message])
+        db.commit()
+        db.refresh(user_message)
+        db.refresh(bot_message)
+        return user_message, bot_message
+
     def import_messages(
         self,
         db: Session,

@@ -286,7 +286,6 @@ def test_chat_uses_saved_session_history_instead_of_browser_history(client, monk
     assert captured_histories[1] == [
         ("user", "Call me boss"),
         ("assistant", "Understood, boss."),
-        ("user", "Suggest a meal"),
     ]
 
 
@@ -307,6 +306,15 @@ def test_chat_timeout_returns_clean_503(client, monkeypatch):
 
     assert response.status_code == 503
     assert "still loading or unavailable" in response.json()["detail"]
+    sessions = client.get(
+        "/chat/sessions",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    detail = client.get(
+        f"/chat/sessions/{sessions[0]['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    assert detail["messages"] == []
 
 
 def test_chat_stream_timeout_returns_error_chunk_and_closes_cleanly(client, monkeypatch):

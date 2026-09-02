@@ -165,7 +165,6 @@ def chat(
         db, user_id, session_id, request.message
     )
 
-    repository.add_message(db, session.id, "user", request.message)
     history = _get_persisted_history(db, session.id)
 
     try:
@@ -177,7 +176,7 @@ def chat(
         )
         raise HTTPException(status_code=503, detail=str(error))
 
-    repository.add_message(db, session.id, "bot", answer)
+    repository.add_turn(db, session.id, request.message, answer)
 
     logger.info("chat.completed", extra={"user_id": user_id, "session_id": session.id})
 
@@ -233,7 +232,6 @@ async def chat_vision(
             session_id,
             persisted_user_message,
         )
-        repository.add_message(db, session.id, "user", persisted_user_message)
         try:
             answer = vision_service.describe(image_bytes, message_text or None)
         except VisionModelUnavailableError as error:
@@ -242,7 +240,13 @@ async def chat_vision(
                 extra={"user_id": user_id, "session_id": session.id},
             )
             raise HTTPException(status_code=503, detail=str(error))
-        repository.add_message(db, session.id, "bot", answer)
+        if await request.is_disconnected():
+            logger.info(
+                "chat.vision_disconnected",
+                extra={"user_id": user_id, "session_id": session.id},
+            )
+            return ChatResponse(response=answer, session_id=session.id)
+        repository.add_turn(db, session.id, persisted_user_message, answer)
         logger.info(
             "chat.vision_completed",
             extra={"user_id": user_id, "session_id": session.id},
@@ -265,7 +269,6 @@ async def stream_chat(
         db, user_id, session_id, payload.message
     )
 
-    repository.add_message(db, session.id, "user", payload.message)
     history = _get_persisted_history(db, session.id)
     logger.info("chat.stream_started", extra={"user_id": user_id, "session_id": session.id})
 
@@ -301,7 +304,7 @@ async def stream_chat(
 
             answer = "".join(chunks)
             if answer:
-                repository.add_message(db, session.id, "bot", answer)
+                repository.add_turn(db, session.id, payload.message, answer)
             logger.info("chat.stream_completed", extra={"user_id": user_id, "session_id": session.id})
             yield json.dumps({"type": "done"}) + "\n"
         finally:

@@ -60,7 +60,9 @@ details that are not visible, and clearly express uncertainty when appropriate.
         except requests.RequestException as error:
             logger.warning("chat.vision_model_unavailable")
             raise VisionModelUnavailableError(
-                "Chat vision model unavailable. Pull and start the configured Ollama chat vision model."
+                "Chat vision model "
+                f"'{settings.OLLAMA_CHAT_VISION_MODEL}' is unavailable. "
+                "Pull it in Ollama and try again."
             ) from error
 
         try:
