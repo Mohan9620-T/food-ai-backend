@@ -36,6 +36,7 @@ interface ChatMessageApi {
   sender: 'user' | 'bot';
   content: string;
   created_at: string;
+  image_url?: string | null;
 }
 
 interface ChatSessionDetailApi extends ChatSessionSummaryApi {
@@ -547,7 +548,8 @@ export class ChatService {
       messages: session.messages.map((message) => ({
         sender: message.sender,
         text: message.content,
-        createdAt: message.created_at
+        createdAt: message.created_at,
+        imageUrl: message.image_url ?? undefined
       })),
       updatedAt: Date.parse(session.updated_at)
     };

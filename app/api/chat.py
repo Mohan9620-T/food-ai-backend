@@ -246,7 +246,14 @@ async def chat_vision(
                 extra={"user_id": user_id, "session_id": session.id},
             )
             return ChatResponse(response=answer, session_id=session.id)
-        repository.add_turn(db, session.id, persisted_user_message, answer)
+        repository.add_turn(
+            db,
+            session.id,
+            persisted_user_message,
+            answer,
+            image_data=image_bytes,
+            image_content_type=content_type,
+        )
         logger.info(
             "chat.vision_completed",
             extra={"user_id": user_id, "session_id": session.id},

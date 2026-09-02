@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime
+import base64
+
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, LargeBinary
 from sqlalchemy.orm import relationship
 
 from app.database.database import Base
@@ -30,6 +32,15 @@ class ChatMessageRecord(Base):
     session_id = Column(Integer, ForeignKey("chat_sessions.id"), nullable=False, index=True)
     sender = Column(String(10), nullable=False)  # "user" or "bot"
     content = Column(Text, nullable=False)
+    image_data = Column(LargeBinary, nullable=True)
+    image_content_type = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     session = relationship("ChatSession", back_populates="messages")
+
+    @property
+    def image_url(self) -> str | None:
+        if not self.image_data or not self.image_content_type:
+            return None
+        encoded = base64.b64encode(self.image_data).decode("ascii")
+        return f"data:{self.image_content_type};base64,{encoded}"

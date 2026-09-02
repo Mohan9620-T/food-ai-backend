@@ -73,9 +73,11 @@ def test_chat_vision_creates_session_and_persists_both_turns(client, monkeypatch
         ("user", "What is in this image?"),
         ("bot", "The image shows a red bicycle."),
     ]
+    assert history[0]["image_url"].startswith("data:image/png;base64,")
+    assert history[1]["image_url"] is None
 
 
-def test_chat_vision_continues_existing_session_without_storing_image(
+def test_chat_vision_continues_existing_session_and_persists_image(
     client, monkeypatch, valid_png_bytes
 ):
     token = _register_and_login(client, "vision-continue@example.com")
@@ -104,6 +106,7 @@ def test_chat_vision_continues_existing_session_without_storing_image(
         ("bot", "It contains a blue logo."),
     ]
     assert all("private-image-bytes" not in item["content"] for item in history)
+    assert history[0]["image_url"].startswith("data:image/png;base64,")
 
 
 def test_chat_vision_returns_503_when_model_is_unavailable(

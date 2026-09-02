@@ -94,11 +94,16 @@ class ChatRepository:
         session_id: int,
         user_content: str,
         bot_content: str,
+        *,
+        image_data: bytes | None = None,
+        image_content_type: str | None = None,
     ) -> tuple[ChatMessageRecord, ChatMessageRecord]:
         user_message = ChatMessageRecord(
             session_id=session_id,
             sender="user",
             content=user_content,
+            image_data=image_data,
+            image_content_type=image_content_type,
         )
         bot_message = ChatMessageRecord(
             session_id=session_id,

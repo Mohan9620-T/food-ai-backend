@@ -9,6 +9,7 @@ class ChatMessageOut(BaseModel):
     sender: str
     content: str
     created_at: datetime
+    image_url: str | None = None
 
     class Config:
         from_attributes = True

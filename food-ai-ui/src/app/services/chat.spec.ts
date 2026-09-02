@@ -99,4 +99,23 @@ describe('ChatService session continuity', () => {
     expect(service.analyzingImage()).toBe(false);
     expect(service.messages().at(-1)?.text).toBe('A landscape.');
   });
+
+  it('restores a persisted image URL from backend session history', () => {
+    const imageUrl = 'data:image/png;base64,AQID';
+    const conversation = (service as unknown as {
+      fromApiSession: (session: unknown) => { messages: Array<{ imageUrl?: string }> };
+    }).fromApiSession({
+      id: 12,
+      title: 'Image chat',
+      updated_at: '2026-09-02T08:00:00Z',
+      messages: [{
+        sender: 'user',
+        content: 'What is shown?',
+        created_at: '2026-09-02T08:00:00Z',
+        image_url: imageUrl
+      }]
+    });
+
+    expect(conversation.messages[0].imageUrl).toBe(imageUrl);
+  });
 });
