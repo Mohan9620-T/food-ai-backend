@@ -1,4 +1,9 @@
 <div class="composer">
+  @if (isDraggingImage) {
+    <div class="image-drop-overlay" role="status" aria-live="polite">
+      <div><span aria-hidden="true">&#128444;</span><strong>Drop image to attach</strong><small>JPEG, PNG, WebP, or GIF · maximum 8 MB</small></div>
+    </div>
+  }
   @if (imagePreviewUrl) {
     <div class="image-preview"><img [src]="imagePreviewUrl" alt="Selected image preview" /><div><strong>{{ selectedImage?.name }}</strong><small>Ready to analyze</small></div><button type="button" class="remove-image" (click)="removeImage()" aria-label="Remove attached image">&times;</button></div>
   }

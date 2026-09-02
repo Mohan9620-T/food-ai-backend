@@ -1,4 +1,4 @@
-import { afterNextRender, Component, DestroyRef, effect, ElementRef, inject, viewChild } from '@angular/core';
+import { afterNextRender, Component, DestroyRef, effect, ElementRef, HostListener, inject, viewChild } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -26,6 +26,8 @@ export class ChatInput {
   selectedImage: File | null = null;
   imagePreviewUrl: string | null = null;
   imageError: string | null = null;
+  isDraggingImage = false;
+  private dragDepth = 0;
   private visionSubscription: Subscription | null = null;
 
   constructor() {
@@ -59,6 +61,53 @@ export class ChatInput {
     const file = input.files?.[0] ?? null;
     input.value = '';
     if (!file) return;
+    this.attachImage(file);
+  }
+
+  @HostListener('document:dragenter', ['$event'])
+  handleDragEnter(event: DragEvent): void {
+    if (!this.hasDraggedFiles(event) || this.isSending()) return;
+    event.preventDefault();
+    this.dragDepth += 1;
+    this.isDraggingImage = true;
+  }
+
+  @HostListener('document:dragover', ['$event'])
+  handleDragOver(event: DragEvent): void {
+    if (!this.hasDraggedFiles(event) || this.isSending()) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  }
+
+  @HostListener('document:dragleave', ['$event'])
+  handleDragLeave(event: DragEvent): void {
+    if (!this.hasDraggedFiles(event)) return;
+    this.dragDepth = Math.max(0, this.dragDepth - 1);
+    if (this.dragDepth === 0) this.isDraggingImage = false;
+  }
+
+  @HostListener('document:drop', ['$event'])
+  handleDrop(event: DragEvent): void {
+    if (!this.hasDraggedFiles(event)) return;
+    event.preventDefault();
+    this.dragDepth = 0;
+    this.isDraggingImage = false;
+    if (this.isSending()) return;
+
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (files.length === 0) return;
+    if (files.length > 1) {
+      this.imageError = 'Drop one image at a time.';
+      return;
+    }
+    this.attachImage(files[0]);
+  }
+
+  private hasDraggedFiles(event: DragEvent): boolean {
+    return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+  }
+
+  private attachImage(file: File): void {
     this.imageError = null;
     if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
       this.imageError = 'Unsupported file type. Upload a JPEG, PNG, WebP, or GIF image.';
