@@ -47,6 +47,7 @@ export class SpeechRecognitionService {
   private readonly ngZone = SpeechRecognitionService.resolveNgZone();
   private readonly RecognitionConstructor?: SpeechRecognitionConstructorLike;
   private recognition: SpeechRecognitionLike | null = null;
+  private errorTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     const speechWindow = window as SpeechRecognitionWindow;
@@ -65,7 +66,7 @@ export class SpeechRecognitionService {
     }
 
     if (this.recognition) this.stop();
-    this.error.set(null);
+    this.clearError();
     const recognition = new this.RecognitionConstructor();
     this.recognition = recognition;
     recognition.continuous = true;
@@ -93,7 +94,8 @@ export class SpeechRecognitionService {
     };
     recognition.onerror = event => {
       this.ngZone.run(() => {
-        this.error.set(event.error);
+        // Chrome emits "aborted" when stop() is intentional; it is not a user-facing failure.
+        if (event.error !== 'aborted') this.setTemporaryError(event.error);
         this.reset(recognition);
       });
     };
@@ -105,7 +107,7 @@ export class SpeechRecognitionService {
       recognition.start();
       this.isListening.set(true);
     } catch {
-      this.error.set('start-failed');
+      this.setTemporaryError('start-failed');
       this.reset(recognition);
     }
   }
@@ -113,13 +115,32 @@ export class SpeechRecognitionService {
   stop(): void {
     const recognition = this.recognition;
     this.reset(recognition);
+    if (recognition) {
+      // Ignore events queued by the browser after an intentional stop. Otherwise a late
+      // transcript can repopulate a composer that was just cleared by Send.
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+    }
     recognition?.stop();
+  }
+
+  clearError(): void {
+    if (this.errorTimer) clearTimeout(this.errorTimer);
+    this.errorTimer = null;
+    this.error.set(null);
   }
 
   private reset(recognition?: SpeechRecognitionLike | null): void {
     if (recognition && this.recognition !== recognition) return;
     this.isListening.set(false);
     this.recognition = null;
+  }
+
+  private setTemporaryError(error: string): void {
+    this.clearError();
+    this.error.set(error);
+    this.errorTimer = setTimeout(() => this.ngZone.run(() => this.clearError()), 4000);
   }
 
   private static resolveNgZone(): NgZone {

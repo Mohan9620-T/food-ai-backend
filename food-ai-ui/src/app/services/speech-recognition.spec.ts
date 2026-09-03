@@ -104,4 +104,19 @@ describe('SpeechRecognitionService', () => {
     expect(onFinal).toHaveBeenCalledOnce();
     expect(onFinal).toHaveBeenCalledWith('Are you? ');
   });
+
+  it('ignores queued callbacks after an intentional stop', () => {
+    setRecognitionConstructor(MockSpeechRecognition);
+    const service = new SpeechRecognitionService();
+    const onInterim = vi.fn();
+    service.start(onInterim, vi.fn());
+    const recognition = instance!;
+
+    service.stop();
+
+    expect(recognition.onresult).toBeNull();
+    expect(recognition.onerror).toBeNull();
+    expect(recognition.stop).toHaveBeenCalledOnce();
+    expect(service.error()).toBeNull();
+  });
 });

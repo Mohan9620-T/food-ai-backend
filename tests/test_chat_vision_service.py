@@ -22,11 +22,13 @@ class FakeResponse:
 
 def vision_content(
     image_type="other",
+    answer=None,
     items=None,
     uncertain_items=None,
 ):
     return json.dumps({
         "image_type": image_type,
+        "answer": answer,
         "items": items or [],
         "uncertain_items": uncertain_items or [],
     })
@@ -83,6 +85,38 @@ def test_describe_passes_accompanying_user_question(monkeypatch):
     assert "OPEN" in result
     assert captured["body"]["messages"][-1]["content"] == "What does the sign say?"
     assert "Transcribe any clearly visible text" in captured["body"]["messages"][0]["content"]
+
+
+def test_describe_returns_direct_person_compliance_answer_instead_of_object_inventory(monkeypatch):
+    captured = {}
+    direct_answer = (
+        '[{"person":"center","missing":["hair net","gloves"],'
+        '"uncertain":["face mask"]}]'
+    )
+
+    def post(url, **kwargs):
+        captured["body"] = kwargs["json"]
+        return FakeResponse({"message": {"content": vision_content(
+            answer=direct_answer,
+            items=[{
+                "name": "red lid",
+                "confidence": "high",
+                "visual_evidence": "held by the center person",
+            }],
+        )}})
+
+    monkeypatch.setattr("requests.post", post)
+    result = ChatVisionService().describe(
+        b"kitchen",
+        "List each person and missing hair nets, face masks, and gloves as JSON.",
+    )
+
+    assert result == direct_answer
+    system_prompt = " ".join(
+        captured["body"]["messages"][0]["content"].split()
+    )
+    assert "inspect each visible person separately" in system_prompt
+    assert "Do not replace a requested analysis with a generic" in system_prompt
 
 
 def test_describe_raises_clear_error_when_vision_model_times_out(monkeypatch):
