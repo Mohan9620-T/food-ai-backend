@@ -93,6 +93,7 @@ use the documented default or disable the associated integration when empty.
 | `OLLAMA_CHAT_MAX_TOKENS` | Optional | Maximum generated text-chat tokens; default `768`. |
 | `OLLAMA_VISION_MODEL` | Optional | Meal-image vision model; default `qwen3-vl:4b`. |
 | `OLLAMA_VISION_TIMEOUT_SECONDS` | Optional | Meal-image request timeout; default `660`. |
+| `OLLAMA_VISION_MAX_DIMENSION` | Optional | Longest image edge sent to Ollama; default `1024`. Stored originals are unchanged. |
 | `OLLAMA_CHAT_VISION_MODEL` | Optional | General image-chat model; default `qwen3-vl:4b`. |
 | `OLLAMA_CHAT_VISION_TIMEOUT_SECONDS` | Optional | General image-chat timeout; default `660`. |
 | `USDA_API_KEY` | Optional | USDA FoodData Central key; nutrition matches are unavailable when empty. |

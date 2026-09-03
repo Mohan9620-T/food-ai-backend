@@ -8,6 +8,7 @@ from app.config import settings
 from app.schemas.vision_result import VisionResult
 from app.services.food_name_normalizer import normalize_food_name
 from app.services.nutrition_parser_service import ParsedFoodItem
+from app.services.vision_image_preprocessor import prepare_vision_image
 from app.services.vision_runtime import vision_inference_slot
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,8 @@ If no food or drink can be identified, return an empty items array.
 """
 
     def parse(self, image_bytes: bytes) -> list[ParsedFoodItem]:
-        encoded_image = base64.b64encode(image_bytes).decode("ascii")
+        inference_image = prepare_vision_image(image_bytes)
+        encoded_image = base64.b64encode(inference_image).decode("ascii")
         with vision_inference_slot():
             return self._parse_with_slot(encoded_image)
 

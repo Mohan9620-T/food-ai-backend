@@ -1,0 +1,15 @@
+{
+  "model": "qwen3-vl:4b",
+  "pipeline": "ChatVisionService structured VisionResult",
+  "timeout_seconds": 660,
+  "results": [
+    {
+      "sample": "persisted-image-2",
+      "elapsed_seconds": 137.49,
+      "raw_response": "",
+      "raw_thinking": "{\n  \"image_type\": \"other\",\n  \"items\": [\n    {\n      \"name\": \"Clownfish\",\n      \"confidence\": \"high\",\n      \"visual_evidence\": \"A single clownfish with distinctive orange, white, and black stripes swimming in water. The fish has a rounded body, large eyes, and visible fins. The background is blurred, showing a greenish aquatic environment with a horizontal brown structure (possibly a rope or branch) in the upper portion.\"\n    }\n  ],\n  \"uncertain_items\": []\n}",
+      "response": "I can see Clownfish (A single clownfish with distinctive orange, white, and black stripes swimming in water. The fish has a rounded body, large eyes, and visible fins. The background is blurred, showing a greenish aquatic environment with a horizontal brown structure (possibly a rope or branch) in the upper portion.).",
+      "error": null
+    }
+  ]
+}

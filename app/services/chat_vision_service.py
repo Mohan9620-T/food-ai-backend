@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from app.config import settings
 from app.schemas.vision_result import VisionResult
 from app.services.image_parser_service import VisionModelUnavailableError
+from app.services.vision_image_preprocessor import prepare_vision_image
 from app.services.vision_runtime import vision_inference_slot
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,8 @@ Group repeated objects of the same kind into one item. Keep every name and visua
     )
 
     def describe(self, image_bytes: bytes, user_message: str | None) -> str:
-        encoded_image = base64.b64encode(image_bytes).decode("ascii")
+        inference_image = prepare_vision_image(image_bytes)
+        encoded_image = base64.b64encode(inference_image).decode("ascii")
         prompt = (user_message or "").strip() or "Please describe this image."
         ocr_text = self._extract_ocr_text(image_bytes)
         if ocr_text:

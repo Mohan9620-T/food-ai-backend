@@ -72,8 +72,10 @@ def save_results(results_path: Path, results: list[dict]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sample", required=True, choices=SAMPLE_NAMES)
+    parser.add_argument("--model", default=settings.OLLAMA_CHAT_VISION_MODEL)
     parser.add_argument("--results-path", type=Path, default=DEFAULT_RESULTS_PATH)
     args = parser.parse_args()
+    settings.OLLAMA_CHAT_VISION_MODEL = args.model
 
     images = persisted_images()
     samples = {
