@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 
@@ -33,6 +34,7 @@ service = ChatService()
 vision_service = ChatVisionService()
 repository = ChatRepository()
 logger = logging.getLogger(__name__)
+stream_tasks: set[asyncio.Task] = set()
 MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024
 ALLOWED_CHAT_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
@@ -374,9 +376,13 @@ async def stream_chat(
     )
 
     history = _get_persisted_history(db, session.id)
+    repository.add_message(db, session.id, "user", payload.message)
     logger.info("chat.stream_started", extra={"user_id": user_id, "session_id": session.id})
 
-    async def generate():
+    events: asyncio.Queue[dict] = asyncio.Queue()
+    database_bind = db.get_bind()
+
+    async def produce_response():
         chunks: list[str] = []
         iterator = service.stream_chat(
             payload.message,
@@ -384,37 +390,52 @@ async def stream_chat(
             payload.reference_history,
         )
         try:
-            yield json.dumps({"type": "session", "session_id": session.id}) + "\n"
-            while True:
-                if await request.is_disconnected():
-                    logger.info(
-                        "chat.stream_disconnected",
-                        extra={"user_id": user_id, "session_id": session.id},
-                    )
-                    return
-                try:
-                    chunk = await anext(iterator)
-                except StopAsyncIteration:
-                    break
-                except ChatModelUnavailableError as error:
-                    logger.warning(
-                        "chat.stream_model_unavailable",
-                        extra={"user_id": user_id, "session_id": session.id},
-                    )
-                    yield json.dumps({"type": "error", "message": str(error)}) + "\n"
-                    return
+            async for chunk in iterator:
                 chunks.append(chunk)
-                yield json.dumps({"type": "token", "content": chunk}) + "\n"
-
-            answer = "".join(chunks)
-            if answer:
-                repository.add_turn(db, session.id, payload.message, answer)
-            logger.info("chat.stream_completed", extra={"user_id": user_id, "session_id": session.id})
-            yield json.dumps({"type": "done"}) + "\n"
+                await events.put({"type": "token", "content": chunk})
+        except ChatModelUnavailableError as error:
+            logger.warning(
+                "chat.stream_model_unavailable",
+                extra={"user_id": user_id, "session_id": session.id},
+            )
+            await events.put({"type": "error", "message": str(error)})
+            return
+        except Exception:
+            logger.exception(
+                "chat.stream_generation_failed",
+                extra={"user_id": user_id, "session_id": session.id},
+            )
+            await events.put({
+                "type": "error",
+                "message": "The response could not be generated. Please try again.",
+            })
+            return
         finally:
             close = getattr(iterator, "aclose", None)
             if close:
                 await close()
+
+        answer = "".join(chunks)
+        if answer:
+            worker_db = Session(bind=database_bind)
+            try:
+                repository.add_message(worker_db, session.id, "bot", answer)
+            finally:
+                worker_db.close()
+        logger.info("chat.stream_completed", extra={"user_id": user_id, "session_id": session.id})
+        await events.put({"type": "done"})
+
+    producer = asyncio.create_task(produce_response())
+    stream_tasks.add(producer)
+    producer.add_done_callback(stream_tasks.discard)
+
+    async def generate():
+        yield json.dumps({"type": "session", "session_id": session.id}) + "\n"
+        while True:
+            event = await events.get()
+            yield json.dumps(event) + "\n"
+            if event["type"] in {"done", "error"}:
+                return
 
     return StreamingResponse(
         generate(),

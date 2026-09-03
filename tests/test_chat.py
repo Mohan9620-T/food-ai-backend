@@ -363,6 +363,13 @@ def test_chat_stream_timeout_returns_error_chunk_and_closes_cleanly(client, monk
     assert events[-1]["type"] == "error"
     assert "still loading or unavailable" in events[-1]["message"]
     assert closed is True
+    session_response = client.get(
+        f"/chat/sessions/{events[0]['session_id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert [message["content"] for message in session_response.json()["messages"]] == [
+        "Explain this"
+    ]
 
 
 def test_chat_stream_returns_session_tokens_and_persists_answer(client, monkeypatch):
@@ -394,7 +401,7 @@ def test_chat_stream_returns_session_tokens_and_persists_answer(client, monkeypa
     assert session_response.json()["messages"][-1]["content"] == "Hello there"
 
 
-def test_chat_stream_checks_disconnect_before_pulling_ollama(client, monkeypatch):
+def test_chat_stream_generation_is_not_stopped_by_request_disconnect_check(client, monkeypatch):
     from starlette.requests import Request
 
     token = _register_and_login(client, email="disconnect@example.com")
@@ -417,8 +424,8 @@ def test_chat_stream_checks_disconnect_before_pulling_ollama(client, monkeypatch
     )
 
     assert response.status_code == 200
-    assert pulled is False
-    assert '"type": "token"' not in response.text
+    assert pulled is True
+    assert '"type": "token"' in response.text
 
 
 def test_import_chat_session_messages(client):

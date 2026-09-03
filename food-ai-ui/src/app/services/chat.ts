@@ -72,6 +72,8 @@ export class ChatService {
   private readonly loadingSessionsState = signal(false);
   private readonly analyzingImageState = signal(false);
   private streamAbortController: AbortController | null = null;
+  private pendingHistoryTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingHistoryRefreshes = 0;
 
   readonly conversations = this.conversationsState.asReadonly();
   readonly activeConversationId = this.activeConversationIdState.asReadonly();
@@ -98,7 +100,10 @@ export class ChatService {
         switchMap(() => this.fetchConversations()),
         finalize(() => this.loadingSessionsState.set(false))
       ).subscribe({
-        next: (conversations) => this.setLoadedConversations(conversations),
+        next: (conversations) => {
+          this.setLoadedConversations(conversations);
+          this.schedulePendingHistoryRefresh();
+        },
         error: () => {
           this.migrationNoticeState.set('Chats could not be loaded. Please check the backend connection and retry.');
           this.ensureDraftConversation();
@@ -524,6 +529,35 @@ export class ChatService {
     this.ensureDraftConversation();
   }
 
+  private schedulePendingHistoryRefresh(): void {
+    if (!this.isBrowser || this.pendingHistoryTimer || this.pendingHistoryRefreshes >= 150) {
+      return;
+    }
+    const hasPendingTurn = this.conversationsState().some(
+      conversation => conversation.messages.at(-1)?.sender === 'user'
+    );
+    if (!hasPendingTurn) {
+      this.pendingHistoryRefreshes = 0;
+      return;
+    }
+
+    this.pendingHistoryTimer = setTimeout(() => {
+      this.pendingHistoryTimer = null;
+      this.pendingHistoryRefreshes += 1;
+      this.fetchConversations().subscribe({
+        next: conversations => {
+          const activeId = this.activeConversationIdState();
+          this.conversationsState.set(conversations);
+          if (activeId && conversations.some(conversation => conversation.id === activeId)) {
+            this.activeConversationIdState.set(activeId);
+          }
+          this.schedulePendingHistoryRefresh();
+        },
+        error: () => this.schedulePendingHistoryRefresh()
+      });
+    }, 2000);
+  }
+
   private ensureDraftConversation(): void {
     if (this.conversationsState().length > 0) return;
     const draft = this.createDraftConversation();
@@ -556,6 +590,9 @@ export class ChatService {
   }
 
   private resetUserState(): void {
+    if (this.pendingHistoryTimer) clearTimeout(this.pendingHistoryTimer);
+    this.pendingHistoryTimer = null;
+    this.pendingHistoryRefreshes = 0;
     const existingConversations = untracked(() => this.conversationsState());
     for (const conversation of existingConversations) {
       for (const message of conversation.messages) {
