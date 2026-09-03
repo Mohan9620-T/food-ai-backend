@@ -20,7 +20,7 @@ foreground occlusion, unusual angle, and tight crop. Raw machine-readable record
 | `indian-007` | Multiple overlapping thali items | Indian thali | 900 s diagnostic | Timed out; no response |
 | `indian-010` | Low-light idli and sambar | idli, sambar | 180 s | Timed out; no response |
 | `indian-012` | Occluded masala dosa and vada | masala dosa, vada | 180 s | Timed out; no response |
-| `indian-013` | Rotated masala dosa | masala dosa | 180 s | Timed out; no response |
+| `indian-013` | Rotated masala dosa | masala dosa | 180 s | Completed in 154.293 s after inference resizing; identified dosa, sambar, and chutney |
 | `indian-015` | Tightly cropped vegetable biryani | vegetable biryani | 180 s | Timed out; no response |
 
 The first two wall-clock measurements crossed a workspace suspension and are intentionally recorded
@@ -48,14 +48,14 @@ queued work as the cause. It still timed out at 180 seconds. Ollama logs show:
 3. **Timed-out requests can amplify latency for later requests.** In the sequential run, abandoned
    inference continued long enough to queue following work. The application's one-at-a-time vision
    slot prevents concurrent memory pressure but cannot cancel server-side work immediately.
-4. **Complexity is not the only trigger.** Even the single-dish rotated dosa timed out on an isolated
-   clean runtime, so this is not limited to dense thali scenes.
+4. **Inference resizing resolves the isolated rotated case.** After Phase 11, the production
+   preprocessing path reduced the image before inference. The same case completed within its
+   180-second diagnostic limit and returned the expected dish family plus acceptable context.
 5. **No hallucination or label-error conclusion is possible from this run.** Every raw response is
    null. Treating a timeout as an incorrect food label would blur accuracy and availability metrics.
 
 ## Implications
 
-Phase 10 should report difficult-set completion rate separately from label accuracy. Phase 11 should
-prioritize warm-model behavior and a timeout based on measured latency. Fine-tuning is not indicated
-by these results: it targets recognition quality, while the demonstrated blocker is inference
-throughput and request lifecycle behavior on this host.
+Completion rate must be reported separately from label accuracy. Fine-tuning remains unindicated:
+the rerun demonstrates recognition on the isolated difficult case, while inference throughput and
+request lifecycle behavior on this host remain the measured constraints.

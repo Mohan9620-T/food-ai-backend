@@ -12,6 +12,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from app.schemas.vision_result import VisionResult
 from app.services.image_parser_service import ImageParserService
+from app.services.vision_image_preprocessor import prepare_vision_image
 
 
 DATASET_ROOT = REPO_ROOT / "docs" / "vision-eval-dataset"
@@ -60,13 +61,14 @@ def main() -> None:
             print(f"SKIP {index}/{len(cases)} {case['id']}", flush=True)
             continue
 
-        image_bytes = (DATASET_ROOT / case["file"]).read_bytes()
+        image_bytes = prepare_vision_image((DATASET_ROOT / case["file"]).read_bytes())
         body = {
             "model": MODEL,
             "stream": False,
+            "think": False,
             "keep_alive": "10m",
             "format": VisionResult.model_json_schema(),
-            "options": {"temperature": 0, "num_ctx": 8192},
+            "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 1024},
             "messages": [
                 {"role": "system", "content": ImageParserService.SYSTEM_PROMPT},
                 {
@@ -89,12 +91,15 @@ def main() -> None:
             response = requests.post(OLLAMA_URL, json=body, timeout=REQUEST_TIMEOUT_SECONDS)
             response.raise_for_status()
             record["elapsed_seconds"] = round(time.perf_counter() - started, 3)
-            record["response"] = response.json()["message"]["content"]
+            message = response.json()["message"]
+            record["response"] = message.get("content") or message.get("thinking")
             VisionResult.model_validate_json(record["response"])
             print(f"OK {case['id']} {record['elapsed_seconds']}s", flush=True)
         except (requests.RequestException, KeyError, TypeError, ValueError) as error:
             record["elapsed_seconds"] = round(time.perf_counter() - started, 3)
             record["error"] = f"{type(error).__name__}: {error}"
+            if isinstance(error, requests.HTTPError) and error.response is not None:
+                record["error"] += f"; response={error.response.text[:1000]}"
             print(f"ERROR {case['id']} {record['error']}", flush=True)
         results.append(record)
         save_results(results)

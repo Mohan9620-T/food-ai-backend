@@ -34,9 +34,9 @@
     {
       "id": "indian-013",
       "timeout_seconds": 180,
-      "elapsed_seconds": 180.035,
-      "response": null,
-      "error": "ReadTimeout: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)"
+      "elapsed_seconds": 154.293,
+      "response": "{\n  \"image_type\": \"food\",\n  \"items\": [\n    {\n      \"name\": \"dosa\",\n      \"confidence\": \"high\",\n      \"visual_evidence\": \"long, rectangular, crispy, golden-brown flatbread-like item with a slightly uneven surface, placed on a green leaf on a white plate\"\n    },\n    {\n      \"name\": \"sambar\",\n      \"confidence\": \"high\",\n      \"visual_evidence\": \"brown, thick, liquid sauce in a small metal container, likely a lentil-based vegetable stew\"\n    },\n    {\n      \"name\": \"chutney\",\n      \"confidence\": \"high\",\n      \"visual_evidence\": \"white, creamy, thick sauce in a small metal container, likely a coconut-based condiment\"\n    }\n  ]\n}",
+      "error": null
     }
   ]
 }
