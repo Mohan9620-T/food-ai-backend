@@ -93,7 +93,7 @@ export class ChatInput {
     const existingMessage = this.message.trim();
     this.dictationPrefix = existingMessage ? `${existingMessage} ` : '';
     this.finalDictation = '';
-    this.speechService.error.set(null);
+    this.speechService.clearError();
     this.speechService.start(
       interim => this.updateDictatedMessage(this.finalDictation + interim),
       finalText => {
@@ -186,6 +186,10 @@ export class ChatInput {
     if (!userMessage && !this.selectedImage) {
       return;
     }
+
+    // Freeze the current transcript before clearing the composer. SpeechRecognition may
+    // otherwise deliver a queued result after Send and put the sent text back in the input.
+    if (this.isListening()) this.speechService.stop();
 
     const isEditing = this.editingMessage() !== null;
     const conversationId = isEditing

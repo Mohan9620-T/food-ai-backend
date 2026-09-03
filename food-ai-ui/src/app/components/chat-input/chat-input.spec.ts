@@ -25,6 +25,7 @@ class SpeechRecognitionServiceStub {
     this.isListening.set(true);
   });
   readonly stop = vi.fn(() => this.isListening.set(false));
+  readonly clearError = vi.fn(() => this.error.set(null));
   onInterim: (text: string) => void = () => undefined;
   onFinal: (text: string) => void = () => undefined;
 }
@@ -111,6 +112,32 @@ describe('ChatInput image drag and drop', () => {
     speechService.onFinal('hello ');
     speechService.onInterim('world');
     expect(component.message).toBe('Already typed hello world');
+  });
+
+  it('stops dictation before sending so late speech cannot restore the cleared composer', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub & {
+      getActiveConversationId: () => string;
+      addMessage: ReturnType<typeof vi.fn>;
+      getHistory: () => [];
+      getReferenceHistory: () => [];
+      startResponse: ReturnType<typeof vi.fn>;
+      streamMessage: () => Promise<void>;
+      getPendingResponse: () => null;
+    };
+    chatService.getActiveConversationId = () => 'conversation-1';
+    chatService.addMessage = vi.fn();
+    chatService.getHistory = () => [];
+    chatService.getReferenceHistory = () => [];
+    chatService.startResponse = vi.fn();
+    chatService.streamMessage = () => Promise.resolve();
+    chatService.getPendingResponse = () => null;
+
+    component.message = 'dictated message';
+    component.toggleDictation();
+    component.sendMessage();
+
+    expect(speechService.stop).toHaveBeenCalledOnce();
+    expect(component.message).toBe('');
   });
 
   it('attaches a valid image dropped from the file system', () => {

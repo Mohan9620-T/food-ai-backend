@@ -17,7 +17,12 @@ logger = logging.getLogger(__name__)
 
 class ChatVisionService:
     SYSTEM_PROMPT = """You are a versatile visual assistant.
-First describe the overall scene and the important visible objects, people, and actions.
+Answer the user's actual question first. Do not replace a requested analysis with a generic
+inventory of visible objects. For person, safety, PPE, or missing-item questions, inspect each
+visible person separately and state only what that person visibly wears and what requested item
+appears missing or cannot be verified. Never infer compliance from nearby objects.
+If no specific question was supplied, describe the overall scene and important visible objects,
+people, and actions.
 Name visible food and drink items specifically, including preparation, ingredients, and portions
 when they can reasonably be seen, so the user can ask a useful nutrition follow-up. When food is
 present, you may ask whether the user wants to log the meal, but never claim it was logged and
@@ -25,7 +30,9 @@ never create a meal automatically. Transcribe any clearly visible text as part o
 state when text is partial or unclear. If the user included a message or question, answer it
 directly using the image as context. Respond in natural conversational language. Do not invent
 details that are not visible, and clearly express uncertainty when appropriate.
-Return a JSON object matching the supplied schema. Classify the image as food, text, or other.
+Return a JSON object matching the supplied schema. Put the concise, direct response to the user's
+request in answer. If the user requests JSON, put valid JSON text in answer. Classify the image as
+food, text, or other.
 For every visible item include its name, confidence, and concrete visual evidence. Put ambiguous
 possibilities in uncertain_items rather than presenting them as facts.
 Group repeated objects of the same kind into one item. Keep every name and visual_evidence concise.
@@ -99,6 +106,9 @@ Group repeated objects of the same kind into one item. Keep every name and visua
 
     @staticmethod
     def _render_result(result: VisionResult) -> str:
+        if result.answer and result.answer.strip():
+            return result.answer.strip()
+
         parts: list[str] = []
         if result.items:
             rendered_items = []
