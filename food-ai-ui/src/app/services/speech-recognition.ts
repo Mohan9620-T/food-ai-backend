@@ -1,4 +1,4 @@
-import { Injectable, signal, WritableSignal } from '@angular/core';
+import { inject, Injectable, NgZone, signal, WritableSignal } from '@angular/core';
 
 interface SpeechRecognitionAlternativeLike {
   transcript: string;
@@ -44,6 +44,7 @@ export class SpeechRecognitionService {
   readonly isListening: WritableSignal<boolean> = signal(false);
   readonly error: WritableSignal<string | null> = signal(null);
 
+  private readonly ngZone = SpeechRecognitionService.resolveNgZone();
   private readonly RecognitionConstructor?: SpeechRecognitionConstructorLike;
   private recognition: SpeechRecognitionLike | null = null;
 
@@ -69,25 +70,32 @@ export class SpeechRecognitionService {
     this.recognition = recognition;
     recognition.continuous = true;
     recognition.interimResults = true;
+    // Zone.js does not patch SpeechRecognition, so re-enter Angular's zone to schedule rendering.
     recognition.onresult = event => {
-      let interimTranscript = '';
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        const result = event.results[index];
-        const transcript = result[0]?.transcript ?? '';
-        if (result.isFinal) {
-          const finalTranscript = transcript.trim();
-          if (finalTranscript) onFinal(`${finalTranscript} `);
-        } else {
-          interimTranscript += transcript;
+      this.ngZone.run(() => {
+        let interimTranscript = '';
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          const result = event.results[index];
+          const transcript = result[0]?.transcript ?? '';
+          if (result.isFinal) {
+            const finalTranscript = transcript.trim();
+            if (finalTranscript) onFinal(`${finalTranscript} `);
+          } else {
+            interimTranscript += transcript;
+          }
         }
-      }
-      onInterim(interimTranscript);
+        onInterim(interimTranscript);
+      });
     };
     recognition.onerror = event => {
-      this.error.set(event.error);
-      this.reset(recognition);
+      this.ngZone.run(() => {
+        this.error.set(event.error);
+        this.reset(recognition);
+      });
     };
-    recognition.onend = () => this.reset(recognition);
+    recognition.onend = () => {
+      this.ngZone.run(() => this.reset(recognition));
+    };
 
     try {
       recognition.start();
@@ -108,5 +116,16 @@ export class SpeechRecognitionService {
     if (recognition && this.recognition !== recognition) return;
     this.isListening.set(false);
     this.recognition = null;
+  }
+
+  private static resolveNgZone(): NgZone {
+    try {
+      return inject(NgZone);
+    } catch {
+      // Preserve direct construction used by the service's isolated unit tests.
+      return {
+        run: <T>(callback: () => T): T => callback()
+      } as NgZone;
+    }
   }
 }
