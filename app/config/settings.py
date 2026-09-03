@@ -24,16 +24,16 @@ SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/chat")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
-OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m").strip() or "30m"
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "1h").strip() or "1h"
 OLLAMA_CHAT_THINK = os.getenv("OLLAMA_CHAT_THINK", "false").lower() == "true"
 OLLAMA_CHAT_MAX_TOKENS = int(os.getenv("OLLAMA_CHAT_MAX_TOKENS", "768"))
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen3-vl:4b")
-OLLAMA_VISION_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_VISION_TIMEOUT_SECONDS", "180"))
+OLLAMA_VISION_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_VISION_TIMEOUT_SECONDS", "660"))
 OLLAMA_CHAT_VISION_MODEL = os.getenv(
     "OLLAMA_CHAT_VISION_MODEL", "qwen3-vl:4b"
 ).strip()
 OLLAMA_CHAT_VISION_TIMEOUT_SECONDS = int(
-    os.getenv("OLLAMA_CHAT_VISION_TIMEOUT_SECONDS", "180")
+    os.getenv("OLLAMA_CHAT_VISION_TIMEOUT_SECONDS", "660")
 )
 USDA_API_KEY = os.getenv("USDA_API_KEY", "").strip()
 USDA_API_URL = os.getenv("USDA_API_URL", "https://api.nal.usda.gov/fdc/v1").rstrip("/")

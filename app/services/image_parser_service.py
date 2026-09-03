@@ -26,6 +26,7 @@ class ImageParserService:
 Return a JSON object matching the supplied schema. Set image_type to "food" only when food or
 drink is visible. For each visible food item provide its name, confidence, and concrete visual
 evidence. Put ambiguous possibilities in uncertain_items rather than presenting them as facts.
+Group repeated foods of the same kind into one item. Keep names and visual evidence concise.
 Do not include calories, nutrients, macros, health claims, commentary, or Markdown.
 Do not identify plates, cutlery, packaging, or non-food objects as food.
 If no food or drink can be identified, return an empty items array.
@@ -57,22 +58,36 @@ If no food or drink can be identified, return an empty items array.
                     json={
                         "model": settings.OLLAMA_VISION_MODEL,
                         "stream": False,
+                        "think": False,
                         "keep_alive": settings.OLLAMA_KEEP_ALIVE,
                         "format": VisionResult.model_json_schema(),
-                        "options": {"temperature": 0, "num_ctx": 8192},
+                        "options": {
+                            "temperature": 0,
+                            "num_ctx": 8192,
+                            "num_predict": 1024,
+                        },
                         "messages": messages,
                     },
                     timeout=settings.OLLAMA_VISION_TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()
+            except requests.Timeout as error:
+                logger.warning("meal.vision_model_timeout", extra={"attempt": attempt + 1})
+                raise VisionModelUnavailableError(
+                    "Vision analysis timed out after "
+                    f"{settings.OLLAMA_VISION_TIMEOUT_SECONDS} seconds. "
+                    "The model may still be finishing another request; please try again."
+                ) from error
             except requests.RequestException as error:
                 logger.warning("meal.vision_model_unavailable", extra={"attempt": attempt + 1})
                 raise VisionModelUnavailableError(
-                    "Vision model unavailable. Pull and start the configured Ollama vision model."
+                    "Vision model unavailable. Confirm Ollama is running and the configured "
+                    "vision model is installed."
                 ) from error
 
             try:
-                content = response.json()["message"]["content"]
+                message = response.json()["message"]
+                content = message.get("content") or message.get("thinking")
                 result = VisionResult.model_validate_json(content)
                 if result.image_type != "food" or not result.items:
                     raise ValueError("No food identified")

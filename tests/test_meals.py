@@ -392,7 +392,8 @@ def test_vision_model_unavailable_returns_clear_error(
 
     assert response.status_code == 503
     assert response.json()["detail"] == (
-        "Vision model unavailable. Pull and start the configured Ollama vision model."
+        "Vision model unavailable. Confirm Ollama is running and the configured "
+        "vision model is installed."
     )
     assert client.get("/meals/", headers=headers).json() == []
 
@@ -426,8 +427,13 @@ def test_image_parser_rejects_fields_outside_vision_schema(monkeypatch):
         attempts += 1
         assert kwargs["json"]["messages"][-1]["images"]
         assert kwargs["json"]["keep_alive"] == settings.OLLAMA_KEEP_ALIVE
+        assert kwargs["json"]["think"] is False
         assert kwargs["json"]["format"]["type"] == "object"
-        assert kwargs["json"]["options"] == {"temperature": 0, "num_ctx": 8192}
+        assert kwargs["json"]["options"] == {
+            "temperature": 0,
+            "num_ctx": 8192,
+            "num_predict": 1024,
+        }
         return next(responses)
 
     monkeypatch.setattr("requests.post", post)
@@ -439,3 +445,25 @@ def test_image_parser_rejects_fields_outside_vision_schema(monkeypatch):
         "quantity": 1.0,
         "unit": "serving",
     }
+
+
+def test_image_parser_accepts_validated_result_from_thinking_field(monkeypatch):
+    payload = json.dumps({
+        "image_type": "food",
+        "items": [{
+            "name": "steamed rice cakes",
+            "confidence": "high",
+            "visual_evidence": "round white steamed cakes",
+        }],
+        "uncertain_items": [],
+    })
+    monkeypatch.setattr(
+        "requests.post",
+        lambda url, **kwargs: FakeResponse({
+            "message": {"content": "", "thinking": payload}
+        }),
+    )
+
+    parsed = ImageParserService().parse(b"image")
+
+    assert parsed[0].food_name == "idli"

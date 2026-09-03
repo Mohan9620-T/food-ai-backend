@@ -27,6 +27,7 @@ details that are not visible, and clearly express uncertainty when appropriate.
 Return a JSON object matching the supplied schema. Classify the image as food, text, or other.
 For every visible item include its name, confidence, and concrete visual evidence. Put ambiguous
 possibilities in uncertain_items rather than presenting them as facts.
+Group repeated objects of the same kind into one item. Keep every name and visual_evidence concise.
 """
     EMPTY_RESPONSE_MESSAGE = (
         "I couldn't produce a description for this image. Please try again with a clearer image."
@@ -49,9 +50,14 @@ possibilities in uncertain_items rather than presenting them as facts.
                     json={
                         "model": settings.OLLAMA_CHAT_VISION_MODEL,
                         "stream": False,
+                        "think": False,
                         "keep_alive": settings.OLLAMA_KEEP_ALIVE,
                         "format": VisionResult.model_json_schema(),
-                        "options": {"temperature": 0, "num_ctx": 8192},
+                        "options": {
+                            "temperature": 0,
+                            "num_ctx": 8192,
+                            "num_predict": 1024,
+                        },
                         "messages": [
                             {"role": "system", "content": self.SYSTEM_PROMPT},
                             {
@@ -64,16 +70,24 @@ possibilities in uncertain_items rather than presenting them as facts.
                     timeout=settings.OLLAMA_CHAT_VISION_TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()
+        except requests.Timeout as error:
+            logger.warning("chat.vision_model_timeout")
+            raise VisionModelUnavailableError(
+                "Chat vision analysis timed out after "
+                f"{settings.OLLAMA_CHAT_VISION_TIMEOUT_SECONDS} seconds. "
+                "The model may still be finishing another request; please try again."
+            ) from error
         except requests.RequestException as error:
             logger.warning("chat.vision_model_unavailable")
             raise VisionModelUnavailableError(
                 "Chat vision model unavailable: configured model "
                 f"'{settings.OLLAMA_CHAT_VISION_MODEL}'. "
-                "Pull it in Ollama and try again."
+                "Confirm Ollama is running and the model is installed."
             ) from error
 
         try:
-            content = response.json()["message"]["content"]
+            message = response.json()["message"]
+            content = message.get("content") or message.get("thinking")
             result = VisionResult.model_validate_json(content)
         except (KeyError, TypeError, ValueError, ValidationError):
             logger.warning("chat.vision_response_invalid")
@@ -95,7 +109,15 @@ possibilities in uncertain_items rather than presenting them as facts.
                 )
             parts.append("I can see " + "; ".join(rendered_items) + ".")
         else:
-            parts.append(f"This appears to be a {result.image_type} image, but I cannot identify a specific item confidently.")
+            image_kind = (
+                "an image of another type"
+                if result.image_type == "other"
+                else f"a {result.image_type} image"
+            )
+            parts.append(
+                f"This appears to be {image_kind}, but I cannot identify "
+                "a specific item confidently."
+            )
         if result.uncertain_items:
             parts.append("I'm uncertain about: " + ", ".join(result.uncertain_items) + ".")
         return " ".join(parts)

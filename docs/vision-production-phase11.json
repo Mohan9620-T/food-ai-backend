@@ -1,0 +1,29 @@
+{
+  "model": "qwen3-vl:4b",
+  "pipeline": "ChatVisionService structured VisionResult",
+  "timeout_seconds": 660,
+  "results": [
+    {
+      "sample": "generated-red-png",
+      "elapsed_seconds": 65.411,
+      "response": "I can see solid red background (The entire image consists of a uniform red color with no variations, objects, or text present.).",
+      "error": null
+    },
+    {
+      "sample": "persisted-image-1",
+      "elapsed_seconds": 46.313,
+      "raw_response": "",
+      "raw_thinking": "{\n  \"image_type\": \"food\",\n  \"items\": [\n    {\n      \"name\": \"idli\",\n      \"confidence\": \"high\",\n      \"visual_evidence\": \"Six round, white, steamed rice cakes arranged on a green banana leaf. They have a smooth, slightly porous texture and are typical of South Indian idli.\"\n    },\n    {\n      \"name\": \"sambar\",\n      \"confidence\": \"medium\",\n      \"visual_evidence\": \"A portion of orange-brown, thick, cooked lentil-based stew with visible dark lentils and a slightly textured surface. It is placed on the banana leaf near the idli.\"\n    },\n    {\n      \"name\": \"tamarind chutney\",\n      \"confidence\": \"medium\",\n      \"visual_evidence\": \"A small mound of light brown, coarse, paste-like condiment with a slightly gritty texture. It appears to be served on a small piece of banana leaf or similar base.\"\n    }\n  ],\n  \"uncertain_items\": [\n    \"The banana leaf is used as a serving platter, but the specific type of leaf is not identifiable beyond being green and broad.\"\n  ]\n}",
+      "response": "I can see idli (Six round, white, steamed rice cakes arranged on a green banana leaf. They have a smooth, slightly porous texture and are typical of South Indian idli.); likely sambar (A portion of orange-brown, thick, cooked lentil-based stew with visible dark lentils and a slightly textured surface. It is placed on the banana leaf near the idli.); likely tamarind chutney (A small mound of light brown, coarse, paste-like condiment with a slightly gritty texture. It appears to be served on a small piece of banana leaf or similar base.). I'm uncertain about: The banana leaf is used as a serving platter, but the specific type of leaf is not identifiable beyond being green and broad..",
+      "error": null
+    },
+    {
+      "sample": "persisted-image-2",
+      "elapsed_seconds": 660.5,
+      "raw_response": null,
+      "raw_thinking": null,
+      "response": null,
+      "error": "VisionModelUnavailableError: Chat vision analysis timed out after 660 seconds. The model may still be finishing another request; please try again."
+    }
+  ]
+}

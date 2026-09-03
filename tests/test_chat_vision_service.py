@@ -50,12 +50,17 @@ def test_describe_returns_natural_language_image_description(monkeypatch):
     assert captured["url"] == settings.OLLAMA_URL
     assert captured["json"]["model"] == settings.OLLAMA_CHAT_VISION_MODEL
     assert captured["json"]["keep_alive"] == settings.OLLAMA_KEEP_ALIVE
+    assert captured["json"]["think"] is False
     assert captured["timeout"] == settings.OLLAMA_CHAT_VISION_TIMEOUT_SECONDS
     user = captured["json"]["messages"][-1]
     assert user["content"] == "Please describe this image."
     assert user["images"] == [base64.b64encode(b"image-bytes").decode("ascii")]
     assert captured["json"]["format"]["type"] == "object"
-    assert captured["json"]["options"] == {"temperature": 0, "num_ctx": 8192}
+    assert captured["json"]["options"] == {
+        "temperature": 0,
+        "num_ctx": 8192,
+        "num_predict": 1024,
+    }
 
 
 def test_describe_passes_accompanying_user_question(monkeypatch):
@@ -80,12 +85,21 @@ def test_describe_passes_accompanying_user_question(monkeypatch):
     assert "Transcribe any clearly visible text" in captured["body"]["messages"][0]["content"]
 
 
-def test_describe_raises_clear_error_when_vision_model_is_unavailable(monkeypatch):
+def test_describe_raises_clear_error_when_vision_model_times_out(monkeypatch):
     def unavailable(url, **kwargs):
         raise requests.Timeout("CPU inference timed out")
 
     monkeypatch.setattr("requests.post", unavailable)
-    with pytest.raises(VisionModelUnavailableError, match="Chat vision model unavailable"):
+    with pytest.raises(VisionModelUnavailableError, match="analysis timed out after"):
+        ChatVisionService().describe(b"image", None)
+
+
+def test_describe_raises_clear_error_when_ollama_is_unavailable(monkeypatch):
+    def unavailable(url, **kwargs):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr("requests.post", unavailable)
+    with pytest.raises(VisionModelUnavailableError, match="Confirm Ollama is running"):
         ChatVisionService().describe(b"image", None)
 
 
@@ -99,16 +113,45 @@ def test_describe_returns_clear_fallback_for_empty_model_response(monkeypatch):
     )
 
 
+def test_describe_uses_correct_article_for_other_image(monkeypatch):
+    monkeypatch.setattr(
+        "requests.post",
+        lambda url, **kwargs: FakeResponse({
+            "message": {"content": vision_content(image_type="other")}
+        }),
+    )
+
+    assert ChatVisionService().describe(b"image", None).startswith(
+        "This appears to be an image of another type"
+    )
+
+
 def test_describe_returns_clear_fallback_for_malformed_structured_response(monkeypatch):
     monkeypatch.setattr(
         "requests.post",
         lambda url, **kwargs: FakeResponse({"message": {"content": "not-json"}}),
     )
-
     assert ChatVisionService().describe(b"image", None) == (
         ChatVisionService.EMPTY_RESPONSE_MESSAGE
     )
 
+
+def test_describe_accepts_validated_structured_result_from_thinking_field(monkeypatch):
+    monkeypatch.setattr(
+        "requests.post",
+        lambda url, **kwargs: FakeResponse({"message": {
+            "content": "",
+            "thinking": vision_content(items=[{
+                "name": "idli",
+                "confidence": "high",
+                "visual_evidence": "round white steamed cakes",
+            }]),
+        }}),
+    )
+
+    assert ChatVisionService().describe(b"image", None) == (
+        "I can see idli (round white steamed cakes)."
+    )
 
 def test_describe_includes_model_uncertainty_in_user_response(monkeypatch):
     monkeypatch.setattr(

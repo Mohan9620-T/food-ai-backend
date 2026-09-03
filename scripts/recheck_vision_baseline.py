@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from PIL import Image
+import requests
 
 
 REPO_ROOT = Path(__file__).parents[1]
@@ -19,7 +20,7 @@ from app.models.chat import ChatMessageRecord  # noqa: E402
 from app.services.chat_vision_service import ChatVisionService  # noqa: E402
 
 
-RESULTS_PATH = REPO_ROOT / "docs" / "vision-baseline-qwen3-vl-4b-structured.json"
+DEFAULT_RESULTS_PATH = REPO_ROOT / "docs" / "vision-baseline-qwen3-vl-4b-structured.json"
 SAMPLE_NAMES = ("persisted-image-1", "persisted-image-2", "generated-red-png")
 
 
@@ -52,25 +53,26 @@ def red_png() -> bytes:
     return buffer.getvalue()
 
 
-def load_results() -> list[dict]:
-    if not RESULTS_PATH.exists():
+def load_results(results_path: Path) -> list[dict]:
+    if not results_path.exists():
         return []
-    return json.loads(RESULTS_PATH.read_text(encoding="utf-8"))["results"]
+    return json.loads(results_path.read_text(encoding="utf-8"))["results"]
 
 
-def save_results(results: list[dict]) -> None:
+def save_results(results_path: Path, results: list[dict]) -> None:
     payload = {
         "model": settings.OLLAMA_CHAT_VISION_MODEL,
         "pipeline": "ChatVisionService structured VisionResult",
         "timeout_seconds": settings.OLLAMA_CHAT_VISION_TIMEOUT_SECONDS,
         "results": results,
     }
-    RESULTS_PATH.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    results_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sample", required=True, choices=SAMPLE_NAMES)
+    parser.add_argument("--results-path", type=Path, default=DEFAULT_RESULTS_PATH)
     args = parser.parse_args()
 
     images = persisted_images()
@@ -79,21 +81,41 @@ def main() -> None:
         "persisted-image-2": images[1],
         "generated-red-png": red_png(),
     }
-    results = [entry for entry in load_results() if entry["sample"] != args.sample]
+    results = [
+        entry for entry in load_results(args.results_path)
+        if entry["sample"] != args.sample
+    ]
     record = {
         "sample": args.sample,
         "elapsed_seconds": None,
+        "raw_response": None,
+        "raw_thinking": None,
         "response": None,
         "error": None,
     }
+    original_post = requests.post
+
+    def capture_post(*post_args, **post_kwargs):
+        response = original_post(*post_args, **post_kwargs)
+        try:
+            message = response.json()["message"]
+            record["raw_response"] = message.get("content")
+            record["raw_thinking"] = message.get("thinking")
+        except (KeyError, TypeError, ValueError):
+            pass
+        return response
+
+    requests.post = capture_post
     started = time.perf_counter()
     try:
         record["response"] = ChatVisionService().describe(samples[args.sample], None)
     except Exception as error:
         record["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        requests.post = original_post
     record["elapsed_seconds"] = round(time.perf_counter() - started, 3)
     results.append(record)
-    save_results(results)
+    save_results(args.results_path, results)
     print(json.dumps(record, indent=2), flush=True)
 
 

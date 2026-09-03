@@ -88,13 +88,13 @@ use the documented default or disable the associated integration when empty.
 | `OLLAMA_URL` | Optional | Ollama chat endpoint; host-run default `http://localhost:11434/api/chat` (Compose overrides it). |
 | `OLLAMA_MODEL` | Optional | Text-chat model; default `qwen3:8b`. |
 | `OLLAMA_TIMEOUT_SECONDS` | Optional | Text-model request timeout; default `300`. |
-| `OLLAMA_KEEP_ALIVE` | Optional | How long Ollama keeps a loaded model resident; default `30m`. |
+| `OLLAMA_KEEP_ALIVE` | Optional | How long Ollama keeps a loaded model resident; default `1h`. |
 | `OLLAMA_CHAT_THINK` | Optional | Enables Qwen reasoning mode; default `false` for faster chat. |
 | `OLLAMA_CHAT_MAX_TOKENS` | Optional | Maximum generated text-chat tokens; default `768`. |
 | `OLLAMA_VISION_MODEL` | Optional | Meal-image vision model; default `qwen3-vl:4b`. |
-| `OLLAMA_VISION_TIMEOUT_SECONDS` | Optional | Meal-image request timeout; default `180`. |
+| `OLLAMA_VISION_TIMEOUT_SECONDS` | Optional | Meal-image request timeout; default `660`. |
 | `OLLAMA_CHAT_VISION_MODEL` | Optional | General image-chat model; default `qwen3-vl:4b`. |
-| `OLLAMA_CHAT_VISION_TIMEOUT_SECONDS` | Optional | General image-chat timeout; default `180`. |
+| `OLLAMA_CHAT_VISION_TIMEOUT_SECONDS` | Optional | General image-chat timeout; default `660`. |
 | `USDA_API_KEY` | Optional | USDA FoodData Central key; nutrition matches are unavailable when empty. |
 | `USDA_API_URL` | Optional | USDA API base URL; default `https://api.nal.usda.gov/fdc/v1`. |
 | `USDA_TIMEOUT_SECONDS` | Optional | USDA request timeout; default `15`. |
@@ -229,10 +229,15 @@ The timeout/residency settings are important on CPU hosts, especially after an O
 full-stack restart, when the first request for each model is guaranteed to load that model
 from disk into RAM:
 
-- `OLLAMA_KEEP_ALIVE=30m` keeps a recently used model resident between requests.
+- `OLLAMA_KEEP_ALIVE=1h` keeps a recently used model resident between requests.
 - `OLLAMA_TIMEOUT_SECONDS=300` covers cold text-model loads and inference.
-- `OLLAMA_CHAT_VISION_TIMEOUT_SECONDS=180` covers general image-chat cold starts.
-- `OLLAMA_VISION_TIMEOUT_SECONDS=180` covers meal-photo cold starts.
+- `OLLAMA_CHAT_VISION_TIMEOUT_SECONDS=660` bounds slow image-chat requests at 11 minutes.
+- `OLLAMA_VISION_TIMEOUT_SECONDS=660` applies the same bound to meal-photo requests.
+
+Structured vision generation disables model thinking and is capped at 1024 tokens. Qwen3-VL may
+return schema-conforming output in Ollama's `thinking` field with an empty `content` field; the
+backend validates either field against `VisionResult` before rendering it. Very large images may
+still exceed the timeout on CPU-only hosts and return a retryable 503 response.
 
 Start PostgreSQL and Ollama first, pull the configured models once into the persistent
 volume, and then start the full stack:

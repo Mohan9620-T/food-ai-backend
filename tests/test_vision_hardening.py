@@ -68,7 +68,7 @@ def test_meal_vision_timeout_is_bounded_and_graceful(monkeypatch):
 
     monkeypatch.setattr("requests.post", timeout)
 
-    with pytest.raises(VisionModelUnavailableError, match="Vision model unavailable"):
+    with pytest.raises(VisionModelUnavailableError, match="analysis timed out after"):
         ImageParserService().parse(b"image")
 
     assert observed_timeout == settings.OLLAMA_VISION_TIMEOUT_SECONDS
