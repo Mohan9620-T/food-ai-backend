@@ -6,6 +6,7 @@ import { vi } from 'vitest';
 import { ChatInput } from './chat-input';
 import { ChatService } from '../../services/chat';
 import { AuthService } from '../../services/auth';
+import { SpeechRecognitionService } from '../../services/speech-recognition';
 
 class ChatServiceStub {
   readonly isResponding = signal(false);
@@ -14,9 +15,24 @@ class ChatServiceStub {
   readonly retryMessage = signal<null>(null);
 }
 
+class SpeechRecognitionServiceStub {
+  isSupported = true;
+  readonly isListening = signal(false);
+  readonly error = signal<string | null>(null);
+  readonly start = vi.fn((onInterim: (text: string) => void, onFinal: (text: string) => void) => {
+    this.onInterim = onInterim;
+    this.onFinal = onFinal;
+    this.isListening.set(true);
+  });
+  readonly stop = vi.fn(() => this.isListening.set(false));
+  onInterim: (text: string) => void = () => undefined;
+  onFinal: (text: string) => void = () => undefined;
+}
+
 describe('ChatInput image drag and drop', () => {
   let fixture: ComponentFixture<ChatInput>;
   let component: ChatInput;
+  let speechService: SpeechRecognitionServiceStub;
 
   beforeEach(async () => {
     Object.defineProperty(URL, 'createObjectURL', {
@@ -33,12 +49,14 @@ describe('ChatInput image drag and drop', () => {
       providers: [
         { provide: ChatService, useClass: ChatServiceStub },
         { provide: AuthService, useValue: { getToken: () => 'token' } },
+        { provide: SpeechRecognitionService, useClass: SpeechRecognitionServiceStub },
         { provide: Router, useValue: { navigate: vi.fn() } }
       ]
     }).compileComponents();
 
     fixture = TestBed.createComponent(ChatInput);
     component = fixture.componentInstance;
+    speechService = TestBed.inject(SpeechRecognitionService) as unknown as SpeechRecognitionServiceStub;
     fixture.detectChanges();
   });
 
@@ -52,6 +70,45 @@ describe('ChatInput image drag and drop', () => {
   it('renders the message composer and attachment control', () => {
     expect(fixture.nativeElement.querySelector('textarea[aria-label="Message"]')).toBeTruthy();
     expect(fixture.nativeElement.querySelector('button[aria-label="Attach image"]')).toBeTruthy();
+  });
+
+  it('renders the mic only when speech recognition is supported', () => {
+    expect(fixture.nativeElement.querySelector('button[aria-label="Start voice input"]')).toBeTruthy();
+
+    (component as unknown as { speechSupported: boolean }).speechSupported = false;
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.mic-button')).toBeNull();
+  });
+
+  it('starts and stops dictation from the mic control', () => {
+    let micButton = fixture.nativeElement.querySelector('.mic-button') as HTMLButtonElement;
+    expect(micButton.getAttribute('aria-label')).toBe('Start voice input');
+    expect(micButton.getAttribute('aria-pressed')).toBe('false');
+
+    component.toggleDictation();
+    fixture.detectChanges();
+    expect(speechService.start).toHaveBeenCalledOnce();
+    expect(component.isListening()).toBe(true);
+    micButton = fixture.nativeElement.querySelector('.mic-button') as HTMLButtonElement;
+    expect(micButton.getAttribute('aria-label')).toBe('Stop voice input');
+    expect(micButton.getAttribute('aria-pressed')).toBe('true');
+
+    component.toggleDictation();
+    expect(speechService.stop).toHaveBeenCalledOnce();
+    expect(component.isListening()).toBe(false);
+  });
+
+  it('appends interim and final speech after existing typed text', () => {
+    component.message = 'Already typed';
+    component.toggleDictation();
+
+    speechService.onInterim('hello');
+    expect(component.message).toBe('Already typed hello');
+
+    speechService.onFinal('hello ');
+    speechService.onInterim('world');
+    expect(component.message).toBe('Already typed hello world');
   });
 
   it('attaches a valid image dropped from the file system', () => {

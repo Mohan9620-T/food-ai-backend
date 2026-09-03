@@ -6,6 +6,7 @@ import { ChatService } from '../../services/chat';
 import { AuthService } from '../../services/auth';
 import { ChatRequest } from '../../models/chat';
 import { Subscription } from 'rxjs';
+import { SpeechRecognitionService } from '../../services/speech-recognition';
 
 @Component({
   selector: 'app-chat-input',
@@ -21,6 +22,9 @@ export class ChatInput {
   readonly isSending = this.chatService.isResponding;
   readonly editingMessage = this.chatService.editingMessage;
   readonly analyzingImage = this.chatService.analyzingImage;
+  private readonly speechService = inject(SpeechRecognitionService);
+  readonly speechSupported = this.speechService.isSupported;
+  readonly isListening = this.speechService.isListening;
   private readonly authService = inject(AuthService);
   private readonly router = inject(Router);
   selectedImage: File | null = null;
@@ -29,6 +33,8 @@ export class ChatInput {
   isDraggingImage = false;
   private dragDepth = 0;
   private visionSubscription: Subscription | null = null;
+  private dictationPrefix = '';
+  private finalDictation = '';
 
   constructor() {
     afterNextRender(() => this.messageInput()?.nativeElement.focus());
@@ -52,6 +58,7 @@ export class ChatInput {
     });
     this.destroyRef.onDestroy(() => {
       this.visionSubscription?.unsubscribe();
+      this.speechService.stop();
       if (this.imagePreviewUrl) URL.revokeObjectURL(this.imagePreviewUrl);
     });
   }
@@ -62,6 +69,37 @@ export class ChatInput {
     input.value = '';
     if (!file) return;
     this.attachImage(file);
+  }
+
+  get speechError(): string | null {
+    const error = this.speechService.error();
+    if (!error) return null;
+    if (error === 'not-allowed' || error === 'service-not-allowed') {
+      return 'Microphone access was denied.';
+    }
+    if (error === 'no-speech') return 'No speech detected. Try again.';
+    if (error === 'not-supported') return 'Voice input is not supported in this browser.';
+    return 'Voice input failed. Please try again.';
+  }
+
+  toggleDictation(): void {
+    if (this.isListening()) {
+      this.speechService.stop();
+      return;
+    }
+    if (this.isSending()) return;
+
+    const existingMessage = this.message.trim();
+    this.dictationPrefix = existingMessage ? `${existingMessage} ` : '';
+    this.finalDictation = '';
+    this.speechService.error.set(null);
+    this.speechService.start(
+      interim => this.updateDictatedMessage(this.finalDictation + interim),
+      finalText => {
+        this.finalDictation += finalText;
+        this.updateDictatedMessage(this.finalDictation);
+      }
+    );
   }
 
   @HostListener('document:dragenter', ['$event'])
@@ -249,5 +287,16 @@ export class ChatInput {
   private resizeTextarea(textarea: HTMLTextAreaElement): void {
     textarea.style.height = 'auto';
     textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
+  }
+
+  private updateDictatedMessage(dictatedText: string): void {
+    this.message = this.dictationPrefix + dictatedText;
+    queueMicrotask(() => {
+      const textarea = this.messageInput()?.nativeElement;
+      if (!textarea) return;
+      this.resizeTextarea(textarea);
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
   }
 }

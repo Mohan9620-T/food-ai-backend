@@ -8,9 +8,24 @@
     <div class="image-preview"><img [src]="imagePreviewUrl" alt="Selected image preview" /><div><strong>{{ selectedImage?.name }}</strong><small>Ready to analyze</small></div><button type="button" class="remove-image" (click)="removeImage()" aria-label="Remove attached image">&times;</button></div>
   }
   @if (imageError) { <div class="image-error" role="alert">{{ imageError }}</div> }
+  @if (isListening()) { <div class="listening-status" role="status" aria-live="polite">Listening&hellip;</div> }
+  @if (speechError) { <div class="image-error speech-error" role="alert">{{ speechError }}</div> }
 <div class="chat-input">
   <input #imagePicker class="file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" (change)="selectImage($event)" />
   <button type="button" class="attach-button" (click)="imagePicker.click()" [disabled]="isSending()" aria-label="Attach image" title="Attach image"><span aria-hidden="true">&#128206;</span></button>
+  @if (speechSupported) {
+    <button
+      type="button"
+      class="mic-button"
+      [class.listening]="isListening()"
+      (click)="toggleDictation()"
+      [disabled]="isSending()"
+      [attr.aria-label]="isListening() ? 'Stop voice input' : 'Start voice input'"
+      [attr.aria-pressed]="isListening()"
+      [title]="isListening() ? 'Stop voice input' : 'Start voice input'">
+      <span aria-hidden="true">&#127908;</span>
+    </button>
+  }
   <textarea
     #messageInput
     rows="1"
