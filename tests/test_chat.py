@@ -482,7 +482,7 @@ def test_chat_service_uses_request_message_when_history_is_stale(monkeypatch):
             pass
 
         def json(self):
-            return {"message": {"content": "Sari, purinjathu."}}
+            return {"message": {"content": "Sure, I understand."}}
 
     def fake_post(url, json, timeout):
         captured["body"] = json
@@ -492,7 +492,7 @@ def test_chat_service_uses_request_message_when_history_is_stale(monkeypatch):
 
     answer = ChatService().chat("enakku menu kaatu", [], [])
 
-    assert answer == "Sari, purinjathu."
+    assert answer == "Sure, I understand."
     assert captured["body"]["messages"][-1] == {
         "role": "user",
         "content": "enakku menu kaatu",
@@ -663,6 +663,43 @@ def test_latest_language_instruction_follows_old_tanglish_history(monkeypatch):
         "role": "user",
         "content": "Which character has the best development?",
     }
+    assert not any(
+        item.get("content") == "Sari, anime pathi solren" for item in messages
+    )
+
+
+def test_english_response_written_in_tanglish_is_rewritten(monkeypatch):
+    captured_bodies = []
+
+    class FakeResponse:
+        def __init__(self, content):
+            self.content = content
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": self.content}}
+
+    responses = iter([
+        FakeResponse("Aama, kandippa! Enna help venum nu sollunga."),
+        FakeResponse("Certainly! How can I help you?"),
+    ])
+
+    def fake_post(url, json, timeout):
+        captured_bodies.append(json.copy())
+        return next(responses)
+
+    monkeypatch.setattr("app.services.chat_service.requests.post", fake_post)
+
+    answer = ChatService().chat("How can you help me?", [], [])
+
+    assert answer == "Certainly! How can I help you?"
+    assert len(captured_bodies) == 2
+    assert "only in English" in captured_bodies[1]["messages"][-1]["content"]
+    assert "transliterated non-English words" in (
+        captured_bodies[1]["messages"][-1]["content"]
+    )
 
 
 def test_tanglish_response_in_tamil_script_is_rewritten(monkeypatch):

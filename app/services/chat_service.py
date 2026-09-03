@@ -20,8 +20,9 @@ class ChatService:
     TAMIL_LATIN_WORDS = {
         "aama", "athu", "enna", "enakku", "enga", "epdi", "eppadi", "irukku",
         "iruken", "kaatu", "kooda", "la", "na", "nalla", "pannu", "pesu",
-        "puriyala", "sollu", "sapadu", "seri", "tanglish", "thanglish", "ungal",
-        "vanakam", "vanakkam", "vannakam", "venum", "yen", "yenna", "kissa"
+        "kandippa", "pathi", "pesalaam", "puriyala", "sapadu", "sari", "seri",
+        "sollu", "sollunga", "solren", "tanglish", "thanglish", "ungal", "vanakam",
+        "vanakkam", "vannakam", "venum", "yen", "yenna", "kissa"
     }
     HINDI_LATIN_WORDS = {
         "aap", "accha", "acha", "aur", "batao", "hai", "hain", "kaise", "kya",
@@ -172,7 +173,9 @@ Content-versus-format rules:
         return cls.requested_language(message) or language
 
     @classmethod
-    def response_uses_wrong_script(cls, response: str, language: str) -> bool:
+    def response_uses_wrong_language(cls, response: str, language: str) -> bool:
+        if language == "English":
+            return cls.detect_language(response) != "English"
         if language == "Tanglish (Tamil written in Latin letters)":
             return cls.TAMIL_SCRIPT_PATTERN.search(response) is not None
         if language == "Hinglish (Hindi written in Latin letters)":
@@ -221,17 +224,21 @@ Content-versus-format rules:
 
         # Smaller local models can acknowledge the requested transliteration but still
         # answer in the native script. Give them one focused correction opportunity.
-        if self.response_uses_wrong_script(answer, response_language):
+        if self.response_uses_wrong_language(answer, response_language):
+            rewrite_instruction = (
+                "Rewrite the previous answer only in English. Do not use Tamil, Hindi, "
+                "Tanglish, Hinglish, or transliterated non-English words. Preserve the "
+                "meaning and answer directly."
+                if response_language == "English"
+                else (
+                    f"Rewrite the previous answer only in {response_language}. "
+                    "Use Latin/English letters for every word. Do not use Tamil or "
+                    "Devanagari characters. Preserve the meaning and answer directly."
+                )
+            )
             body["messages"].extend([
                 {"role": "assistant", "content": answer},
-                {
-                    "role": "system",
-                    "content": (
-                        f"Rewrite the previous answer only in {response_language}. "
-                        "Use Latin/English letters for every word. Do not use Tamil or "
-                        "Devanagari characters. Preserve the meaning and answer directly."
-                    ),
-                },
+                {"role": "system", "content": rewrite_instruction},
             ])
             try:
                 response = requests.post(
@@ -313,21 +320,32 @@ Content-versus-format rules:
                     "unrelated or inaccurate. Do not use claims from assistant messages as facts."
                 ),
             })
-            messages.extend(item.model_dump() for item in reference_history[-8:])
+            messages.extend(
+                item.model_dump()
+                for item in reference_history[-8:]
+                if item.role == "user"
+                or not self.response_uses_wrong_language(item.content, response_language)
+            )
 
         # Keep the latest request separate so its language rule is adjacent to it and
         # cannot be overridden by the style of an earlier assistant response.
         previous_history = history[-12:]
         if previous_history and previous_history[-1].role == "user" and previous_history[-1].content == message:
             previous_history = previous_history[:-1]
-        messages.extend(item.model_dump() for item in previous_history)
+        messages.extend(
+            item.model_dump()
+            for item in previous_history
+            if item.role == "user"
+            or not self.response_uses_wrong_language(item.content, response_language)
+        )
 
         messages.append({
             "role": "system",
             "content": (
                 f"MANDATORY FOR THE NEXT ANSWER: respond only in {response_language}. "
                 "Do not mix in another language, apart from unavoidable names or technical terms. "
-                "The language of older messages must not affect this choice. "
+                "The language of older messages must not affect this choice. Never imitate the "
+                "language of an older assistant response. "
                 "Use no timestamp, category, priority, issue number, or other metadata unless "
                 "the current source content explicitly contains that exact value. Never copy "
                 "metadata or facts from an example or an older issue. Do not invent missing fields."
