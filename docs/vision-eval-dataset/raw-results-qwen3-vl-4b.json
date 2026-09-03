@@ -1,0 +1,42 @@
+{
+  "model": "qwen3-vl:4b",
+  "temperature": 0,
+  "num_ctx": 8192,
+  "results": [
+    {
+      "id": "indian-007",
+      "timeout_seconds": 900,
+      "elapsed_seconds": null,
+      "response": null,
+      "error": "ReadTimeout: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=900)"
+    },
+    {
+      "id": "indian-010",
+      "timeout_seconds": 180,
+      "elapsed_seconds": null,
+      "response": null,
+      "error": "ReadTimeout: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)"
+    },
+    {
+      "id": "indian-012",
+      "timeout_seconds": 180,
+      "elapsed_seconds": 180.016,
+      "response": null,
+      "error": "ReadTimeout: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)"
+    },
+    {
+      "id": "indian-015",
+      "timeout_seconds": 180,
+      "elapsed_seconds": 180.013,
+      "response": null,
+      "error": "ReadTimeout: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)"
+    },
+    {
+      "id": "indian-013",
+      "timeout_seconds": 180,
+      "elapsed_seconds": 180.035,
+      "response": null,
+      "error": "ReadTimeout: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)"
+    }
+  ]
+}
