@@ -105,6 +105,8 @@ describe('ChatInput image drag and drop', () => {
 
     speechService.onInterim('hello');
     expect(component.message).toBe('Already typed hello');
+    expect((fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement).value)
+      .toBe('Already typed hello');
 
     speechService.onFinal('hello ');
     speechService.onInterim('world');

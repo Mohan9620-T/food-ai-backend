@@ -1,4 +1,4 @@
-import { afterNextRender, Component, DestroyRef, effect, ElementRef, HostListener, inject, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectorRef, Component, DestroyRef, effect, ElementRef, HostListener, inject, viewChild } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -18,6 +18,7 @@ export class ChatInput {
   message = '';
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
   private readonly destroyRef = inject(DestroyRef);
+  private readonly changeDetectorRef = inject(ChangeDetectorRef);
   private readonly chatService = inject(ChatService);
   readonly isSending = this.chatService.isResponding;
   readonly editingMessage = this.chatService.editingMessage;
@@ -291,12 +292,15 @@ export class ChatInput {
 
   private updateDictatedMessage(dictatedText: string): void {
     this.message = this.dictationPrefix + dictatedText;
-    queueMicrotask(() => {
-      const textarea = this.messageInput()?.nativeElement;
-      if (!textarea) return;
+    // SpeechRecognition callbacks are not browser events known to Angular.
+    // Render each interim transcript immediately while the user is speaking.
+    const textarea = this.messageInput()?.nativeElement;
+    if (textarea) {
+      textarea.value = this.message;
       this.resizeTextarea(textarea);
       textarea.focus();
       textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-    });
+    }
+    this.changeDetectorRef.detectChanges();
   }
 }

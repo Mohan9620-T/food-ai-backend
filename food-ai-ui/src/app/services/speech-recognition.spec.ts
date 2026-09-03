@@ -87,4 +87,21 @@ describe('SpeechRecognitionService', () => {
     expect(service.error()).toBe('not-allowed');
     expect(service.isListening()).toBe(false);
   });
+
+  it('does not emit the same finalized result twice', () => {
+    setRecognitionConstructor(MockSpeechRecognition);
+    const service = new SpeechRecognitionService();
+    const onFinal = vi.fn();
+    service.start(vi.fn(), onFinal);
+    const event = {
+      resultIndex: 0,
+      results: [Object.assign([{ transcript: 'Are you?' }], { isFinal: true })]
+    };
+
+    instance!.onresult!(event);
+    instance!.onresult!(event);
+
+    expect(onFinal).toHaveBeenCalledOnce();
+    expect(onFinal).toHaveBeenCalledWith('Are you? ');
+  });
 });

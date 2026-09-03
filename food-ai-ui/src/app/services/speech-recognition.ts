@@ -70,6 +70,7 @@ export class SpeechRecognitionService {
     this.recognition = recognition;
     recognition.continuous = true;
     recognition.interimResults = true;
+    const finalizedResultIndexes = new Set<number>();
     // Zone.js does not patch SpeechRecognition, so re-enter Angular's zone to schedule rendering.
     recognition.onresult = event => {
       this.ngZone.run(() => {
@@ -79,7 +80,10 @@ export class SpeechRecognitionService {
           const transcript = result[0]?.transcript ?? '';
           if (result.isFinal) {
             const finalTranscript = transcript.trim();
-            if (finalTranscript) onFinal(`${finalTranscript} `);
+            if (finalTranscript && !finalizedResultIndexes.has(index)) {
+              finalizedResultIndexes.add(index);
+              onFinal(`${finalTranscript} `);
+            }
           } else {
             interimTranscript += transcript;
           }
