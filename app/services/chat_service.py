@@ -39,8 +39,12 @@ Language handling:
 
   written with Latin letters).
 - Silently interpret transliterated text as its intended language before answering.
-- Reply in the language and writing style of the latest user message. For Tanglish,
-  reply in clear, natural Tanglish; do not switch to Tamil script unless requested.
+- Start every new conversation in English. Do not change the response language merely
+  because the user writes a greeting, non-English text, mixed language, or transliteration.
+- Change the response language only when the user explicitly asks you to speak, reply,
+  answer, continue, or switch to that language. Keep that choice until the user explicitly
+  requests another language. For Tanglish, reply in clear, natural Tanglish; do not switch
+  to Tamil script unless requested.
 - Natural Tanglish means conversational Tamil written with Latin letters, mixed with
   ordinary English words only where a Tamil speaker would naturally use them. Never
   produce literal word-by-word translations, made-up Tamil words, Tamil script, or an
@@ -118,6 +122,54 @@ Content-versus-format rules:
         if hindi_score > tamil_score and hindi_score > 0:
             return "Hinglish (Hindi written in Latin letters)"
         return "English"
+
+    @classmethod
+    def requested_language(cls, message: str) -> str | None:
+        normalized = " ".join(re.findall(r"[a-z]+", message.lower()))
+        request_words = (
+            r"(?:speak|reply|respond|answer|continue|change|switch|use|explain|talk|write)"
+        )
+        language_patterns = (
+            ("English", r"english"),
+            ("Tanglish (Tamil written in Latin letters)", r"t(?:h)?anglish"),
+            ("Hinglish (Hindi written in Latin letters)", r"hinglish"),
+            ("Tamil (Tamil script)", r"tamil"),
+            ("Hindi (Devanagari script)", r"hindi"),
+        )
+        matches: list[tuple[int, str]] = []
+        for language, pattern in language_patterns:
+            expressions = (
+                rf"{request_words}\b[^.?!]{{0,40}}\b(?:only\s+)?{pattern}\b",
+                rf"\b(?:only\s+|in\s+){pattern}\b",
+                rf"\b{pattern}\s+la\b",
+                rf"\b{pattern}\b[^.?!]{{0,30}}\b{request_words}\b",
+            )
+            positions = [
+                match.start()
+                for expression in expressions
+                for match in re.finditer(expression, normalized)
+            ]
+            if positions:
+                matches.append((max(positions), language))
+        return max(matches)[1] if matches else None
+
+    @classmethod
+    def response_language(
+        cls,
+        message: str,
+        history: list[ChatHistoryMessage],
+    ) -> str:
+        language = "English"
+        previous_history = history
+        if history and history[-1].role == "user" and history[-1].content == message:
+            previous_history = history[:-1]
+        for item in previous_history:
+            if item.role != "user":
+                continue
+            requested = cls.requested_language(item.content)
+            if requested:
+                language = requested
+        return cls.requested_language(message) or language
 
     @classmethod
     def response_uses_wrong_script(cls, response: str, language: str) -> bool:
@@ -231,7 +283,7 @@ Content-versus-format rules:
             ) from error
 
     def _immediate_answer(self, message: str) -> str | None:
-        response_language = self.detect_language(message)
+        response_language = self.requested_language(message)
         if (
             response_language == "Tanglish (Tamil written in Latin letters)"
             and self.asks_to_send_content_for_explanation(message)
@@ -250,7 +302,7 @@ Content-versus-format rules:
         *,
         stream: bool,
     ) -> tuple[str, dict]:
-        response_language = self.detect_language(message)
+        response_language = self.response_language(message, history)
         messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
 
         if reference_history:

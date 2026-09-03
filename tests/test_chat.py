@@ -549,6 +549,63 @@ def test_language_detection_accepts_common_tanglish_spelling_variants():
     assert ChatService.detect_language("vannakam mapla") == (
         "Tanglish (Tamil written in Latin letters)"
     )
+
+
+def test_chat_defaults_to_english_for_ambiguous_greeting(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": "Hello! How can I help?"}}
+
+    def fake_post(url, json, timeout):
+        captured["body"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.chat_service.requests.post", fake_post)
+
+    ChatService().chat("hiii", [], [])
+
+    assert "respond only in English" in captured["body"]["messages"][-2]["content"]
+
+
+def test_chat_does_not_auto_switch_for_tanglish_content(monkeypatch):
+    _, body = ChatService()._build_request_body(
+        "enakku healthy food sollu",
+        [],
+        [],
+        stream=False,
+    )
+
+    assert "respond only in English" in body["messages"][-2]["content"]
+
+
+def test_explicit_language_choice_persists_until_user_changes_it():
+    from app.schemas.chat import ChatHistoryMessage
+
+    history = [
+        ChatHistoryMessage(role="user", content="Please reply in Tanglish"),
+        ChatHistoryMessage(role="assistant", content="Sari, kandippa."),
+    ]
+    language, _ = ChatService()._build_request_body(
+        "Suggest a healthy breakfast",
+        history,
+        [],
+        stream=False,
+    )
+    assert language == "Tanglish (Tamil written in Latin letters)"
+
+    history.append(ChatHistoryMessage(role="user", content="Only speak English now"))
+    language, _ = ChatService()._build_request_body(
+        "What about lunch?",
+        history,
+        [],
+        stream=False,
+    )
+    assert language == "English"
     assert ChatService.detect_language("can you explain this in tanglish") == (
         "Tanglish (Tamil written in Latin letters)"
     )
