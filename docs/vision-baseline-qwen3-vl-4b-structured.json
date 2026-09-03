@@ -1,0 +1,25 @@
+{
+  "model": "qwen3-vl:4b",
+  "pipeline": "ChatVisionService structured VisionResult",
+  "timeout_seconds": 180,
+  "results": [
+    {
+      "sample": "persisted-image-1",
+      "elapsed_seconds": 180.183,
+      "response": null,
+      "error": "VisionModelUnavailableError: Chat vision model unavailable: configured model 'qwen3-vl:4b'. Pull it in Ollama and try again."
+    },
+    {
+      "sample": "persisted-image-2",
+      "elapsed_seconds": 180.398,
+      "response": null,
+      "error": "VisionModelUnavailableError: Chat vision model unavailable: configured model 'qwen3-vl:4b'. Pull it in Ollama and try again."
+    },
+    {
+      "sample": "generated-red-png",
+      "elapsed_seconds": 174.581,
+      "response": "This appears to be a other image, but I cannot identify a specific item confidently.",
+      "error": null
+    }
+  ]
+}
