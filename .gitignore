@@ -22,6 +22,11 @@ food-ai-ui/test-results/
 # IDE
 .vscode/
 .idea/
+.claude/
+.cursor/
+.gemini/
+.junie/
+.windsurf/
  
 # OS
 .DS_Store

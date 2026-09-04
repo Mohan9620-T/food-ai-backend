@@ -3,9 +3,22 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Observable, of } from 'rxjs';
+import { vi } from 'vitest';
 
 import { ChatService } from './chat';
 import { AuthService, TokenResponse } from './auth';
+import { ChatConversation } from '../models/chat';
+
+interface TestChatSession {
+  id: number;
+  title: string;
+  updated_at: string;
+  messages: Array<{
+    sender: 'user' | 'bot';
+    content: string;
+    created_at: string;
+  }>;
+}
 
 class AuthStub {
   readonly currentUserId = signal<string | null>('42');
@@ -100,6 +113,24 @@ describe('ChatService session continuity', () => {
     expect(service.messages().at(-1)?.text).toBe('A landscape.');
   });
 
+  it('shows image analysis only in the conversation that started it', () => {
+    const imageConversationId = service.getActiveConversationId()!;
+    const image = new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' });
+
+    service.sendVisionMessage(image, 'What is shown?', imageConversationId).subscribe();
+    const request = http.expectOne((candidate) => candidate.url.endsWith('/chat/vision'));
+    expect(service.analyzingImage()).toBe(true);
+
+    service.createConversation();
+    expect(service.analyzingImage()).toBe(false);
+
+    service.selectConversation(imageConversationId);
+    expect(service.analyzingImage()).toBe(true);
+
+    request.flush({ response: 'A landscape.', session_id: 64 });
+    expect(service.analyzingImage()).toBe(false);
+  });
+
   it('restores a persisted image URL from backend session history', () => {
     const imageUrl = 'data:image/png;base64,AQID';
     const conversation = (service as unknown as {
@@ -119,15 +150,73 @@ describe('ChatService session continuity', () => {
     expect(conversation.messages[0].imageUrl).toBe(imageUrl);
   });
 
-  it('does not retry a persisted user message while its response is pending', () => {
+  it('allows retrying a stale persisted user message with no active response', () => {
     const conversationId = service.getActiveConversationId()!;
     service.addMessage({ sender: 'user', text: 'Already saved' }, conversationId);
 
     service.requestMessageRetry(0);
 
+    expect(service.isMessageAwaitingResponse(0)).toBe(false);
+    expect(service.consumeRetryMessage()).toEqual({ conversationId, text: 'Already saved' });
+    expect(service.messages()).toHaveLength(1);
+  });
+
+  it('keeps retry disabled while the matching response request is active', () => {
+    const conversationId = service.getActiveConversationId()!;
+    const request = { message: 'Still processing', history: [], referenceHistory: [] };
+    service.addMessage({ sender: 'user', text: request.message }, conversationId);
+    service.startResponse(conversationId, request);
+
+    service.requestMessageRetry(0);
+
     expect(service.isMessageAwaitingResponse(0)).toBe(true);
     expect(service.consumeRetryMessage()).toBeNull();
-    expect(service.messages()).toHaveLength(1);
+  });
+
+  it('polls only recent pending sessions instead of reloading every conversation', () => {
+    vi.useFakeTimers();
+    const internal = service as unknown as {
+      isBrowser: boolean;
+      fromApiSession: (session: TestChatSession) => ChatConversation;
+      setLoadedConversations: (conversations: ChatConversation[]) => void;
+      schedulePendingHistoryRefresh: () => void;
+    };
+    internal.isBrowser = true;
+    const now = new Date().toISOString();
+    internal.setLoadedConversations([
+      internal.fromApiSession({
+        id: 31,
+        title: 'Pending chat',
+        updated_at: now,
+        messages: [{ sender: 'user', content: 'Hello?', created_at: now }]
+      }),
+      internal.fromApiSession({
+        id: 32,
+        title: 'Completed chat',
+        updated_at: now,
+        messages: [
+          { sender: 'user', content: 'Hi', created_at: now },
+          { sender: 'bot', content: 'Hello', created_at: now }
+        ]
+      })
+    ]);
+
+    internal.schedulePendingHistoryRefresh();
+    vi.advanceTimersByTime(2000);
+
+    http.expectNone((request) => request.url === 'http://localhost:8000/chat/sessions');
+    http.expectNone((request) => request.url.endsWith('/chat/sessions/32'));
+    http.expectOne((request) => request.url.endsWith('/chat/sessions/31')).flush({
+      id: 31,
+      title: 'Pending chat',
+      updated_at: now,
+      messages: [
+        { sender: 'user', content: 'Hello?', created_at: now },
+        { sender: 'bot', content: 'Hello!', created_at: now }
+      ]
+    });
+    vi.advanceTimersByTime(2000);
+    vi.useRealTimers();
   });
 
   it('restores the selected server chat instead of always opening the first chat', () => {

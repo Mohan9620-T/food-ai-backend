@@ -58,6 +58,7 @@ export class ChatService {
   private readonly activeStorageKeyPrefix = 'food-ai-active-session-v2';
   private readonly migrationFlagPrefix = 'food-ai-migrated-v1';
   private readonly consolidationFlagPrefix = 'food-ai-sessions-consolidated-single-v3';
+  private readonly pendingHistoryMaxAgeMs = 15 * 60 * 1000;
 
   private readonly http = inject(HttpClient);
   private readonly authService = inject(AuthService);
@@ -71,7 +72,7 @@ export class ChatService {
   private readonly retryMessageState = signal<{ conversationId: string; text: string } | null>(null);
   private readonly migrationNoticeState = signal<string | null>(null);
   private readonly loadingSessionsState = signal(false);
-  private readonly analyzingImageState = signal(false);
+  private readonly analyzingImageConversationIdsState = signal<ReadonlySet<string>>(new Set());
   private streamAbortController: AbortController | null = null;
   private pendingHistoryTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingHistoryRefreshes = 0;
@@ -83,7 +84,10 @@ export class ChatService {
   readonly retryMessage = this.retryMessageState.asReadonly();
   readonly migrationNotice = this.migrationNoticeState.asReadonly();
   readonly loadingSessions = this.loadingSessionsState.asReadonly();
-  readonly analyzingImage = this.analyzingImageState.asReadonly();
+  readonly analyzingImage = computed(() => {
+    const conversationId = this.activeConversationIdState();
+    return conversationId !== null && this.analyzingImageConversationIdsState().has(conversationId);
+  });
   readonly isResponding = computed(() => {
     const pendingConversationId = this.pendingConversationIdState();
     return pendingConversationId !== null && pendingConversationId === this.activeConversationIdState();
@@ -137,12 +141,24 @@ export class ChatService {
     if (text) form.append('message', text);
     const sessionId = this.toServerSessionId(conversationId);
     if (sessionId !== null) form.append('session_id', String(sessionId));
-    this.analyzingImageState.set(true);
+    if (conversationId) {
+      this.analyzingImageConversationIdsState.update((conversationIds) =>
+        new Set(conversationIds).add(conversationId)
+      );
+    }
     return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/vision`, form).pipe(
       tap((response) => {
         if (conversationId) this.acceptResponse(conversationId, response);
       }),
-      finalize(() => this.analyzingImageState.set(false))
+      finalize(() => {
+        if (conversationId) {
+          this.analyzingImageConversationIdsState.update((conversationIds) => {
+            const updatedIds = new Set(conversationIds);
+            updatedIds.delete(conversationId);
+            return updatedIds;
+          });
+        }
+      })
     );
   }
 
@@ -562,18 +578,27 @@ export class ChatService {
   }
 
   isMessageAwaitingResponse(index: number): boolean {
-    const messages = this.getActiveConversation()?.messages ?? [];
-    return messages[index]?.sender === 'user' && !messages[index + 1];
+    const conversation = this.getActiveConversation();
+    const pendingResponse = this.pendingResponseState();
+    return Boolean(
+      conversation &&
+      pendingResponse?.conversationId === conversation.id &&
+      conversation.messages[index]?.sender === 'user' &&
+      !conversation.messages[index + 1]
+    );
   }
 
   private schedulePendingHistoryRefresh(): void {
     if (!this.isBrowser || this.pendingHistoryTimer || this.pendingHistoryRefreshes >= 150) {
       return;
     }
-    const hasPendingTurn = this.conversationsState().some(
-      conversation => conversation.messages.at(-1)?.sender === 'user'
+    const pendingConversations = this.conversationsState().filter(
+      conversation =>
+        conversation.sessionId !== undefined &&
+        conversation.messages.at(-1)?.sender === 'user' &&
+        Date.now() - conversation.updatedAt <= this.pendingHistoryMaxAgeMs
     );
-    if (!hasPendingTurn) {
+    if (pendingConversations.length === 0) {
       this.pendingHistoryRefreshes = 0;
       return;
     }
@@ -581,13 +606,18 @@ export class ChatService {
     this.pendingHistoryTimer = setTimeout(() => {
       this.pendingHistoryTimer = null;
       this.pendingHistoryRefreshes += 1;
-      this.fetchConversations().subscribe({
-        next: conversations => {
-          const activeId = this.activeConversationIdState();
-          this.conversationsState.set(conversations);
-          if (activeId && conversations.some(conversation => conversation.id === activeId)) {
-            this.activeConversationIdState.set(activeId);
-          }
+      forkJoin(pendingConversations.map((conversation) =>
+        this.http.get<ChatSessionDetailApi>(`${this.sessionsUrl}/${conversation.sessionId}`)
+      )).pipe(
+        map((sessions) => sessions.map((session) => this.fromApiSession(session)))
+      ).subscribe({
+        next: refreshedConversations => {
+          const refreshedById = new Map(
+            refreshedConversations.map((conversation) => [conversation.id, conversation])
+          );
+          this.conversationsState.update((conversations) => conversations.map(
+            conversation => refreshedById.get(conversation.id) ?? conversation
+          ));
           this.schedulePendingHistoryRefresh();
         },
         error: () => this.schedulePendingHistoryRefresh()
@@ -643,7 +673,7 @@ export class ChatService {
     this.editingMessageState.set(null);
     this.retryMessageState.set(null);
     this.migrationNoticeState.set(null);
-    this.analyzingImageState.set(false);
+    this.analyzingImageConversationIdsState.set(new Set());
   }
 
   private updateConversationTitle(conversationId: string, title: string): void {

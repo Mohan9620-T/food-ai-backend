@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Configurable `LLM_PROVIDER` routing for general image chat, with local Ollama and
+  hosted NVIDIA vision provider implementations and provider-specific tests.
+- A production Docker Compose configuration using file-based secrets, with deployment
+  documentation and settings coverage.
+- A non-blocking Playwright user-flow suite and CI browser-test integration.
+
+### Changed
+
+- Documented the production quality, security, test, and deployment workflows in the
+  project onboarding guide.
+- Made the NVIDIA API base URL configurable and updated its default vision model and
+  request timeout settings.
+
 ## [0.1.0] - 2026-09-04
 
 ### Added
