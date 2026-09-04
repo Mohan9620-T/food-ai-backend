@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${DB_NAME:-food_ai}
+      POSTGRES_USER: ${DB_USER:-food_ai}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: always
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      DATABASE_URL: ""
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME:-food_ai}
+      DB_USER: ${DB_USER:-food_ai}
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      JWT_SECRET_KEY_FILE: /run/secrets/jwt_secret_key
+      OLLAMA_URL: http://ollama:11434/api/chat
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen3-vl:4b}
+      OLLAMA_CHAT_VISION_MODEL: ${OLLAMA_CHAT_VISION_MODEL:-qwen3-vl:4b}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://example.com}
+      MIGRATION_CHECK_ENABLED: "true"
+    secrets:
+      - db_password
+      - jwt_secret_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/health/ready"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+secrets:
+  db_password:
+    file: ${DB_PASSWORD_FILE_PATH:-./secrets/db_password.txt}
+  jwt_secret_key:
+    file: ${JWT_SECRET_KEY_FILE_PATH:-./secrets/jwt_secret_key.txt}
+
+volumes:
+  postgres_data:
+  ollama_models:

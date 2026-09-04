@@ -1,15 +1,33 @@
 import os
+from pathlib import Path
 from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _read_secret(name: str, default: str | None = None) -> str | None:
+    """Read a setting directly or from its Docker/Kubernetes-style file mount."""
+    value = os.getenv(name)
+    if value is not None:
+        return value
+
+    secret_path = os.getenv(f"{name}_FILE")
+    if not secret_path:
+        return default
+
+    secret = Path(secret_path).read_text(encoding="utf-8").strip()
+    if not secret:
+        raise ValueError(f"{name}_FILE points to an empty secret file")
+    return secret
+
+
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_PASSWORD = _read_secret("DB_PASSWORD")
 DATABASE_URL = os.getenv("DATABASE_URL") or (
     f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD or '')}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 )
@@ -42,7 +60,7 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-only-change-this-secret")
+JWT_SECRET_KEY = _read_secret("JWT_SECRET_KEY", "dev-only-change-this-secret") or ""
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS = int(os.getenv("REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS", "30"))
