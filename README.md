@@ -304,6 +304,20 @@ Tests use an isolated in-memory SQLite database — no real database connection 
 python -m pytest -v
 \`\`\`
 
+## Observability
+
+- `GET /health` and `GET /health/live` are liveness checks. They confirm the API
+  process is running and intentionally do not contact external dependencies.
+- `GET /health/ready` checks PostgreSQL and Ollama. It returns HTTP 503 with a
+  per-dependency status when either service is unavailable.
+- `GET /metrics` exposes Prometheus request counts, response-status counts, and
+  latency metrics. The metrics endpoint is excluded from its own measurements.
+
+Application logs use Python's standard `logging` API with the JSON formatter configured
+in `app/logging_config.py`. New logs should use stable event-style messages and put
+searchable context in `extra` fields; credentials, tokens, and uploaded content must not
+be logged.
+
 ## Authentication flow
 
 1. \`POST /users/\` — register a new user (password is hashed with bcrypt before storage).
