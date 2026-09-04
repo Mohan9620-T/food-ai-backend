@@ -296,13 +296,52 @@ the packages from `food-ai-ui/package-lock.json` to be installed with `npm ci` (
 pre-commit run --all-files
 \`\`\`
 
-## Running tests
+## CI and testing
 
 Tests use an isolated in-memory SQLite database — no real database connection required.
 
 \`\`\`
 python -m pytest -v
 \`\`\`
+
+The required CI job runs quality gates in fail-fast order: dependency audits, backend
+and frontend linting, type checking, database migrations, unit tests with coverage,
+and the production frontend build. Green required CI means all of these checks pass:
+
+```powershell
+# From the repository root
+pip-audit -r requirements.txt
+ruff check .
+ruff format --check .
+mypy app
+python -m pytest -v --cov=app --cov-report=term --cov-fail-under=90
+
+# From food-ai-ui/
+npm audit --audit-level=high
+npm run lint
+npm run typecheck
+npx ng test --watch=false --coverage
+npx ng build
+```
+
+CI additionally applies every Alembic migration to a PostgreSQL service before running
+the test suite. Coverage gates currently require 90% backend coverage and the frontend
+thresholds configured in `angular.json` (55% statements, 45% branches, 45% functions,
+and 65% lines).
+
+Playwright exercises registration, login, streamed chat, food-photo upload, and the
+rendered nutrition response in Chromium. API responses are intercepted at the browser
+boundary, which keeps this UI flow deterministic and independent of Ollama inference
+time. Install its browser once and run the flow from `food-ai-ui/`:
+
+```powershell
+npx playwright install chromium
+npm run e2e
+```
+
+The GitHub Actions E2E job is intentionally separate and non-blocking because browser
+tests are slower and can be sensitive to runner conditions. A failure is still visible
+and should be investigated before release even though it does not block a pull request.
 
 ## Observability
 
