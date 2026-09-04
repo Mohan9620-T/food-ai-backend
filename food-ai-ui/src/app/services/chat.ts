@@ -322,7 +322,13 @@ export class ChatService {
   requestMessageRetry(index: number): void {
     const conversation = this.getActiveConversation();
     const message = conversation?.messages[index];
-    if (!conversation || !message || message.sender !== 'user' || this.isResponding()) return;
+    if (
+      !conversation ||
+      !message ||
+      message.sender !== 'user' ||
+      this.isResponding() ||
+      this.isMessageAwaitingResponse(index)
+    ) return;
     this.conversationsState.update((conversations) => conversations.map((item) =>
       item.id === conversation.id
         ? { ...item, messages: item.messages.slice(0, index + 1), updatedAt: Date.now() }
@@ -527,6 +533,11 @@ export class ChatService {
     this.conversationsState.set(conversations);
     this.activeConversationIdState.set(conversations[0]?.id ?? null);
     this.ensureDraftConversation();
+  }
+
+  isMessageAwaitingResponse(index: number): boolean {
+    const messages = this.getActiveConversation()?.messages ?? [];
+    return messages[index]?.sender === 'user' && !messages[index + 1];
   }
 
   private schedulePendingHistoryRefresh(): void {

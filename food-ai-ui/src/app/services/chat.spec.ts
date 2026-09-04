@@ -118,4 +118,15 @@ describe('ChatService session continuity', () => {
 
     expect(conversation.messages[0].imageUrl).toBe(imageUrl);
   });
+
+  it('does not retry a persisted user message while its response is pending', () => {
+    const conversationId = service.getActiveConversationId()!;
+    service.addMessage({ sender: 'user', text: 'Already saved' }, conversationId);
+
+    service.requestMessageRetry(0);
+
+    expect(service.isMessageAwaitingResponse(0)).toBe(true);
+    expect(service.consumeRetryMessage()).toBeNull();
+    expect(service.messages()).toHaveLength(1);
+  });
 });

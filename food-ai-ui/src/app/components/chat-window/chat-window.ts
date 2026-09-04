@@ -1,6 +1,6 @@
 import { DOCUMENT } from '@angular/common';
 import { DomSanitizer } from '@angular/platform-browser';
-import { AfterViewChecked, afterNextRender, Component, DestroyRef, effect, ElementRef, inject, SecurityContext, signal, viewChild } from '@angular/core';
+import { AfterViewChecked, afterNextRender, Component, DestroyRef, effect, ElementRef, HostListener, inject, SecurityContext, signal, viewChild } from '@angular/core';
 import { ChatService } from '../../services/chat';
 import { marked } from 'marked';
 
@@ -23,6 +23,7 @@ export class ChatWindow implements AfterViewChecked {
   private previousContentLength = -1;
   private previousRespondingState = false;
   readonly openMessageMenuIndex = signal<number | null>(null);
+  readonly previewImageUrl = signal<string | null>(null);
 
   constructor() {
     effect(() => {
@@ -79,8 +80,25 @@ export class ChatWindow implements AfterViewChecked {
     this.chatService.requestMessageRetry(index);
   }
 
+  isAwaitingResponse(index: number): boolean {
+    return this.chatService.isMessageAwaitingResponse(index);
+  }
+
   toggleMessageMenu(index: number): void {
     this.openMessageMenuIndex.update((openIndex) => openIndex === index ? null : index);
+  }
+
+  openImagePreview(imageUrl: string): void {
+    this.previewImageUrl.set(imageUrl);
+  }
+
+  closeImagePreview(): void {
+    this.previewImageUrl.set(null);
+  }
+
+  @HostListener('document:keydown.escape')
+  closeImagePreviewFromKeyboard(): void {
+    this.closeImagePreview();
   }
 
   shouldShowDateSeparator(index: number): boolean {
