@@ -1,3 +1,5 @@
+from typing import cast
+
 from sqlalchemy.orm import Session
 
 from app.repositories.refresh_token_repository import RefreshTokenRepository
@@ -60,7 +62,7 @@ class UserService:
         stored_token = self.refresh_tokens.get_active(db, hash_refresh_token(raw_refresh_token))
         if not stored_token:
             return None
-        user = self.repository.get_user_by_id(db, stored_token.user_id)
+        user = self.repository.get_user_by_id(db, cast(int, stored_token.user_id))
         if not user:
             return None
         return {

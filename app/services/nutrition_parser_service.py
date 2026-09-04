@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import Any
 
 import requests
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -34,7 +35,7 @@ If an amount is implied as one item, use quantity 1 and the item as the unit.
 
     def parse(self, description: str) -> list[ParsedFoodItem]:
         for attempt in range(2):
-            body = {
+            body: dict[str, Any] = {
                 "model": settings.OLLAMA_MODEL,
                 "stream": False,
                 "format": "json",

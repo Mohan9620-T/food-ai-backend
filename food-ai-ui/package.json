@@ -6,6 +6,7 @@
     "start": "ng serve",
     "build": "ng build",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.spec.json",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "serve:ssr:food-ai-ui": "node dist/food-ai-ui/server/server.mjs"

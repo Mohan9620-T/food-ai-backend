@@ -1,3 +1,5 @@
+from typing import cast
+
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.diet_plan import DietPlan, DietPlanMeal, DietPlanMealItem
@@ -25,7 +27,10 @@ class DietPlanRepository:
         db.add(plan)
         db.commit()
         db.refresh(plan)
-        return self.get(db, plan.id, user_id)
+        created = self.get(db, cast(int, plan.id), user_id)
+        if created is None:
+            raise RuntimeError("Created diet plan could not be reloaded")
+        return created
 
     def list_for_user(self, db: Session, user_id: int) -> list[DietPlan]:
         return (

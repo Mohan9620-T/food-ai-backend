@@ -1,4 +1,5 @@
 import json
+from typing import cast
 
 from sqlalchemy.orm import Session
 
@@ -31,9 +32,9 @@ class ProfileService:
             "target_protein_g": profile.target_protein_g,
             "target_carbs_g": profile.target_carbs_g,
             "target_fat_g": profile.target_fat_g,
-            "allergies": self._decode(profile.allergies),
-            "dietary_restrictions": self._decode(profile.dietary_restrictions),
-            "disliked_foods": self._decode(profile.disliked_foods),
+            "allergies": self._decode(cast(str, profile.allergies)),
+            "dietary_restrictions": self._decode(cast(str, profile.dietary_restrictions)),
+            "disliked_foods": self._decode(cast(str, profile.disliked_foods)),
             "updated_at": profile.updated_at,
         }
 

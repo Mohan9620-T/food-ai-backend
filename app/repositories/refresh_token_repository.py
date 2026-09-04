@@ -38,5 +38,5 @@ class RefreshTokenRepository:
         return db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
 
     def revoke(self, db: Session, token: RefreshToken) -> None:
-        token.revoked_at = datetime.now(timezone.utc)
+        setattr(token, "revoked_at", datetime.now(timezone.utc))
         db.commit()

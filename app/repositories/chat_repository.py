@@ -139,7 +139,7 @@ class ChatRepository:
         session = self.get_session(db, session_id, user_id)
         if not session:
             return None
-        session.title = title
+        setattr(session, "title", title)
         db.commit()
         db.refresh(session)
         return session

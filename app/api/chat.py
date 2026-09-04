@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from typing import cast
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -58,7 +59,7 @@ def _get_persisted_history(db: Session, session_id: int) -> list[ChatHistoryMess
     return [
         ChatHistoryMessage(
             role="assistant" if message.sender == "bot" else "user",
-            content=message.content,
+            content=cast(str, message.content),
         )
         for message in repository.get_message_history(db, session_id)
     ]
@@ -158,10 +159,10 @@ def import_session_messages(
 
     repository.import_messages(
         db,
-        session.id,
+        cast(int, session.id),
         [(message.sender, message.content) for message in payload.messages],
     )
-    return repository.get_session(db, session.id, user_id)
+    return repository.get_session(db, cast(int, session.id), user_id)
 
 
 @router.put(

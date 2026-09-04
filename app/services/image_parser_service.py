@@ -1,5 +1,6 @@
 import base64
 import logging
+from typing import Any
 
 import requests
 from pydantic import ValidationError
@@ -58,21 +59,22 @@ If no food or drink can be identified, return an empty items array.
                     },
                 )
             try:
+                request_body: dict[str, Any] = {
+                    "model": settings.OLLAMA_VISION_MODEL,
+                    "stream": False,
+                    "think": False,
+                    "keep_alive": settings.OLLAMA_KEEP_ALIVE,
+                    "format": VisionResult.model_json_schema(),
+                    "options": {
+                        "temperature": 0,
+                        "num_ctx": 8192,
+                        "num_predict": 1024,
+                    },
+                    "messages": messages,
+                }
                 response = requests.post(
                     settings.OLLAMA_URL,
-                    json={
-                        "model": settings.OLLAMA_VISION_MODEL,
-                        "stream": False,
-                        "think": False,
-                        "keep_alive": settings.OLLAMA_KEEP_ALIVE,
-                        "format": VisionResult.model_json_schema(),
-                        "options": {
-                            "temperature": 0,
-                            "num_ctx": 8192,
-                            "num_predict": 1024,
-                        },
-                        "messages": messages,
-                    },
+                    json=request_body,
                     timeout=settings.OLLAMA_VISION_TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()

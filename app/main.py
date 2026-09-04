@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from typing import Any, cast
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,7 +49,7 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, cast(Any, _rate_limit_exceeded_handler))
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 app.include_router(user_router)
@@ -71,7 +72,7 @@ def health():
 @app.get("/docs", include_in_schema=False)
 def swagger_ui():
     return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
+        openapi_url=app.openapi_url or "/openapi.json",
         title=f"{app.title} - Swagger UI",
         swagger_js_url="/static/swagger/swagger-ui-bundle.js",
         swagger_css_url="/static/swagger/swagger-ui.css",

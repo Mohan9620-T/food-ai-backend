@@ -55,6 +55,11 @@ jobs:
       - name: Lint frontend
         working-directory: food-ai-ui
         run: npm run lint
+      - name: Type-check backend
+        run: mypy app
+      - name: Type-check frontend
+        working-directory: food-ai-ui
+        run: npm run typecheck
       - name: Apply database migrations
         run: alembic -c app/alembic.ini upgrade head
       - name: Run backend tests
