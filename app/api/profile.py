@@ -37,5 +37,9 @@ def get_profile(db: Session = Depends(get_db), current_user: dict = Depends(get_
         422: {"description": "The profile payload failed validation."},
     },
 )
-def upsert_profile(payload: UserProfileUpsert, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def upsert_profile(
+    payload: UserProfileUpsert,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     return service.serialize(service.upsert(db, int(current_user["sub"]), payload))

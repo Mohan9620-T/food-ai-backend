@@ -3,7 +3,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 Goal = Literal["lose_weight", "maintain", "gain_weight"]
 
 

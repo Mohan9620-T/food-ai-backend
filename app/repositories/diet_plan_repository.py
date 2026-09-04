@@ -28,7 +28,12 @@ class DietPlanRepository:
         return self.get(db, plan.id, user_id)
 
     def list_for_user(self, db: Session, user_id: int) -> list[DietPlan]:
-        return self._query(db).filter(DietPlan.user_id == user_id).order_by(DietPlan.created_at.desc()).all()
+        return (
+            self._query(db)
+            .filter(DietPlan.user_id == user_id)
+            .order_by(DietPlan.created_at.desc())
+            .all()
+        )
 
     def get(self, db: Session, plan_id: int, user_id: int) -> DietPlan | None:
         return self._query(db).filter(DietPlan.id == plan_id, DietPlan.user_id == user_id).first()
@@ -43,4 +48,6 @@ class DietPlanRepository:
 
     @staticmethod
     def _query(db: Session):
-        return db.query(DietPlan).options(selectinload(DietPlan.meals).selectinload(DietPlanMeal.items))
+        return db.query(DietPlan).options(
+            selectinload(DietPlan.meals).selectinload(DietPlanMeal.items)
+        )

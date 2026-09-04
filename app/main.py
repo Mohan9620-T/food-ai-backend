@@ -2,21 +2,21 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.database.database import engine
-from app.database.migration_check import warn_if_migrations_pending
-from app.api.user_api import router as user_router
 from app.api.chat import router as chat_router
+from app.api.diet_plans import router as diet_plans_router
 from app.api.meals import router as meals_router
 from app.api.profile import router as profile_router
-from app.api.diet_plans import router as diet_plans_router
+from app.api.user_api import router as user_router
 from app.config import settings
+from app.database.database import engine
+from app.database.migration_check import warn_if_migrations_pending
 from app.logging_config import configure_logging
 from app.rate_limit import limiter
 
@@ -38,6 +38,7 @@ async def lifespan(application: FastAPI):
     if settings.MIGRATION_CHECK_ENABLED:
         warn_if_migrations_pending(engine)
     yield
+
 
 app = FastAPI(
     title="Food AI Backend",

@@ -39,11 +39,7 @@ jobs:
           python-version: "3.13"
           cache: pip
       - name: Install backend dependencies
-        run: pip install -r requirements.txt
-      - name: Apply database migrations
-        run: alembic -c app/alembic.ini upgrade head
-      - name: Run backend tests
-        run: python -m pytest -v
+        run: pip install -r requirements-dev.txt
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -52,6 +48,17 @@ jobs:
       - name: Install frontend dependencies
         working-directory: food-ai-ui
         run: npm ci
+      - name: Lint backend
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Lint frontend
+        working-directory: food-ai-ui
+        run: npm run lint
+      - name: Apply database migrations
+        run: alembic -c app/alembic.ini upgrade head
+      - name: Run backend tests
+        run: python -m pytest -v
       - name: Run frontend tests
         working-directory: food-ai-ui
         run: npx ng test --watch=false

@@ -5,7 +5,6 @@ from email.message import EmailMessage
 
 from app.config import settings
 
-
 logger = logging.getLogger(__name__)
 
 

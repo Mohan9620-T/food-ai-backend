@@ -29,16 +29,29 @@ class DietPlanService:
         for attempt in range(2):
             messages = [{"role": "system", "content": system_prompt}]
             if attempt:
-                messages.append({"role": "system", "content": "Your previous response was invalid. Return only the exact required JSON object."})
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": "Your previous response was invalid. Return only the exact required JSON object.",
+                    }
+                )
             messages.append({"role": "user", "content": "Create my seven-day meal plan."})
             try:
                 response = requests.post(
                     settings.OLLAMA_URL,
-                    json={"model": settings.OLLAMA_MODEL, "stream": False, "format": "json", "options": {"temperature": 0}, "messages": messages},
+                    json={
+                        "model": settings.OLLAMA_MODEL,
+                        "stream": False,
+                        "format": "json",
+                        "options": {"temperature": 0},
+                        "messages": messages,
+                    },
                     timeout=settings.OLLAMA_TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()
-                proposal = self._adapter.validate_python(json.loads(response.json()["message"]["content"]))
+                proposal = self._adapter.validate_python(
+                    json.loads(response.json()["message"]["content"])
+                )
                 self._validate_week(proposal)
                 return [
                     {
@@ -60,13 +73,23 @@ class DietPlanService:
 
     def build_system_prompt(self, profile: UserProfile) -> str:
         data = self.profile_service.serialize(profile)
-        targets = ", ".join(
-            f"{name}={data[name]}" for name in ("target_calories", "target_protein_g", "target_carbs_g", "target_fat_g") if data[name] is not None
-        ) or "not specified"
+        targets = (
+            ", ".join(
+                f"{name}={data[name]}"
+                for name in (
+                    "target_calories",
+                    "target_protein_g",
+                    "target_carbs_g",
+                    "target_fat_g",
+                )
+                if data[name] is not None
+            )
+            or "not specified"
+        )
         allergies = ", ".join(data["allergies"]) or "none stated"
         restrictions = ", ".join(data["dietary_restrictions"]) or "none stated"
         dislikes = ", ".join(data["disliked_foods"]) or "none stated"
-        return f"""You propose meal components only. Goal: {data['goal']}. Daily targets: {targets}.
+        return f"""You propose meal components only. Goal: {data["goal"]}. Daily targets: {targets}.
 HARD EXCLUSIONS - allergies: {allergies}.
 HARD EXCLUSIONS - dietary restrictions: {restrictions}.
 Never suggest a hard-excluded food or any food that commonly contains one. Disliked foods are soft exclusions: {dislikes}.

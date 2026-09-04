@@ -47,7 +47,10 @@ def test_send_new_account_welcome_uses_configured_smtp(monkeypatch):
 def test_send_new_account_welcome_skips_when_not_configured(monkeypatch):
     monkeypatch.setattr("app.services.email_service.settings.SMTP_HOST", None)
 
-    assert EmailService().send_new_account_welcome(
-        recipient="new.user@example.com",
-        fullname="New User",
-    ) is False
+    assert (
+        EmailService().send_new_account_welcome(
+            recipient="new.user@example.com",
+            fullname="New User",
+        )
+        is False
+    )

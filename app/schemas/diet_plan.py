@@ -5,7 +5,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.nutrition_parser_service import ParsedFoodItem
 
-
 MealSlot = Literal["breakfast", "lunch", "dinner", "snack"]
 
 

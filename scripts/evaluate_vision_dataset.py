@@ -10,10 +10,9 @@ import requests
 REPO_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from app.schemas.vision_result import VisionResult
-from app.services.image_parser_service import ImageParserService
-from app.services.vision_image_preprocessor import prepare_vision_image
-
+from app.schemas.vision_result import VisionResult  # noqa: E402
+from app.services.image_parser_service import ImageParserService  # noqa: E402
+from app.services.vision_image_preprocessor import prepare_vision_image  # noqa: E402
 
 DATASET_ROOT = REPO_ROOT / "docs" / "vision-eval-dataset"
 RESULTS_PATH = DATASET_ROOT / "raw-results-qwen3-vl-4b.json"

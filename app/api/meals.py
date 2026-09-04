@@ -10,14 +10,17 @@ from app.database.database import get_db
 from app.rate_limit import limiter
 from app.repositories.meal_repository import MealRepository
 from app.schemas.meal import DailyTotalsOut, MealCreate, MealLogOut
-from app.services.nutrition_parser_service import NutritionParseError, NutritionParserService
-from app.services.nutrition_parser_service import ParsedFoodItem
 from app.services.image_parser_service import (
     ImageParseError,
     ImageParserService,
     VisionModelUnavailableError,
 )
 from app.services.image_validation import InvalidImageError, validate_image_content
+from app.services.nutrition_parser_service import (
+    NutritionParseError,
+    NutritionParserService,
+    ParsedFoodItem,
+)
 from app.services.usda_nutrition_service import UsdaNutritionService
 from app.utils.auth_dependency import get_current_user
 

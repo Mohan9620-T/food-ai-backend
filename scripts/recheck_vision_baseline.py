@@ -6,9 +6,8 @@ import sys
 import time
 from pathlib import Path
 
-from PIL import Image
 import requests
-
+from PIL import Image
 
 REPO_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -18,7 +17,6 @@ from app.config import settings  # noqa: E402
 from app.database.database import SessionLocal  # noqa: E402
 from app.models.chat import ChatMessageRecord  # noqa: E402
 from app.services.chat_vision_service import ChatVisionService  # noqa: E402
-
 
 DEFAULT_RESULTS_PATH = REPO_ROOT / "docs" / "vision-baseline-qwen3-vl-4b-structured.json"
 SAMPLE_NAMES = ("persisted-image-1", "persisted-image-2", "generated-red-png")
@@ -83,10 +81,7 @@ def main() -> None:
         "persisted-image-2": images[1],
         "generated-red-png": red_png(),
     }
-    results = [
-        entry for entry in load_results(args.results_path)
-        if entry["sample"] != args.sample
-    ]
+    results = [entry for entry in load_results(args.results_path) if entry["sample"] != args.sample]
     record = {
         "sample": args.sample,
         "elapsed_seconds": None,

@@ -50,10 +50,13 @@ If no food or drink can be identified, return an empty items array.
                 },
             ]
             if attempt:
-                messages.insert(1, {
-                    "role": "system",
-                    "content": "The previous output was invalid. Return only an object matching the supplied JSON schema.",
-                })
+                messages.insert(
+                    1,
+                    {
+                        "role": "system",
+                        "content": "The previous output was invalid. Return only an object matching the supplied JSON schema.",
+                    },
+                )
             try:
                 response = requests.post(
                     settings.OLLAMA_URL,

@@ -18,4 +18,9 @@ class UserProfile(Base):
     allergies = Column(Text, nullable=False, default="[]")
     dietary_restrictions = Column(Text, nullable=False, default="[]")
     disliked_foods = Column(Text, nullable=False, default="[]")
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )

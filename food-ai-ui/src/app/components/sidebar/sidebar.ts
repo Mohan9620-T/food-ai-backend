@@ -109,6 +109,10 @@ export class Sidebar {
     this.pendingDelete.set(null);
   }
 
+  cancelDeleteFromBackdrop(event: MouseEvent): void {
+    if (event.target === event.currentTarget) this.cancelDeleteConversation();
+  }
+
   confirmDeleteConversation(): void {
     const conversation = this.pendingDelete();
     if (!conversation) return;

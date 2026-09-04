@@ -2,7 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Sidebar } from '../../components/sidebar/sidebar';
-import { DietGoal, ProfileService, UserProfileInput } from '../../services/profile';
+import { ProfileService, UserProfileInput } from '../../services/profile';
 
 @Component({selector:'app-profile-page',standalone:true,imports:[FormsModule,Sidebar],templateUrl:'./profile.html',styleUrl:'./profile.css'})
 export class ProfilePage {

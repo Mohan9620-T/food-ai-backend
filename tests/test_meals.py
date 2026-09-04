@@ -1,9 +1,10 @@
 import json
+
 import requests
 
 from app.config import settings
-from app.services.nutrition_parser_service import NutritionParserService
 from app.services.image_parser_service import ImageParserService
+from app.services.nutrition_parser_service import NutritionParserService
 
 
 class FakeResponse:
@@ -20,15 +21,21 @@ class FakeResponse:
 
 
 def _register_and_login(client, email="meals@example.com"):
-    client.post("/users/", json={
-        "fullname": "Meal User",
-        "email": email,
-        "password": "meal-password",
-    })
-    response = client.post("/users/login", json={
-        "email": email,
-        "password": "meal-password",
-    })
+    client.post(
+        "/users/",
+        json={
+            "fullname": "Meal User",
+            "email": email,
+            "password": "meal-password",
+        },
+    )
+    response = client.post(
+        "/users/login",
+        json={
+            "email": email,
+            "password": "meal-password",
+        },
+    )
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
@@ -38,42 +45,70 @@ def _mock_grounded_calls(monkeypatch):
     def post(url, **kwargs):
         if url == settings.OLLAMA_URL:
             if kwargs["json"].get("format") == "json":
-                return FakeResponse({"message": {"content": json.dumps([{
-                    "food_name": "oatmeal",
-                    "quantity": 100,
-                    "unit": "g",
-                }])}})
-            return FakeResponse({"message": {"content": json.dumps({
-                "image_type": "food",
-                "items": [{
-                    "name": "oatmeal",
-                    "confidence": "high",
-                    "visual_evidence": "a bowl of cooked oats",
-                }],
-                "uncertain_items": [],
-            })}})
+                return FakeResponse(
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                [
+                                    {
+                                        "food_name": "oatmeal",
+                                        "quantity": 100,
+                                        "unit": "g",
+                                    }
+                                ]
+                            )
+                        }
+                    }
+                )
+            return FakeResponse(
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "image_type": "food",
+                                "items": [
+                                    {
+                                        "name": "oatmeal",
+                                        "confidence": "high",
+                                        "visual_evidence": "a bowl of cooked oats",
+                                    }
+                                ],
+                                "uncertain_items": [],
+                            }
+                        )
+                    }
+                }
+            )
         assert url.endswith("/foods/search")
-        return FakeResponse({"foods": [
-            {"fdcId": 12345, "description": "Oatmeal, cooked", "dataType": "Foundation"}
-        ]})
+        return FakeResponse(
+            {
+                "foods": [
+                    {"fdcId": 12345, "description": "Oatmeal, cooked", "dataType": "Foundation"}
+                ]
+            }
+        )
 
     def get(url, **kwargs):
         assert url.endswith("/food/12345")
-        return FakeResponse({
-            "fdcId": 12345,
-            "description": "Oatmeal, cooked",
-            "foodPortions": [{
-                "modifier": "serving",
-                "gramWeight": 100,
-                "amount": 1,
-            }],
-            "foodNutrients": [
-                {"nutrient": {"id": 1008}, "amount": 71},
-                {"nutrient": {"id": 1003}, "amount": 2.54},
-                {"nutrient": {"id": 1005}, "amount": 12.0},
-                {"nutrient": {"id": 1004}, "amount": 1.52},
-            ],
-        })
+        return FakeResponse(
+            {
+                "fdcId": 12345,
+                "description": "Oatmeal, cooked",
+                "foodPortions": [
+                    {
+                        "modifier": "serving",
+                        "gramWeight": 100,
+                        "amount": 1,
+                    }
+                ],
+                "foodNutrients": [
+                    {"nutrient": {"id": 1008}, "amount": 71},
+                    {"nutrient": {"id": 1003}, "amount": 2.54},
+                    {"nutrient": {"id": 1005}, "amount": 12.0},
+                    {"nutrient": {"id": 1004}, "amount": 1.52},
+                ],
+            }
+        )
 
     monkeypatch.setattr("requests.post", post)
     monkeypatch.setattr("requests.get", get)
@@ -83,25 +118,31 @@ def test_create_list_totals_and_delete_meal(client, monkeypatch):
     headers = _register_and_login(client)
     _mock_grounded_calls(monkeypatch)
 
-    create_response = client.post("/meals/", headers=headers, json={
-        "description": "100 g oatmeal",
-        "logged_at": "2026-08-31T08:00:00Z",
-    })
+    create_response = client.post(
+        "/meals/",
+        headers=headers,
+        json={
+            "description": "100 g oatmeal",
+            "logged_at": "2026-08-31T08:00:00Z",
+        },
+    )
     assert create_response.status_code == 200
     meal = create_response.json()
     assert meal["raw_description"] == "100 g oatmeal"
     assert meal["source"] == "text"
-    assert meal["items"] == [{
-        "id": meal["items"][0]["id"],
-        "food_name": "oatmeal",
-        "quantity": 100.0,
-        "unit": "g",
-        "fdc_id": 12345,
-        "calories": 71.0,
-        "protein_g": 2.54,
-        "carbs_g": 12.0,
-        "fat_g": 1.52,
-    }]
+    assert meal["items"] == [
+        {
+            "id": meal["items"][0]["id"],
+            "food_name": "oatmeal",
+            "quantity": 100.0,
+            "unit": "g",
+            "fdc_id": 12345,
+            "calories": 71.0,
+            "protein_g": 2.54,
+            "carbs_g": 12.0,
+            "fat_g": 1.52,
+        }
+    ]
 
     list_response = client.get(
         "/meals/?start_date=2026-08-31&end_date=2026-08-31",
@@ -140,7 +181,10 @@ def test_parse_failure_retries_once_and_does_not_save(client, monkeypatch):
     response = client.post("/meals/", headers=headers, json={"description": "something"})
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "Could not parse the meal description. Please be more specific."
+    assert (
+        response.json()["detail"]
+        == "Could not parse the meal description. Please be more specific."
+    )
     assert attempts == 2
     assert client.get("/meals/", headers=headers).json() == []
 
@@ -151,9 +195,15 @@ def test_unmatched_item_has_no_nutrition_numbers(client, monkeypatch):
 
     def post(url, **kwargs):
         if url == settings.OLLAMA_URL:
-            return FakeResponse({"message": {"content": json.dumps([
-                {"food_name": "mystery food", "quantity": 1, "unit": "serving"}
-            ])}})
+            return FakeResponse(
+                {
+                    "message": {
+                        "content": json.dumps(
+                            [{"food_name": "mystery food", "quantity": 1, "unit": "serving"}]
+                        )
+                    }
+                }
+            )
         return FakeResponse({"foods": []})
 
     monkeypatch.setattr("requests.post", post)
@@ -190,19 +240,41 @@ def test_meal_creation_is_rate_limited(client, monkeypatch):
 
 
 def test_parser_rejects_llm_invented_nutrition_fields(monkeypatch):
-    responses = iter([
-        FakeResponse({"message": {"content": json.dumps([{
-            "food_name": "egg",
-            "quantity": 2,
-            "unit": "large egg",
-            "calories": 999,
-        }])}}),
-        FakeResponse({"message": {"content": json.dumps([{
-            "food_name": "egg",
-            "quantity": 2,
-            "unit": "large egg",
-        }])}}),
-    ])
+    responses = iter(
+        [
+            FakeResponse(
+                {
+                    "message": {
+                        "content": json.dumps(
+                            [
+                                {
+                                    "food_name": "egg",
+                                    "quantity": 2,
+                                    "unit": "large egg",
+                                    "calories": 999,
+                                }
+                            ]
+                        )
+                    }
+                }
+            ),
+            FakeResponse(
+                {
+                    "message": {
+                        "content": json.dumps(
+                            [
+                                {
+                                    "food_name": "egg",
+                                    "quantity": 2,
+                                    "unit": "large egg",
+                                }
+                            ]
+                        )
+                    }
+                }
+            ),
+        ]
+    )
     attempts = 0
 
     def post(url, **kwargs):
@@ -221,9 +293,7 @@ def test_parser_rejects_llm_invented_nutrition_fields(monkeypatch):
     }
 
 
-def test_create_meal_from_image_uses_existing_usda_pipeline(
-    client, monkeypatch, valid_png_bytes
-):
+def test_create_meal_from_image_uses_existing_usda_pipeline(client, monkeypatch, valid_png_bytes):
     headers = _register_and_login(client, "image@example.com")
     _mock_grounded_calls(monkeypatch)
 
@@ -242,29 +312,43 @@ def test_create_meal_from_image_uses_existing_usda_pipeline(
     assert meal["items"][0]["calories"] == 71.0
 
 
-def test_image_food_alias_is_normalized_before_usda_lookup(
-    client, monkeypatch, valid_png_bytes
-):
+def test_image_food_alias_is_normalized_before_usda_lookup(client, monkeypatch, valid_png_bytes):
     headers = _register_and_login(client, "normalized-image@example.com")
     _mock_grounded_calls(monkeypatch)
 
     def vision_with_alias(url, **kwargs):
         if url == settings.OLLAMA_URL:
-            return FakeResponse({"message": {"content": json.dumps({
-                "image_type": "food",
-                "items": [{
-                    "name": "steamed rice cakes",
-                    "confidence": "high",
-                    "visual_evidence": "round white steamed cakes",
-                }],
-                "uncertain_items": [],
-            })}})
+            return FakeResponse(
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "image_type": "food",
+                                "items": [
+                                    {
+                                        "name": "steamed rice cakes",
+                                        "confidence": "high",
+                                        "visual_evidence": "round white steamed cakes",
+                                    }
+                                ],
+                                "uncertain_items": [],
+                            }
+                        )
+                    }
+                }
+            )
         assert kwargs["json"]["query"] == "idli"
-        return FakeResponse({"foods": [{
-            "fdcId": 12345,
-            "description": "Idli",
-            "dataType": "Foundation",
-        }]})
+        return FakeResponse(
+            {
+                "foods": [
+                    {
+                        "fdcId": 12345,
+                        "description": "Idli",
+                        "dataType": "Foundation",
+                    }
+                ]
+            }
+        )
 
     monkeypatch.setattr("requests.post", vision_with_alias)
     response = client.post(
@@ -279,23 +363,31 @@ def test_image_food_alias_is_normalized_before_usda_lookup(
     assert item["fdc_id"] == 12345
 
 
-def test_unmapped_image_food_is_saved_as_unidentified(
-    client, monkeypatch, valid_png_bytes
-):
+def test_unmapped_image_food_is_saved_as_unidentified(client, monkeypatch, valid_png_bytes):
     headers = _register_and_login(client, "unmapped-image@example.com")
     monkeypatch.setattr(settings, "USDA_API_KEY", "test-key")
 
     def post(url, **kwargs):
         if url == settings.OLLAMA_URL:
-            return FakeResponse({"message": {"content": json.dumps({
-                "image_type": "food",
-                "items": [{
-                    "name": "regional mystery dumpling",
-                    "confidence": "low",
-                    "visual_evidence": "partially hidden dumpling",
-                }],
-                "uncertain_items": ["exact dish is unclear"],
-            })}})
+            return FakeResponse(
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "image_type": "food",
+                                "items": [
+                                    {
+                                        "name": "regional mystery dumpling",
+                                        "confidence": "low",
+                                        "visual_evidence": "partially hidden dumpling",
+                                    }
+                                ],
+                                "uncertain_items": ["exact dish is unclear"],
+                            }
+                        )
+                    }
+                }
+            )
         return FakeResponse({"foods": []})
 
     monkeypatch.setattr("requests.post", post)
@@ -319,11 +411,19 @@ def test_unparseable_image_retries_and_is_not_saved(client, monkeypatch, valid_p
     def no_food(url, **kwargs):
         nonlocal attempts
         attempts += 1
-        return FakeResponse({"message": {"content": json.dumps({
-            "image_type": "other",
-            "items": [],
-            "uncertain_items": [],
-        })}})
+        return FakeResponse(
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "image_type": "other",
+                            "items": [],
+                            "uncertain_items": [],
+                        }
+                    )
+                }
+            }
+        )
 
     monkeypatch.setattr("requests.post", no_food)
     response = client.post(
@@ -375,9 +475,7 @@ def test_meal_image_upload_rejects_spoofed_content(client, monkeypatch):
     assert "valid supported image" in response.json()["detail"].lower()
 
 
-def test_vision_model_unavailable_returns_clear_error(
-    client, monkeypatch, valid_png_bytes
-):
+def test_vision_model_unavailable_returns_clear_error(client, monkeypatch, valid_png_bytes):
     headers = _register_and_login(client, "vision-down@example.com")
 
     def unavailable(url, **kwargs):
@@ -399,27 +497,49 @@ def test_vision_model_unavailable_returns_clear_error(
 
 
 def test_image_parser_rejects_fields_outside_vision_schema(monkeypatch):
-    responses = iter([
-        FakeResponse({"message": {"content": json.dumps({
-            "image_type": "food",
-            "items": [{
-                "name": "toast",
-                "confidence": "high",
-                "visual_evidence": "browned bread",
-                "calories": 500,
-            }],
-            "uncertain_items": [],
-        })}}),
-        FakeResponse({"message": {"content": json.dumps({
-            "image_type": "food",
-            "items": [{
-                "name": "toast",
-                "confidence": "high",
-                "visual_evidence": "browned bread",
-            }],
-            "uncertain_items": [],
-        })}}),
-    ])
+    responses = iter(
+        [
+            FakeResponse(
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "image_type": "food",
+                                "items": [
+                                    {
+                                        "name": "toast",
+                                        "confidence": "high",
+                                        "visual_evidence": "browned bread",
+                                        "calories": 500,
+                                    }
+                                ],
+                                "uncertain_items": [],
+                            }
+                        )
+                    }
+                }
+            ),
+            FakeResponse(
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "image_type": "food",
+                                "items": [
+                                    {
+                                        "name": "toast",
+                                        "confidence": "high",
+                                        "visual_evidence": "browned bread",
+                                    }
+                                ],
+                                "uncertain_items": [],
+                            }
+                        )
+                    }
+                }
+            ),
+        ]
+    )
     attempts = 0
 
     def post(url, **kwargs):
@@ -448,20 +568,22 @@ def test_image_parser_rejects_fields_outside_vision_schema(monkeypatch):
 
 
 def test_image_parser_accepts_validated_result_from_thinking_field(monkeypatch):
-    payload = json.dumps({
-        "image_type": "food",
-        "items": [{
-            "name": "steamed rice cakes",
-            "confidence": "high",
-            "visual_evidence": "round white steamed cakes",
-        }],
-        "uncertain_items": [],
-    })
+    payload = json.dumps(
+        {
+            "image_type": "food",
+            "items": [
+                {
+                    "name": "steamed rice cakes",
+                    "confidence": "high",
+                    "visual_evidence": "round white steamed cakes",
+                }
+            ],
+            "uncertain_items": [],
+        }
+    )
     monkeypatch.setattr(
         "requests.post",
-        lambda url, **kwargs: FakeResponse({
-            "message": {"content": "", "thinking": payload}
-        }),
+        lambda url, **kwargs: FakeResponse({"message": {"content": "", "thinking": payload}}),
     )
 
     parsed = ImageParserService().parse(b"image")

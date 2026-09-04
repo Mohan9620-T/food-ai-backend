@@ -3,7 +3,6 @@ from pathlib import Path
 
 from PIL import Image
 
-
 DATASET_ROOT = Path(__file__).parents[1] / "docs" / "vision-eval-dataset"
 
 

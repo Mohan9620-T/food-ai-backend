@@ -96,6 +96,10 @@ export class ChatWindow implements AfterViewChecked {
     this.previewImageUrl.set(null);
   }
 
+  closeImagePreviewFromBackdrop(event: MouseEvent): void {
+    if (event.target === event.currentTarget) this.closeImagePreview();
+  }
+
   @HostListener('document:keydown.escape')
   closeImagePreviewFromKeyboard(): void {
     this.closeImagePreview();

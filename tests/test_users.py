@@ -1,9 +1,8 @@
 def test_create_user_success(client):
-    response = client.post("/users/", json={
-        "fullname": "Test User",
-        "email": "test@example.com",
-        "password": "test123"
-    })
+    response = client.post(
+        "/users/",
+        json={"fullname": "Test User", "email": "test@example.com", "password": "test123"},
+    )
 
     assert response.status_code == 200
     data = response.json()
@@ -14,11 +13,7 @@ def test_create_user_success(client):
 
 
 def test_create_user_duplicate_email_fails(client):
-    payload = {
-        "fullname": "Test User",
-        "email": "duplicate@example.com",
-        "password": "test123"
-    }
+    payload = {"fullname": "Test User", "email": "duplicate@example.com", "password": "test123"}
 
     first = client.post("/users/", json=payload)
     assert first.status_code == 200
@@ -29,16 +24,14 @@ def test_create_user_duplicate_email_fails(client):
 
 
 def test_login_success(client):
-    client.post("/users/", json={
-        "fullname": "Login User",
-        "email": "login@example.com",
-        "password": "mypassword"
-    })
+    client.post(
+        "/users/",
+        json={"fullname": "Login User", "email": "login@example.com", "password": "mypassword"},
+    )
 
-    response = client.post("/users/login", json={
-        "email": "login@example.com",
-        "password": "mypassword"
-    })
+    response = client.post(
+        "/users/login", json={"email": "login@example.com", "password": "mypassword"}
+    )
 
     assert response.status_code == 200
     data = response.json()
@@ -48,44 +41,53 @@ def test_login_success(client):
 
 
 def test_login_wrong_password_fails(client):
-    client.post("/users/", json={
-        "fullname": "Login User",
-        "email": "wrongpass@example.com",
-        "password": "correctpassword"
-    })
+    client.post(
+        "/users/",
+        json={
+            "fullname": "Login User",
+            "email": "wrongpass@example.com",
+            "password": "correctpassword",
+        },
+    )
 
-    response = client.post("/users/login", json={
-        "email": "wrongpass@example.com",
-        "password": "incorrectpassword"
-    })
+    response = client.post(
+        "/users/login", json={"email": "wrongpass@example.com", "password": "incorrectpassword"}
+    )
 
     assert response.status_code == 401
 
 
 def test_login_nonexistent_user_fails(client):
-    response = client.post("/users/login", json={
-        "email": "doesnotexist@example.com",
-        "password": "anything"
-    })
+    response = client.post(
+        "/users/login", json={"email": "doesnotexist@example.com", "password": "anything"}
+    )
 
     assert response.status_code == 401
 
 
 def test_access_token_is_short_lived(client):
     from datetime import datetime, timezone
+
     from jose import jwt
+
     from app.utils.security import ALGORITHM, SECRET_KEY
 
-    client.post("/users/", json={
-        "fullname": "Remembered User",
-        "email": "remember@example.com",
-        "password": "mypassword"
-    })
+    client.post(
+        "/users/",
+        json={
+            "fullname": "Remembered User",
+            "email": "remember@example.com",
+            "password": "mypassword",
+        },
+    )
 
-    response = client.post("/users/login", json={
-        "email": "remember@example.com",
-        "password": "mypassword",
-    })
+    response = client.post(
+        "/users/login",
+        json={
+            "email": "remember@example.com",
+            "password": "mypassword",
+        },
+    )
 
     payload = jwt.decode(response.json()["access_token"], SECRET_KEY, algorithms=[ALGORITHM])
     remaining_minutes = (
@@ -100,16 +102,22 @@ def test_remember_me_creates_long_lived_hashed_refresh_token(client, db_session)
     from app.models.refresh_token import RefreshToken
     from app.utils.security import hash_refresh_token
 
-    client.post("/users/", json={
-        "fullname": "Remembered User",
-        "email": "remember@example.com",
-        "password": "mypassword"
-    })
-    response = client.post("/users/login", json={
-        "email": "remember@example.com",
-        "password": "mypassword",
-        "remember_me": True,
-    })
+    client.post(
+        "/users/",
+        json={
+            "fullname": "Remembered User",
+            "email": "remember@example.com",
+            "password": "mypassword",
+        },
+    )
+    response = client.post(
+        "/users/login",
+        json={
+            "email": "remember@example.com",
+            "password": "mypassword",
+            "remember_me": True,
+        },
+    )
 
     raw_token = response.json()["refresh_token"]
     stored_token = db_session.query(RefreshToken).one()
@@ -125,15 +133,17 @@ def test_remember_me_creates_long_lived_hashed_refresh_token(client, db_session)
 def test_refresh_and_logout_revoke_token(client, db_session):
     from app.models.refresh_token import RefreshToken
 
-    client.post("/users/", json={
-        "fullname": "Refresh User",
-        "email": "refresh@example.com",
-        "password": "mypassword"
-    })
-    login_response = client.post("/users/login", json={
-        "email": "refresh@example.com",
-        "password": "mypassword",
-    })
+    client.post(
+        "/users/",
+        json={"fullname": "Refresh User", "email": "refresh@example.com", "password": "mypassword"},
+    )
+    login_response = client.post(
+        "/users/login",
+        json={
+            "email": "refresh@example.com",
+            "password": "mypassword",
+        },
+    )
     refresh_token = login_response.json()["refresh_token"]
 
     refresh_response = client.post("/users/refresh", json={"refresh_token": refresh_token})
@@ -151,11 +161,14 @@ def test_refresh_and_logout_revoke_token(client, db_session):
 
 def test_registration_is_rate_limited(client):
     responses = [
-        client.post("/users/", json={
-            "fullname": f"Rate User {index}",
-            "email": f"rate-{index}@example.com",
-            "password": "mypassword",
-        })
+        client.post(
+            "/users/",
+            json={
+                "fullname": f"Rate User {index}",
+                "email": f"rate-{index}@example.com",
+                "password": "mypassword",
+            },
+        )
         for index in range(6)
     ]
 

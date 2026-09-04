@@ -1,6 +1,5 @@
-from contextlib import contextmanager
 import threading
-
+from contextlib import contextmanager
 
 # A single shared slot intentionally serializes meal and chat vision inference.
 # On CPU-only hosts, parallel model calls compete for the same cores and make both

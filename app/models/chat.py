@@ -1,8 +1,7 @@
+import base64
 from datetime import datetime, timezone
 
-import base64
-
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, LargeBinary
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import relationship
 
 from app.database.database import Base
@@ -15,13 +14,17 @@ class ChatSession(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String(255), nullable=False, default="New chat")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     messages = relationship(
         "ChatMessageRecord",
         back_populates="session",
         cascade="all, delete-orphan",
-        order_by="ChatMessageRecord.created_at"
+        order_by="ChatMessageRecord.created_at",
     )
 
 

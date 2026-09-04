@@ -1,8 +1,8 @@
-import bcrypt
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 from jose import JWTError, jwt
 
 from app.config.settings import (
@@ -22,10 +22,7 @@ def hash_password(plain_password: str) -> str:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return bcrypt.checkpw(
-        plain_password.encode("utf-8"),
-        hashed_password.encode("utf-8")
-    )
+    return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
@@ -48,9 +45,7 @@ def decode_access_token(token: str) -> dict | None:
 def create_refresh_token(remember_me: bool = False) -> tuple[str, datetime]:
     raw_token = secrets.token_urlsafe(48)
     lifetime_days = (
-        REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS
-        if remember_me
-        else REFRESH_TOKEN_EXPIRE_DAYS
+        REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS if remember_me else REFRESH_TOKEN_EXPIRE_DAYS
     )
     return raw_token, datetime.now(timezone.utc) + timedelta(days=lifetime_days)
 

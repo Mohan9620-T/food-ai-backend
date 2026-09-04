@@ -11,26 +11,22 @@ from app.services.image_parser_service import VisionModelUnavailableError
 
 
 def _register_and_login(client, email="chatuser@example.com", password="chat12345"):
-    client.post("/users/", json={
-        "fullname": "Chat User",
-        "email": email,
-        "password": password
-    })
+    client.post("/users/", json={"fullname": "Chat User", "email": email, "password": password})
 
-    login_response = client.post("/users/login", json={
-        "email": email,
-        "password": password
-    })
+    login_response = client.post("/users/login", json={"email": email, "password": password})
 
     return login_response.json()["access_token"]
 
 
 def test_chat_requires_authentication(client):
-    response = client.post("/chat/", json={
-        "message": "Hi",
-        "history": [{"role": "user", "content": "Hi"}],
-        "reference_history": []
-    })
+    response = client.post(
+        "/chat/",
+        json={
+            "message": "Hi",
+            "history": [{"role": "user", "content": "Hi"}],
+            "reference_history": [],
+        },
+    )
 
     assert response.status_code in (401, 403)
 
@@ -41,9 +37,9 @@ def test_chat_rejects_invalid_token(client):
         json={
             "message": "Hi",
             "history": [{"role": "user", "content": "Hi"}],
-            "reference_history": []
+            "reference_history": [],
         },
-        headers={"Authorization": "Bearer not-a-real-token"}
+        headers={"Authorization": "Bearer not-a-real-token"},
     )
 
     assert response.status_code == 401
@@ -98,9 +94,7 @@ def test_chat_vision_continues_existing_session_and_persists_image(
     )
     assert response.status_code == 200
     assert response.json()["session_id"] == existing["id"]
-    history = client.get(
-        f"/chat/sessions/{existing['id']}", headers=headers
-    ).json()["messages"]
+    history = client.get(f"/chat/sessions/{existing['id']}", headers=headers).json()["messages"]
     assert [(item["sender"], item["content"]) for item in history] == [
         ("user", "[Image]"),
         ("bot", "It contains a blue logo."),
@@ -109,9 +103,7 @@ def test_chat_vision_continues_existing_session_and_persists_image(
     assert history[0]["image_url"].startswith("data:image/png;base64,")
 
 
-def test_chat_vision_returns_503_when_model_is_unavailable(
-    client, monkeypatch, valid_png_bytes
-):
+def test_chat_vision_returns_503_when_model_is_unavailable(client, monkeypatch, valid_png_bytes):
     token = _register_and_login(client, "vision-unavailable@example.com")
 
     def unavailable(self, image_bytes, user_message):
@@ -194,7 +186,9 @@ def test_chat_vision_requires_authentication(client):
     assert response.status_code in (401, 403)
 
 
-def test_consolidate_sessions_preserves_messages_from_different_dates_in_one_conversation(client, db_session):
+def test_consolidate_sessions_preserves_messages_from_different_dates_in_one_conversation(
+    client, db_session
+):
     token = _register_and_login(client, "consolidate@example.com")
     headers = {"Authorization": f"Bearer {token}"}
     session_ids = []
@@ -208,19 +202,23 @@ def test_consolidate_sessions_preserves_messages_from_different_dates_in_one_con
         imported = client.post(
             f"/chat/sessions/{session['id']}/import",
             headers=headers,
-            json={"messages": [
-                {"sender": "user", "content": f"Question {index + 1}"},
-                {"sender": "bot", "content": f"Answer {index + 1}"},
-            ]},
+            json={
+                "messages": [
+                    {"sender": "user", "content": f"Question {index + 1}"},
+                    {"sender": "bot", "content": f"Answer {index + 1}"},
+                ]
+            },
         )
         assert imported.status_code == 200
 
         day = 10 if index < 2 else 11
         timestamp = datetime(2026, 8, day, 9 + index, tzinfo=timezone.utc)
-        db_session.query(ChatSession).filter(ChatSession.id == session["id"]).update({
-            ChatSession.created_at: timestamp,
-            ChatSession.updated_at: timestamp,
-        })
+        db_session.query(ChatSession).filter(ChatSession.id == session["id"]).update(
+            {
+                ChatSession.created_at: timestamp,
+                ChatSession.updated_at: timestamp,
+            }
+        )
         db_session.query(ChatMessageRecord).filter(
             ChatMessageRecord.session_id == session["id"]
         ).update({ChatMessageRecord.created_at: timestamp})
@@ -230,11 +228,14 @@ def test_consolidate_sessions_preserves_messages_from_different_dates_in_one_con
     assert response.status_code == 200
     sessions = client.get("/chat/sessions", headers=headers).json()
     assert len(sessions) == 1
-    history = client.get(
-        f"/chat/sessions/{sessions[0]['id']}", headers=headers
-    ).json()["messages"]
+    history = client.get(f"/chat/sessions/{sessions[0]['id']}", headers=headers).json()["messages"]
     assert [message["content"] for message in history] == [
-        "Question 1", "Answer 1", "Question 2", "Answer 2", "Question 3", "Answer 3",
+        "Question 1",
+        "Answer 1",
+        "Question 2",
+        "Answer 2",
+        "Question 3",
+        "Answer 3",
     ]
 
 
@@ -244,7 +245,7 @@ def test_chat_success_with_valid_token(client, monkeypatch):
     monkeypatch.setattr(
         ChatService,
         "chat",
-        lambda self, message, history, reference_history: "Vanakkam! Nalla irukeenga?"
+        lambda self, message, history, reference_history: "Vanakkam! Nalla irukeenga?",
     )
 
     response = client.post(
@@ -252,9 +253,9 @@ def test_chat_success_with_valid_token(client, monkeypatch):
         json={
             "message": "Hi",
             "history": [{"role": "user", "content": "Hi"}],
-            "reference_history": []
+            "reference_history": [],
         },
-        headers={"Authorization": f"Bearer {token}"}
+        headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 200
@@ -390,7 +391,8 @@ def test_chat_stream_returns_session_tokens_and_persists_answer(client, monkeypa
     events = [__import__("json").loads(line) for line in response.text.splitlines()]
     assert events[0]["type"] == "session"
     assert [event.get("content") for event in events if event["type"] == "token"] == [
-        "Hello ", "there"
+        "Hello ",
+        "there",
     ]
     assert events[-1] == {"type": "done"}
 
@@ -534,7 +536,8 @@ def test_chat_service_does_not_duplicate_latest_message(monkeypatch):
     )
 
     matches = [
-        item for item in captured["body"]["messages"]
+        item
+        for item in captured["body"]["messages"]
         if item["role"] == "user" and item["content"] == "sapadu list sollu"
     ]
     assert len(matches) == 1
@@ -670,9 +673,7 @@ def test_latest_language_instruction_follows_old_tanglish_history(monkeypatch):
         "role": "user",
         "content": "Which character has the best development?",
     }
-    assert not any(
-        item.get("content") == "Sari, anime pathi solren" for item in messages
-    )
+    assert not any(item.get("content") == "Sari, anime pathi solren" for item in messages)
 
 
 def test_english_response_written_in_tanglish_is_rewritten(monkeypatch):
@@ -688,10 +689,12 @@ def test_english_response_written_in_tanglish_is_rewritten(monkeypatch):
         def json(self):
             return {"message": {"content": self.content}}
 
-    responses = iter([
-        FakeResponse("Aama, kandippa! Enna help venum nu sollunga."),
-        FakeResponse("Certainly! How can I help you?"),
-    ])
+    responses = iter(
+        [
+            FakeResponse("Aama, kandippa! Enna help venum nu sollunga."),
+            FakeResponse("Certainly! How can I help you?"),
+        ]
+    )
 
     def fake_post(url, json, timeout):
         captured_bodies.append(json.copy())
@@ -704,9 +707,7 @@ def test_english_response_written_in_tanglish_is_rewritten(monkeypatch):
     assert answer == "Certainly! How can I help you?"
     assert len(captured_bodies) == 2
     assert "only in English" in captured_bodies[1]["messages"][-1]["content"]
-    assert "transliterated non-English words" in (
-        captured_bodies[1]["messages"][-1]["content"]
-    )
+    assert "transliterated non-English words" in (captured_bodies[1]["messages"][-1]["content"])
 
 
 def test_tanglish_response_in_tamil_script_is_rewritten(monkeypatch):
@@ -722,10 +723,12 @@ def test_tanglish_response_in_tamil_script_is_rewritten(monkeypatch):
         def json(self):
             return {"message": {"content": self.content}}
 
-    responses = iter([
-        FakeResponse("உங்களுக்கு என்ன உணவு பிடிக்கும்?"),
-        FakeResponse("Ungalukku enna unavu pidikkum?"),
-    ])
+    responses = iter(
+        [
+            FakeResponse("உங்களுக்கு என்ன உணவு பிடிக்கும்?"),
+            FakeResponse("Ungalukku enna unavu pidikkum?"),
+        ]
+    )
 
     def fake_post(url, json, timeout):
         captured_bodies.append(json.copy())
@@ -737,8 +740,9 @@ def test_tanglish_response_in_tamil_script_is_rewritten(monkeypatch):
 
     assert answer == "Ungalukku enna unavu pidikkum?"
     assert len(captured_bodies) == 2
-    assert "Use Latin/English letters for every word" in (
-        captured_bodies[1]["messages"][-1]["content"]
+    assert (
+        "Use Latin/English letters for every word"
+        in (captured_bodies[1]["messages"][-1]["content"])
     )
 
 
@@ -750,8 +754,8 @@ def test_system_prompt_separates_source_content_from_format_example():
     assert "example's subject" in prompt
     assert "**Repro Steps:**" in prompt
     assert "**Expected Result:**" in prompt
-    assert "do not write \"Not specified\"" in prompt
-    assert "only for a \"bug type sentence\"" in prompt
+    assert 'do not write "Not specified"' in prompt
+    assert 'only for a "bug type sentence"' in prompt
 
 
 def test_system_prompt_requires_natural_tanglish_without_inventing_content():

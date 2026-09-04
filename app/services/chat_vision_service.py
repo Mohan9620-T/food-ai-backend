@@ -1,7 +1,7 @@
 import base64
-from io import BytesIO
 import logging
 import re
+from io import BytesIO
 
 import requests
 from pydantic import ValidationError
@@ -113,12 +113,8 @@ Group repeated objects of the same kind into one item. Keep every name and visua
         if result.items:
             rendered_items = []
             for item in result.items:
-                qualifier = {"high": "", "medium": "likely ", "low": "possibly "}[
-                    item.confidence
-                ]
-                rendered_items.append(
-                    f"{qualifier}{item.name} ({item.visual_evidence})"
-                )
+                qualifier = {"high": "", "medium": "likely ", "low": "possibly "}[item.confidence]
+                rendered_items.append(f"{qualifier}{item.name} ({item.visual_evidence})")
             parts.append("I can see " + "; ".join(rendered_items) + ".")
         else:
             image_kind = (

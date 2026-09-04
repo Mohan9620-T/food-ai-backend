@@ -57,9 +57,7 @@ class MealRepository:
     def get_daily_totals(self, db: Session, user_id: int, target_date: date) -> dict:
         meals = self.list_for_user(db, user_id, target_date, target_date)
         matched = [item for meal in meals for item in meal.items if item.fdc_id is not None]
-        unmatched_count = sum(
-            1 for meal in meals for item in meal.items if item.fdc_id is None
-        )
+        unmatched_count = sum(1 for meal in meals for item in meal.items if item.fdc_id is None)
         return {
             "date": target_date,
             "calories": round(sum(item.calories or 0 for item in matched), 2),
@@ -71,10 +69,14 @@ class MealRepository:
         }
 
     def delete(self, db: Session, meal_id: int, user_id: int) -> bool:
-        meal = db.query(MealLog).filter(
-            MealLog.id == meal_id,
-            MealLog.user_id == user_id,
-        ).first()
+        meal = (
+            db.query(MealLog)
+            .filter(
+                MealLog.id == meal_id,
+                MealLog.user_id == user_id,
+            )
+            .first()
+        )
         if not meal:
             return False
         db.delete(meal)

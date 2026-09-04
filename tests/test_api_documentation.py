@@ -48,9 +48,7 @@ def test_openapi_lists_key_documented_error_responses(client):
     assert {"400", "401", "422", "429"} <= set(
         schema["paths"]["/diet-plans/generate"]["post"]["responses"]
     )
-    assert {"400", "422", "429"} <= set(
-        schema["paths"]["/users/"]["post"]["responses"]
-    )
+    assert {"400", "422", "429"} <= set(schema["paths"]["/users/"]["post"]["responses"])
 
 
 def test_swagger_ui_renders(client):

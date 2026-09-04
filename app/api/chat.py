@@ -9,26 +9,22 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database.database import get_db
 from app.rate_limit import limiter
-from app.schemas.chat import ChatRequest, ChatResponse
-from app.schemas.chat import ChatHistoryMessage
+from app.repositories.chat_repository import ChatRepository
+from app.schemas.chat import ChatHistoryMessage, ChatRequest, ChatResponse
 from app.schemas.chat_session import (
-    ChatSessionOut,
-    ChatSessionDetailOut,
     ChatSessionCreate,
+    ChatSessionDetailOut,
     ChatSessionImport,
+    ChatSessionOut,
     ChatSessionRename,
 )
 from app.services.chat_service import ChatModelUnavailableError, ChatService
 from app.services.chat_vision_service import ChatVisionService
 from app.services.image_parser_service import VisionModelUnavailableError
 from app.services.image_validation import InvalidImageError, validate_image_content
-from app.repositories.chat_repository import ChatRepository
 from app.utils.auth_dependency import get_current_user
 
-router = APIRouter(
-    prefix="/chat",
-    tags=["AI Chat"]
-)
+router = APIRouter(prefix="/chat", tags=["AI Chat"])
 
 service = ChatService()
 vision_service = ChatVisionService()
@@ -92,7 +88,7 @@ def list_sessions(db: Session = Depends(get_db), current_user: dict = Depends(ge
 def create_session(
     payload: ChatSessionCreate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     return repository.create_session(db, _get_user_id(current_user), payload.title)
 
@@ -129,9 +125,7 @@ def consolidate_sessions(
     },
 )
 def get_session(
-    session_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    session_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
 ):
     session = repository.get_session(db, session_id, _get_user_id(current_user))
     if not session:
@@ -185,7 +179,7 @@ def rename_session(
     session_id: int,
     payload: ChatSessionRename,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     session = repository.rename_session(db, session_id, _get_user_id(current_user), payload.title)
     if not session:
@@ -204,9 +198,7 @@ def rename_session(
     },
 )
 def delete_session(
-    session_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    session_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
 ):
     deleted = repository.delete_session(db, session_id, _get_user_id(current_user))
     if not deleted:
@@ -221,7 +213,9 @@ def delete_session(
     description="Generate a text response and persist the completed turn in a new or existing chat session.",
     responses={
         401: {"description": "Missing, invalid, or expired access token."},
-        404: {"description": "The requested chat session does not exist or belongs to another user."},
+        404: {
+            "description": "The requested chat session does not exist or belongs to another user."
+        },
         422: {"description": "The message or session ID failed validation."},
         503: {"description": "The configured Ollama text model is unavailable."},
     },
@@ -230,13 +224,11 @@ def chat(
     request: ChatRequest,
     session_id: int | None = None,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = _get_user_id(current_user)
 
-    session = _get_or_create_chat_session(
-        db, user_id, session_id, request.message
-    )
+    session = _get_or_create_chat_session(db, user_id, session_id, request.message)
 
     history = _get_persisted_history(db, session.id)
 
@@ -263,7 +255,9 @@ def chat(
     description="Analyze an uploaded image and persist the image, prompt, and response in a chat session.",
     responses={
         401: {"description": "Missing, invalid, or expired access token."},
-        404: {"description": "The requested chat session does not exist or belongs to another user."},
+        404: {
+            "description": "The requested chat session does not exist or belongs to another user."
+        },
         413: {"description": "The uploaded image exceeds 8 MB."},
         415: {"description": "The uploaded file is not a supported image type."},
         422: {"description": "The image or form data is invalid or empty."},
@@ -359,7 +353,9 @@ async def chat_vision(
     ),
     responses={
         401: {"description": "Missing, invalid, or expired access token."},
-        404: {"description": "The requested chat session does not exist or belongs to another user."},
+        404: {
+            "description": "The requested chat session does not exist or belongs to another user."
+        },
         422: {"description": "The message or session ID failed validation."},
     },
 )
@@ -371,9 +367,7 @@ async def stream_chat(
     current_user: dict = Depends(get_current_user),
 ):
     user_id = _get_user_id(current_user)
-    session = _get_or_create_chat_session(
-        db, user_id, session_id, payload.message
-    )
+    session = _get_or_create_chat_session(db, user_id, session_id, payload.message)
 
     history = _get_persisted_history(db, session.id)
     repository.add_message(db, session.id, "user", payload.message)
@@ -405,10 +399,12 @@ async def stream_chat(
                 "chat.stream_generation_failed",
                 extra={"user_id": user_id, "session_id": session.id},
             )
-            await events.put({
-                "type": "error",
-                "message": "The response could not be generated. Please try again.",
-            })
+            await events.put(
+                {
+                    "type": "error",
+                    "message": "The response could not be generated. Please try again.",
+                }
+            )
             return
         finally:
             close = getattr(iterator, "aclose", None)

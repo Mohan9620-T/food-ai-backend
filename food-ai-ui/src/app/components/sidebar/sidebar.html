@@ -19,7 +19,7 @@
       <li class="conversation-row" [class.active]="conversation.id === activeConversationId()">
         @if (pendingRenameId() === conversation.id) {
           <form class="inline-rename" (ngSubmit)="confirmRenameConversation()">
-            <input name="conversationTitle" aria-label="New chat title" maxlength="100" required autofocus [(ngModel)]="renameTitle" />
+            <input name="conversationTitle" aria-label="New chat title" maxlength="100" required [(ngModel)]="renameTitle" />
             <button type="submit" aria-label="Save chat title">✓</button>
             <button type="button" aria-label="Cancel rename" (click)="cancelRenameConversation()">×</button>
           </form>
@@ -30,7 +30,7 @@
         }
         <button type="button" class="menu-trigger" [attr.aria-expanded]="openMenuId() === conversation.id" aria-label="Chat options for {{ conversation.title }}" (click)="$event.stopPropagation(); toggleMenu(conversation.id)">•••</button>
         @if (openMenuId() === conversation.id) {
-          <div class="conversation-menu" role="menu" (click)="$event.stopPropagation()">
+          <div class="conversation-menu" role="menu">
             <button type="button" role="menuitem" (click)="requestRenameConversation(conversation.id, conversation.title)">Rename</button>
             <button type="button" role="menuitem" class="delete" (click)="requestDeleteConversation(conversation.id, conversation.title)">Delete</button>
           </div>
@@ -52,10 +52,10 @@
   </div>
 </aside>
 @if (pendingDelete(); as conversation) {
-  <div class="dialog-backdrop" (click)="cancelDeleteConversation()">
-    <section class="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description" (click)="$event.stopPropagation()">
+  <div class="dialog-backdrop" (click)="cancelDeleteFromBackdrop($event)" (keydown.escape)="cancelDeleteConversation()" tabindex="-1">
+    <section class="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description">
       <h2 id="delete-title">Delete chat?</h2><p id="delete-description">This will permanently delete <strong>{{ conversation.title }}</strong>.</p>
-      <div class="dialog-actions"><button type="button" autofocus (click)="cancelDeleteConversation()">Cancel</button><button class="confirm-delete-button" type="button" (click)="confirmDeleteConversation()">Delete</button></div>
+      <div class="dialog-actions"><button type="button" (click)="cancelDeleteConversation()">Cancel</button><button class="confirm-delete-button" type="button" (click)="confirmDeleteConversation()">Delete</button></div>
     </section>
   </div>
 }

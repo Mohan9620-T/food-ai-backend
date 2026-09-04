@@ -1,10 +1,9 @@
 from sqlalchemy.orm import Session
 
-from app.models.chat import ChatSession, ChatMessageRecord
+from app.models.chat import ChatMessageRecord, ChatSession
 
 
 class ChatRepository:
-
     def get_message_history(
         self,
         db: Session,
@@ -75,7 +74,9 @@ class ChatRepository:
             .first()
         )
 
-    def add_message(self, db: Session, session_id: int, sender: str, content: str) -> ChatMessageRecord:
+    def add_message(
+        self, db: Session, session_id: int, sender: str, content: str
+    ) -> ChatMessageRecord:
         message = ChatMessageRecord(session_id=session_id, sender=sender, content=content)
         db.add(message)
         db.commit()
@@ -132,7 +133,9 @@ class ChatRepository:
             db.refresh(record)
         return records
 
-    def rename_session(self, db: Session, session_id: int, user_id: int, title: str) -> ChatSession | None:
+    def rename_session(
+        self, db: Session, session_id: int, user_id: int, title: str
+    ) -> ChatSession | None:
         session = self.get_session(db, session_id, user_id)
         if not session:
             return None

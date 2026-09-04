@@ -1,5 +1,5 @@
-from io import BytesIO
 import warnings
+from io import BytesIO
 
 from PIL import Image, UnidentifiedImageError
 
@@ -39,6 +39,4 @@ def validate_image_content(image_bytes: bytes, declared_content_type: str) -> No
         raise InvalidImageError("Uploaded file is not a valid supported image.") from error
 
     if detected_content_type is None or detected_content_type != declared_content_type:
-        raise InvalidImageError(
-            "Uploaded image content does not match its declared file type."
-        )
+        raise InvalidImageError("Uploaded image content does not match its declared file type.")

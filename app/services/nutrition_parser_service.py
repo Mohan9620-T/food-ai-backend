@@ -45,10 +45,13 @@ If an amount is implied as one item, use quantity 1 and the item as the unit.
                 ],
             }
             if attempt:
-                body["messages"].insert(1, {
-                    "role": "system",
-                    "content": "The previous output was invalid. Return only the required JSON array.",
-                })
+                body["messages"].insert(
+                    1,
+                    {
+                        "role": "system",
+                        "content": "The previous output was invalid. Return only the required JSON array.",
+                    },
+                )
             try:
                 response = requests.post(
                     settings.OLLAMA_URL,

@@ -1,6 +1,7 @@
-from dotenv import load_dotenv
 import os
 from urllib.parse import quote_plus
+
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -10,8 +11,7 @@ DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DATABASE_URL = os.getenv("DATABASE_URL") or (
-    f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD or '')}@"
-    f"{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD or '')}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 )
 
 SMTP_HOST = os.getenv("SMTP_HOST")
@@ -30,12 +30,8 @@ OLLAMA_CHAT_MAX_TOKENS = int(os.getenv("OLLAMA_CHAT_MAX_TOKENS", "768"))
 OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen3-vl:4b")
 OLLAMA_VISION_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_VISION_TIMEOUT_SECONDS", "660"))
 OLLAMA_VISION_MAX_DIMENSION = int(os.getenv("OLLAMA_VISION_MAX_DIMENSION", "1024"))
-OLLAMA_CHAT_VISION_MODEL = os.getenv(
-    "OLLAMA_CHAT_VISION_MODEL", "qwen3-vl:4b"
-).strip()
-OLLAMA_CHAT_VISION_TIMEOUT_SECONDS = int(
-    os.getenv("OLLAMA_CHAT_VISION_TIMEOUT_SECONDS", "660")
-)
+OLLAMA_CHAT_VISION_MODEL = os.getenv("OLLAMA_CHAT_VISION_MODEL", "qwen3-vl:4b").strip()
+OLLAMA_CHAT_VISION_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_CHAT_VISION_TIMEOUT_SECONDS", "660"))
 USDA_API_KEY = os.getenv("USDA_API_KEY", "").strip()
 USDA_API_URL = os.getenv("USDA_API_URL", "https://api.nal.usda.gov/fdc/v1").rstrip("/")
 USDA_TIMEOUT_SECONDS = int(os.getenv("USDA_TIMEOUT_SECONDS", "15"))
@@ -49,9 +45,7 @@ ALLOWED_ORIGINS = [
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-only-change-this-secret")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
-REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS = int(
-    os.getenv("REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS", "30")
-)
+REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS = int(os.getenv("REMEMBERED_ACCESS_TOKEN_EXPIRE_DAYS", "30"))
 
 LOGIN_RATE_LIMIT = os.getenv("LOGIN_RATE_LIMIT", "5/minute")
 REGISTER_RATE_LIMIT = os.getenv("REGISTER_RATE_LIMIT", "5/minute")

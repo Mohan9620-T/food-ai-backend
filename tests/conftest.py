@@ -2,25 +2,23 @@ import os
 from io import BytesIO
 
 import pytest
+from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from fastapi.testclient import TestClient
 
 os.environ["MIGRATION_CHECK_ENABLED"] = "false"
 
-from app.main import app
 from app.database.database import Base, get_db
+from app.main import app
 from app.rate_limit import limiter
 
 # Use a fresh in-memory SQLite database for tests instead of the real Postgres DB.
 TEST_DATABASE_URL = "sqlite:///:memory:"
 
 engine = create_engine(
-    TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool
+    TEST_DATABASE_URL, connect_args={"check_same_thread": False}, poolclass=StaticPool
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

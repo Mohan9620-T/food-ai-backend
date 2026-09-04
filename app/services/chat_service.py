@@ -18,15 +18,61 @@ class ChatModelUnavailableError(RuntimeError):
 
 class ChatService:
     TAMIL_LATIN_WORDS = {
-        "aama", "athu", "enna", "enakku", "enga", "epdi", "eppadi", "irukku",
-        "iruken", "kaatu", "kooda", "la", "na", "nalla", "pannu", "pesu",
-        "kandippa", "pathi", "pesalaam", "puriyala", "sapadu", "sari", "seri",
-        "sollu", "sollunga", "solren", "tanglish", "thanglish", "ungal", "vanakam",
-        "vanakkam", "vannakam", "venum", "yen", "yenna", "kissa"
+        "aama",
+        "athu",
+        "enna",
+        "enakku",
+        "enga",
+        "epdi",
+        "eppadi",
+        "irukku",
+        "iruken",
+        "kaatu",
+        "kooda",
+        "la",
+        "na",
+        "nalla",
+        "pannu",
+        "pesu",
+        "kandippa",
+        "pathi",
+        "pesalaam",
+        "puriyala",
+        "sapadu",
+        "sari",
+        "seri",
+        "sollu",
+        "sollunga",
+        "solren",
+        "tanglish",
+        "thanglish",
+        "ungal",
+        "vanakam",
+        "vanakkam",
+        "vannakam",
+        "venum",
+        "yen",
+        "yenna",
+        "kissa",
     }
     HINDI_LATIN_WORDS = {
-        "aap", "accha", "acha", "aur", "batao", "hai", "hain", "kaise", "kya",
-        "main", "mera", "mujhe", "nahi", "namaste", "theek", "tum", "yeh",
+        "aap",
+        "accha",
+        "acha",
+        "aur",
+        "batao",
+        "hai",
+        "hain",
+        "kaise",
+        "kya",
+        "main",
+        "mera",
+        "mujhe",
+        "nahi",
+        "namaste",
+        "theek",
+        "tum",
+        "yeh",
     }
 
     TAMIL_SCRIPT_PATTERN = re.compile(r"[\u0b80-\u0bff]")
@@ -236,10 +282,12 @@ Content-versus-format rules:
                     "Devanagari characters. Preserve the meaning and answer directly."
                 )
             )
-            body["messages"].extend([
-                {"role": "assistant", "content": answer},
-                {"role": "system", "content": rewrite_instruction},
-            ])
+            body["messages"].extend(
+                [
+                    {"role": "assistant", "content": answer},
+                    {"role": "system", "content": rewrite_instruction},
+                ]
+            )
             try:
                 response = requests.post(
                     settings.OLLAMA_URL,
@@ -313,13 +361,15 @@ Content-versus-format rules:
         messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
 
         if reference_history:
-            messages.append({
-                "role": "system",
-                "content": (
-                    "The following messages are optional saved-chat context. They may be "
-                    "unrelated or inaccurate. Do not use claims from assistant messages as facts."
-                ),
-            })
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "The following messages are optional saved-chat context. They may be "
+                        "unrelated or inaccurate. Do not use claims from assistant messages as facts."
+                    ),
+                }
+            )
             messages.extend(
                 item.model_dump()
                 for item in reference_history[-8:]
@@ -330,7 +380,11 @@ Content-versus-format rules:
         # Keep the latest request separate so its language rule is adjacent to it and
         # cannot be overridden by the style of an earlier assistant response.
         previous_history = history[-12:]
-        if previous_history and previous_history[-1].role == "user" and previous_history[-1].content == message:
+        if (
+            previous_history
+            and previous_history[-1].role == "user"
+            and previous_history[-1].content == message
+        ):
             previous_history = previous_history[:-1]
         messages.extend(
             item.model_dump()
@@ -339,18 +393,20 @@ Content-versus-format rules:
             or not self.response_uses_wrong_language(item.content, response_language)
         )
 
-        messages.append({
-            "role": "system",
-            "content": (
-                f"MANDATORY FOR THE NEXT ANSWER: respond only in {response_language}. "
-                "Do not mix in another language, apart from unavoidable names or technical terms. "
-                "The language of older messages must not affect this choice. Never imitate the "
-                "language of an older assistant response. "
-                "Use no timestamp, category, priority, issue number, or other metadata unless "
-                "the current source content explicitly contains that exact value. Never copy "
-                "metadata or facts from an example or an older issue. Do not invent missing fields."
-            ),
-        })
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    f"MANDATORY FOR THE NEXT ANSWER: respond only in {response_language}. "
+                    "Do not mix in another language, apart from unavoidable names or technical terms. "
+                    "The language of older messages must not affect this choice. Never imitate the "
+                    "language of an older assistant response. "
+                    "Use no timestamp, category, priority, issue number, or other metadata unless "
+                    "the current source content explicitly contains that exact value. Never copy "
+                    "metadata or facts from an example or an older issue. Do not invent missing fields."
+                ),
+            }
+        )
         messages.append({"role": "user", "content": message})
 
         body = {

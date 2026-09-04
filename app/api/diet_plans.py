@@ -24,19 +24,28 @@ def _serialize(plan) -> dict:
     for day in range(7):
         items = [item for meal in plan.meals if meal.day_of_week == day for item in meal.items]
         matched = [item for item in items if item.fdc_id is not None]
-        totals.append({
-            "day_of_week": day,
-            "calories": round(sum(item.calories or 0 for item in matched), 2),
-            "protein_g": round(sum(item.protein_g or 0 for item in matched), 2),
-            "carbs_g": round(sum(item.carbs_g or 0 for item in matched), 2),
-            "fat_g": round(sum(item.fat_g or 0 for item in matched), 2),
-            "matched_items": len(matched),
-            "unmatched_items": len(items) - len(matched),
-        })
-    return {"id": plan.id, "user_id": plan.user_id, "created_at": plan.created_at,
-            "target_calories": plan.target_calories, "target_protein_g": plan.target_protein_g,
-            "target_carbs_g": plan.target_carbs_g, "target_fat_g": plan.target_fat_g,
-            "meals": plan.meals, "daily_totals": totals}
+        totals.append(
+            {
+                "day_of_week": day,
+                "calories": round(sum(item.calories or 0 for item in matched), 2),
+                "protein_g": round(sum(item.protein_g or 0 for item in matched), 2),
+                "carbs_g": round(sum(item.carbs_g or 0 for item in matched), 2),
+                "fat_g": round(sum(item.fat_g or 0 for item in matched), 2),
+                "matched_items": len(matched),
+                "unmatched_items": len(items) - len(matched),
+            }
+        )
+    return {
+        "id": plan.id,
+        "user_id": plan.user_id,
+        "created_at": plan.created_at,
+        "target_calories": plan.target_calories,
+        "target_protein_g": plan.target_protein_g,
+        "target_carbs_g": plan.target_carbs_g,
+        "target_fat_g": plan.target_fat_g,
+        "meals": plan.meals,
+        "daily_totals": totals,
+    }
 
 
 @router.post(
@@ -52,11 +61,15 @@ def _serialize(plan) -> dict:
     },
 )
 @limiter.limit(settings.MEAL_CREATE_RATE_LIMIT)
-def generate_plan(request: Request, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def generate_plan(
+    request: Request, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
+):
     user_id = int(current_user["sub"])
     profile = profile_service.get(db, user_id)
     if profile is None:
-        raise HTTPException(status_code=400, detail="Set up your profile before generating a diet plan.")
+        raise HTTPException(
+            status_code=400, detail="Set up your profile before generating a diet plan."
+        )
     try:
         days = generator.generate(profile)
     except DietPlanGenerationError as error:
@@ -89,7 +102,9 @@ def list_plans(db: Session = Depends(get_db), current_user: dict = Depends(get_c
         422: {"description": "The plan ID failed validation."},
     },
 )
-def get_plan(plan_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def get_plan(
+    plan_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
+):
     plan = repository.get(db, plan_id, int(current_user["sub"]))
     if plan is None:
         raise HTTPException(status_code=404, detail="Diet plan not found")
@@ -106,7 +121,9 @@ def get_plan(plan_id: int, db: Session = Depends(get_db), current_user: dict = D
         422: {"description": "The plan ID failed validation."},
     },
 )
-def delete_plan(plan_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def delete_plan(
+    plan_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
+):
     if not repository.delete(db, plan_id, int(current_user["sub"])):
         raise HTTPException(status_code=404, detail="Diet plan not found")
     return {"detail": "Diet plan deleted"}

@@ -27,10 +27,18 @@ class NutritionResult:
 class UsdaNutritionService:
     NUTRIENT_IDS = {"calories": 1008, "protein_g": 1003, "carbs_g": 1005, "fat_g": 1004}
     MASS_TO_GRAMS = {
-        "g": 1.0, "gram": 1.0, "grams": 1.0,
-        "kg": 1000.0, "kilogram": 1000.0, "kilograms": 1000.0,
-        "oz": 28.3495, "ounce": 28.3495, "ounces": 28.3495,
-        "lb": 453.592, "pound": 453.592, "pounds": 453.592,
+        "g": 1.0,
+        "gram": 1.0,
+        "grams": 1.0,
+        "kg": 1000.0,
+        "kilogram": 1000.0,
+        "kilograms": 1000.0,
+        "oz": 28.3495,
+        "ounce": 28.3495,
+        "ounces": 28.3495,
+        "lb": 453.592,
+        "pound": 453.592,
+        "pounds": 453.592,
     }
 
     def __init__(self) -> None:
@@ -120,16 +128,19 @@ class UsdaNutritionService:
             return quantity * self.MASS_TO_GRAMS[normalized_unit]
 
         for portion in food.get("foodPortions", []):
-            descriptor = " ".join(filter(None, [
-                str(portion.get("modifier", "")),
-                str(portion.get("portionDescription", "")),
-                str((portion.get("measureUnit") or {}).get("name", "")),
-                str((portion.get("measureUnit") or {}).get("abbreviation", "")),
-            ]))
+            descriptor = " ".join(
+                filter(
+                    None,
+                    [
+                        str(portion.get("modifier", "")),
+                        str(portion.get("portionDescription", "")),
+                        str((portion.get("measureUnit") or {}).get("name", "")),
+                        str((portion.get("measureUnit") or {}).get("abbreviation", "")),
+                    ],
+                )
+            )
             descriptor = self._normalize(descriptor)
-            if normalized_unit and (
-                normalized_unit in descriptor or descriptor in normalized_unit
-            ):
+            if normalized_unit and (normalized_unit in descriptor or descriptor in normalized_unit):
                 gram_weight = portion.get("gramWeight")
                 amount = float(portion.get("amount") or 1)
                 if gram_weight is not None and amount > 0:
@@ -154,7 +165,9 @@ class UsdaNutritionService:
     @staticmethod
     def _normalize(value: str) -> str:
         words = re.findall(r"[a-z0-9]+", value.lower())
-        return " ".join(word[:-1] if word.endswith("s") and len(word) > 3 else word for word in words)
+        return " ".join(
+            word[:-1] if word.endswith("s") and len(word) > 3 else word for word in words
+        )
 
     @staticmethod
     def _unmatched(item: ParsedFoodItem) -> NutritionResult:

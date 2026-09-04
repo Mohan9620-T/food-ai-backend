@@ -2,7 +2,6 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance
 
-
 DATASET_ROOT = Path(__file__).parents[1] / "docs" / "vision-eval-dataset" / "images"
 
 
@@ -22,9 +21,7 @@ def save_crop(source: str, destination: str) -> None:
 
 def save_rotated(source: str, destination: str) -> None:
     with Image.open(DATASET_ROOT / source) as image:
-        image.convert("RGB").rotate(24, expand=False).save(
-            DATASET_ROOT / destination, quality=90
-        )
+        image.convert("RGB").rotate(24, expand=False).save(DATASET_ROOT / destination, quality=90)
 
 
 def save_occluded(source: str, destination: str) -> None:
@@ -42,9 +39,7 @@ def save_crop_rotated(source: str, destination: str) -> None:
     with Image.open(DATASET_ROOT / source) as image:
         width, height = image.size
         cropped = image.crop((width // 8, height // 8, width * 7 // 8, height * 7 // 8))
-        cropped.convert("RGB").rotate(24, expand=False).save(
-            DATASET_ROOT / destination, quality=90
-        )
+        cropped.convert("RGB").rotate(24, expand=False).save(DATASET_ROOT / destination, quality=90)
 
 
 save_low_light("indian-001-idli-sambar.jpg", "indian-010-idli-sambar-low-light.jpg")

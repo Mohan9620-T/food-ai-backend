@@ -6,26 +6,33 @@ import { SpeechRecognitionService } from './speech-recognition';
 type MockRecognition = {
   continuous: boolean;
   interimResults: boolean;
-  onresult: ((event: any) => void) | null;
-  onerror: ((event: any) => void) | null;
+  onresult: ((event: MockResultEvent) => void) | null;
+  onerror: ((event: MockErrorEvent) => void) | null;
   onend: (() => void) | null;
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
 };
 
-let instance: MockRecognition | null = null;
+type MockResultEvent = Event & {
+  readonly resultIndex: number;
+  readonly results: ArrayLike<ArrayLike<{ transcript: string }> & { readonly isFinal: boolean }>;
+};
+
+type MockErrorEvent = Event & { readonly error: string };
+
+const instances: MockRecognition[] = [];
 
 class MockSpeechRecognition {
   continuous = false;
   interimResults = false;
-  onresult: ((event: any) => void) | null = null;
-  onerror: ((event: any) => void) | null = null;
+  onresult: ((event: MockResultEvent) => void) | null = null;
+  onerror: ((event: MockErrorEvent) => void) | null = null;
   onend: (() => void) | null = null;
   start = vi.fn();
   stop = vi.fn();
 
   constructor() {
-    instance = this;
+    instances.push(this);
   }
 }
 
@@ -40,11 +47,22 @@ function setRecognitionConstructor(value?: typeof MockSpeechRecognition): void {
   });
 }
 
+function resultEvent(
+  results: MockResultEvent['results'],
+  resultIndex = 0
+): MockResultEvent {
+  return Object.assign(new Event('result'), { resultIndex, results });
+}
+
+function errorEvent(error: string): MockErrorEvent {
+  return Object.assign(new Event('error'), { error });
+}
+
 describe('SpeechRecognitionService', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
     setRecognitionConstructor(undefined);
-    instance = null;
+    instances.length = 0;
   });
 
   it('reports whether browser speech recognition is supported', () => {
@@ -62,16 +80,13 @@ describe('SpeechRecognitionService', () => {
     const onFinal = vi.fn();
 
     service.start(onInterim, onFinal);
-    instance!.onresult!({
-      resultIndex: 0,
-      results: [
+    instances[0].onresult!(resultEvent([
         Object.assign([{ transcript: 'hello' }], { isFinal: false }),
         Object.assign([{ transcript: ' world ' }], { isFinal: true })
-      ]
-    });
+      ]));
 
-    expect(instance!.continuous).toBe(true);
-    expect(instance!.interimResults).toBe(true);
+    expect(instances[0].continuous).toBe(true);
+    expect(instances[0].interimResults).toBe(true);
     expect(service.isListening()).toBe(true);
     expect(onInterim).toHaveBeenCalledWith('hello');
     expect(onFinal).toHaveBeenCalledWith('world ');
@@ -82,7 +97,7 @@ describe('SpeechRecognitionService', () => {
     const service = new SpeechRecognitionService();
     service.start(vi.fn(), vi.fn());
 
-    instance!.onerror!({ error: 'not-allowed' });
+    instances[0].onerror!(errorEvent('not-allowed'));
 
     expect(service.error()).toBe('not-allowed');
     expect(service.isListening()).toBe(false);
@@ -93,13 +108,12 @@ describe('SpeechRecognitionService', () => {
     const service = new SpeechRecognitionService();
     const onFinal = vi.fn();
     service.start(vi.fn(), onFinal);
-    const event = {
-      resultIndex: 0,
-      results: [Object.assign([{ transcript: 'Are you?' }], { isFinal: true })]
-    };
+    const event = resultEvent([
+      Object.assign([{ transcript: 'Are you?' }], { isFinal: true })
+    ]);
 
-    instance!.onresult!(event);
-    instance!.onresult!(event);
+    instances[0].onresult!(event);
+    instances[0].onresult!(event);
 
     expect(onFinal).toHaveBeenCalledOnce();
     expect(onFinal).toHaveBeenCalledWith('Are you? ');
@@ -110,7 +124,7 @@ describe('SpeechRecognitionService', () => {
     const service = new SpeechRecognitionService();
     const onInterim = vi.fn();
     service.start(onInterim, vi.fn());
-    const recognition = instance!;
+    const recognition = instances[0];
 
     service.stop();
 
