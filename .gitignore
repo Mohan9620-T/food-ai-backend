@@ -16,6 +16,8 @@ food-ai-ui/node_modules/
 food-ai-ui/dist/
 food-ai-ui/.angular/
 food-ai-ui/coverage/
+food-ai-ui/playwright-report/
+food-ai-ui/test-results/
  
 # IDE
 .vscode/

@@ -75,3 +75,24 @@ jobs:
       - name: Build frontend
         working-directory: food-ai-ui
         run: npx ng build
+
+  e2e:
+    name: End-to-end tests (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: food-ai-ui/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: food-ai-ui
+        run: npm ci
+      - name: Install Playwright browser
+        working-directory: food-ai-ui
+        run: npx playwright install --with-deps chromium
+      - name: Run Playwright end-to-end tests
+        working-directory: food-ai-ui
+        run: npm run e2e
