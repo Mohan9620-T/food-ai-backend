@@ -50,6 +50,21 @@ OLLAMA_VISION_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_VISION_TIMEOUT_SECONDS", "
 OLLAMA_VISION_MAX_DIMENSION = int(os.getenv("OLLAMA_VISION_MAX_DIMENSION", "1024"))
 OLLAMA_CHAT_VISION_MODEL = os.getenv("OLLAMA_CHAT_VISION_MODEL", "qwen3-vl:4b").strip()
 OLLAMA_CHAT_VISION_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_CHAT_VISION_TIMEOUT_SECONDS", "660"))
+
+# Vision provider routing: "ollama" (local, private, free-forever) or
+# "nvidia" (hosted API via build.nvidia.com, free credits, requires
+# internet and sends images off-device). Ollama remains the default so
+# existing deployments are unaffected unless this is explicitly set.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
+NVIDIA_API_BASE_URL = os.getenv(
+    "NVIDIA_API_BASE_URL", "https://integrate.api.nvidia.com/v1"
+).rstrip("/")
+NVIDIA_CHAT_VISION_MODEL = os.getenv(
+    "NVIDIA_CHAT_VISION_MODEL", "meta/llama-3.2-11b-vision-instruct"
+).strip()
+NVIDIA_VISION_TIMEOUT_SECONDS = int(os.getenv("NVIDIA_VISION_TIMEOUT_SECONDS", "120"))
 USDA_API_KEY = os.getenv("USDA_API_KEY", "").strip()
 USDA_API_URL = os.getenv("USDA_API_URL", "https://api.nal.usda.gov/fdc/v1").rstrip("/")
 USDA_TIMEOUT_SECONDS = int(os.getenv("USDA_TIMEOUT_SECONDS", "15"))

@@ -3,13 +3,9 @@ import logging
 import re
 from io import BytesIO
 
-import requests
-from pydantic import ValidationError
-
-from app.config import settings
 from app.schemas.vision_result import VisionResult
-from app.services.image_parser_service import VisionModelUnavailableError
 from app.services.vision_image_preprocessor import prepare_vision_image
+from app.services.vision_providers import get_vision_provider
 from app.services.vision_runtime import vision_inference_slot
 
 logger = logging.getLogger(__name__)
@@ -54,51 +50,12 @@ Group repeated objects of the same kind into one item. Keep every name and visua
             )
         try:
             with vision_inference_slot():
-                response = requests.post(
-                    settings.OLLAMA_URL,
-                    json={
-                        "model": settings.OLLAMA_CHAT_VISION_MODEL,
-                        "stream": False,
-                        "think": False,
-                        "keep_alive": settings.OLLAMA_KEEP_ALIVE,
-                        "format": VisionResult.model_json_schema(),
-                        "options": {
-                            "temperature": 0,
-                            "num_ctx": 8192,
-                            "num_predict": 1024,
-                        },
-                        "messages": [
-                            {"role": "system", "content": self.SYSTEM_PROMPT},
-                            {
-                                "role": "user",
-                                "content": prompt,
-                                "images": [encoded_image],
-                            },
-                        ],
-                    },
-                    timeout=settings.OLLAMA_CHAT_VISION_TIMEOUT_SECONDS,
+                result = get_vision_provider().infer(
+                    system_prompt=self.SYSTEM_PROMPT,
+                    user_prompt=prompt,
+                    encoded_image=encoded_image,
                 )
-                response.raise_for_status()
-        except requests.Timeout as error:
-            logger.warning("chat.vision_model_timeout")
-            raise VisionModelUnavailableError(
-                "Chat vision analysis timed out after "
-                f"{settings.OLLAMA_CHAT_VISION_TIMEOUT_SECONDS} seconds. "
-                "The model may still be finishing another request; please try again."
-            ) from error
-        except requests.RequestException as error:
-            logger.warning("chat.vision_model_unavailable")
-            raise VisionModelUnavailableError(
-                "Chat vision model unavailable: configured model "
-                f"'{settings.OLLAMA_CHAT_VISION_MODEL}'. "
-                "Confirm Ollama is running and the model is installed."
-            ) from error
-
-        try:
-            message = response.json()["message"]
-            content = message.get("content") or message.get("thinking")
-            result = VisionResult.model_validate_json(content)
-        except (KeyError, TypeError, ValueError, ValidationError):
+        except ValueError:
             logger.warning("chat.vision_response_invalid")
             return self.EMPTY_RESPONSE_MESSAGE
 
