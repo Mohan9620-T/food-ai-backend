@@ -6,11 +6,15 @@ import angular from 'angular-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', '.angular/**'],
+    ignores: ['dist/**', 'node_modules/**', '.angular/**', 'coverage/**'],
   },
   {
     files: ['**/*.ts'],
-    extends: [eslint.configs.recommended, ...tseslint.configs.recommended, ...angular.configs.tsRecommended],
+    extends: [
+      eslint.configs.recommended,
+      ...tseslint.configs.recommended,
+      ...angular.configs.tsRecommended,
+    ],
     processor: angular.processInlineTemplates,
     languageOptions: {
       globals: {

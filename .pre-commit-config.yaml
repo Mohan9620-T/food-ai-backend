@@ -35,3 +35,4 @@ repos:
         entry: node food-ai-ui/node_modules/prettier/bin/prettier.cjs --check
         language: system
         files: ^food-ai-ui/.*\.(?:js|mjs|cjs|ts|html|css|scss|json|md|ya?ml)$
+        exclude: ^food-ai-ui/package-lock\.json$

@@ -68,10 +68,10 @@ jobs:
       - name: Apply database migrations
         run: alembic -c app/alembic.ini upgrade head
       - name: Run backend tests
-        run: python -m pytest -v
+        run: python -m pytest -v --cov=app --cov-report=term --cov-fail-under=90
       - name: Run frontend tests
         working-directory: food-ai-ui
-        run: npx ng test --watch=false
+        run: npx ng test --watch=false --coverage
       - name: Build frontend
         working-directory: food-ai-ui
         run: npx ng build

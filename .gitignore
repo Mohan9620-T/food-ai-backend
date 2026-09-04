@@ -7,11 +7,14 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
+.coverage
+htmlcov/
  
 # Node / Angular
 food-ai-ui/node_modules/
 food-ai-ui/dist/
 food-ai-ui/.angular/
+food-ai-ui/coverage/
  
 # IDE
 .vscode/
