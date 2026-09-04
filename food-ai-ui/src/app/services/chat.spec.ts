@@ -129,4 +129,27 @@ describe('ChatService session continuity', () => {
     expect(service.consumeRetryMessage()).toBeNull();
     expect(service.messages()).toHaveLength(1);
   });
+
+  it('restores the selected server chat instead of always opening the first chat', () => {
+    const internal = service as unknown as {
+      isBrowser: boolean;
+      setLoadedConversations: (conversations: Array<{
+        id: string;
+        sessionId: number;
+        title: string;
+        messages: [];
+        updatedAt: number;
+      }>) => void;
+    };
+    internal.isBrowser = true;
+    localStorage.setItem('food-ai-active-session-v2:42', '22');
+
+    internal.setLoadedConversations([
+      { id: '11', sessionId: 11, title: 'Chat 1', messages: [], updatedAt: 2 },
+      { id: '22', sessionId: 22, title: 'Chat 2', messages: [], updatedAt: 1 }
+    ]);
+
+    expect(service.getActiveConversationId()).toBe('22');
+    localStorage.removeItem('food-ai-active-session-v2:42');
+  });
 });

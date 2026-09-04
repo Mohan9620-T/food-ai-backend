@@ -55,6 +55,7 @@ export class ChatService {
   private readonly legacyStorageKeyPrefix = 'food-ai-chat-conversations';
   private readonly legacyActiveStorageKeyPrefix = 'food-ai-active-chat';
   private readonly legacyPendingStorageKeyPrefix = 'food-ai-pending-response';
+  private readonly activeStorageKeyPrefix = 'food-ai-active-session-v2';
   private readonly migrationFlagPrefix = 'food-ai-migrated-v1';
   private readonly consolidationFlagPrefix = 'food-ai-sessions-consolidated-single-v3';
 
@@ -179,6 +180,7 @@ export class ChatService {
         updatedAt: Date.now()
       };
     }).sort((first, second) => second.updatedAt - first.updatedAt));
+    this.persistActiveConversation();
   }
 
   private acceptStreamSession(conversationId: string, sessionId: number): string {
@@ -192,6 +194,7 @@ export class ChatService {
           }
         : conversation
     ));
+    this.persistActiveConversation();
     return conversationId;
   }
 
@@ -287,6 +290,7 @@ export class ChatService {
     const conversation = this.createDraftConversation();
     this.conversationsState.update((conversations) => [conversation, ...conversations]);
     this.activeConversationIdState.set(conversation.id);
+    this.persistActiveConversation();
     this.editingMessageState.set(null);
   }
 
@@ -294,6 +298,7 @@ export class ChatService {
     if (this.conversationsState().some((conversation) => conversation.id === conversationId)) {
       this.editingMessageState.set(null);
       this.activeConversationIdState.set(conversationId);
+      this.persistActiveConversation();
     }
   }
 
@@ -531,8 +536,29 @@ export class ChatService {
 
   private setLoadedConversations(conversations: ChatConversation[]): void {
     this.conversationsState.set(conversations);
-    this.activeConversationIdState.set(conversations[0]?.id ?? null);
+    const savedSessionId = this.getSavedActiveSessionId();
+    const restored = savedSessionId
+      ? conversations.find(conversation => String(conversation.sessionId) === savedSessionId)
+      : undefined;
+    this.activeConversationIdState.set(restored?.id ?? conversations[0]?.id ?? null);
     this.ensureDraftConversation();
+    this.persistActiveConversation();
+  }
+
+  private getSavedActiveSessionId(): string | null {
+    if (!this.isBrowser) return null;
+    const userId = this.authService.currentUserId();
+    return userId ? localStorage.getItem(`${this.activeStorageKeyPrefix}:${userId}`) : null;
+  }
+
+  private persistActiveConversation(): void {
+    if (!this.isBrowser) return;
+    const userId = this.authService.currentUserId();
+    if (!userId) return;
+    const key = `${this.activeStorageKeyPrefix}:${userId}`;
+    const active = this.getActiveConversation();
+    if (active?.sessionId !== undefined) localStorage.setItem(key, String(active.sessionId));
+    else localStorage.removeItem(key);
   }
 
   isMessageAwaitingResponse(index: number): boolean {
@@ -637,6 +663,7 @@ export class ChatService {
       this.activeConversationIdState.set(conversations[0]?.id ?? null);
     }
     this.ensureDraftConversation();
+    this.persistActiveConversation();
   }
 
   private getActiveConversation(): ChatConversation | undefined {
