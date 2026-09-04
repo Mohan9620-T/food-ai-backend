@@ -48,6 +48,11 @@ jobs:
       - name: Install frontend dependencies
         working-directory: food-ai-ui
         run: npm ci
+      - name: Audit backend dependencies
+        run: pip-audit -r requirements.txt
+      - name: Audit frontend dependencies
+        working-directory: food-ai-ui
+        run: npm audit --audit-level=high
       - name: Lint backend
         run: |
           ruff check .
