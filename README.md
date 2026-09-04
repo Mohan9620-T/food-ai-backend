@@ -278,6 +278,24 @@ npm start
 
 App available at \`http://localhost:4200\`.
 
+## Pre-commit checks
+
+Install the development dependencies and enable the repository hooks once per clone:
+
+\`\`\`powershell
+pip install -r requirements-dev.txt
+pre-commit install
+\`\`\`
+
+The hooks check staged backend Python with Ruff, type-check the backend with MyPy,
+and run ESLint and Prettier checks for staged frontend files. Frontend hooks require
+the packages from `food-ai-ui/package-lock.json` to be installed with `npm ci` (or
+`npm install`). To check the entire repository without making a commit, run:
+
+\`\`\`powershell
+pre-commit run --all-files
+\`\`\`
+
 ## Running tests
 
 Tests use an isolated in-memory SQLite database — no real database connection required.
