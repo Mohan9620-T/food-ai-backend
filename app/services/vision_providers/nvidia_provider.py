@@ -42,7 +42,10 @@ class NvidiaVisionProvider(VisionProvider):
         try:
             response = requests.post(
                 f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {settings.NVIDIA_API_KEY}"},
+                headers={
+                    "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
+                    "Content-Type": "application/json",
+                },
                 json={
                     "model": settings.NVIDIA_CHAT_VISION_MODEL,
                     "stream": False,

@@ -61,6 +61,17 @@ def test_infer_rejects_malformed_json(monkeypatch):
         NvidiaVisionProvider().infer("system", "user", "encoded-image")
 
 
+def test_infer_rejects_invalid_schema(monkeypatch):
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "nvapi-test")
+    monkeypatch.setattr(
+        "requests.post",
+        lambda *args, **kwargs: response_with(json.dumps({"image_type": "unknown"})),
+    )
+
+    with pytest.raises(ValueError, match="NVIDIA vision response was not valid JSON"):
+        NvidiaVisionProvider().infer("system", "user", "encoded-image")
+
+
 def test_infer_translates_timeout(monkeypatch):
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "nvapi-test")
 
@@ -90,7 +101,18 @@ def test_infer_uses_openai_image_url_payload(monkeypatch):
 
     NvidiaVisionProvider().infer("system", "user question", "encoded-image")
 
+    assert post.call_args.args[0] == f"{settings.NVIDIA_API_BASE_URL}/chat/completions"
+    assert post.call_args.kwargs["headers"] == {
+        "Authorization": "Bearer nvapi-test",
+        "Content-Type": "application/json",
+    }
+    assert post.call_args.kwargs["timeout"] == settings.NVIDIA_VISION_TIMEOUT_SECONDS
     payload = post.call_args.kwargs["json"]
+    assert payload["model"] == settings.NVIDIA_CHAT_VISION_MODEL
+    assert payload["stream"] is False
+    assert payload["temperature"] == 0
+    assert payload["max_tokens"] == 1024
+    assert "Respond with ONLY a single JSON object" in payload["messages"][0]["content"]
     user_content = payload["messages"][1]["content"]
     assert user_content == [
         {"type": "text", "text": "user question"},

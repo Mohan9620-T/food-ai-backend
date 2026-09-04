@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
+from app.config import settings
 from app.services.image_parser_service import VisionModelUnavailableError
 from app.services.vision_providers.ollama_provider import OllamaVisionProvider
 
@@ -39,7 +40,17 @@ def test_infer_returns_validated_result(monkeypatch):
 
     assert result.image_type == "food"
     assert result.items[0].name == "idli"
+    assert post.call_args.args[0] == settings.OLLAMA_URL
+    assert post.call_args.kwargs["timeout"] == settings.OLLAMA_CHAT_VISION_TIMEOUT_SECONDS
     payload = post.call_args.kwargs["json"]
+    assert payload["model"] == settings.OLLAMA_CHAT_VISION_MODEL
+    assert payload["stream"] is False
+    assert payload["think"] is False
+    assert payload["options"] == {
+        "temperature": 0,
+        "num_ctx": 8192,
+        "num_predict": 1024,
+    }
     assert payload["messages"][-1] == {
         "role": "user",
         "content": "user",
@@ -57,6 +68,16 @@ def test_infer_accepts_valid_result_from_thinking_field(monkeypatch):
 
 def test_infer_rejects_invalid_json(monkeypatch):
     monkeypatch.setattr("requests.post", lambda *args, **kwargs: response_with("not-json"))
+
+    with pytest.raises(ValueError, match="Ollama vision response was not valid JSON"):
+        OllamaVisionProvider().infer("system", "user", "encoded-image")
+
+
+def test_infer_rejects_invalid_schema(monkeypatch):
+    monkeypatch.setattr(
+        "requests.post",
+        lambda *args, **kwargs: response_with(json.dumps({"image_type": "unknown"})),
+    )
 
     with pytest.raises(ValueError, match="Ollama vision response was not valid JSON"):
         OllamaVisionProvider().infer("system", "user", "encoded-image")
