@@ -20,6 +20,12 @@ class ChatService:
     HISTORY_MESSAGE_LIMIT = 8
     REFERENCE_MESSAGE_LIMIT = 4
     CONTEXT_MESSAGE_CHAR_LIMIT = 2000
+    STANDING_PREFERENCE_PATTERN = re.compile(
+        r"\b(?:call|address|refer to)\s+(?:me\s+)?(?:as\s+)?[a-z0-9_-]+"
+        r"|\bmy name is\b|\bi (?:prefer|always (?:prefer|like|want))\b"
+        r"|\bremember (?:that|to)\b",
+        re.IGNORECASE,
+    )
     TAMIL_LATIN_WORDS = {
         "aama",
         "athu",
@@ -125,6 +131,13 @@ Accuracy rules:
   in the user's language and ask for the missing detail.
 - Do not claim to have current/live data or access to databases, files, or services
   unless that data is actually included in the conversation.
+
+Response presentation:
+- Use clean Markdown when it improves readability. Use short headings, bullet points,
+  and **bold text** for important labels or conclusions in structured answers.
+- Add one or two relevant emojis to friendly, motivational, comparison, status, or
+  celebratory answers. Do not add emojis to every sentence, and avoid them when the
+  user requests plain text, code, JSON, or another strict format.
 
 Content-versus-format rules:
 - When the user first provides content and then provides an example/template, treat
@@ -408,6 +421,26 @@ Content-versus-format rules:
             if item.role == "user"
             or not self.response_uses_wrong_language(item.content, response_language)
         )
+
+        recent_contents = {item.content for item in previous_history}
+        standing_preferences = [
+            item
+            for item in history
+            if item.role == "user"
+            and item.content not in recent_contents
+            and self.STANDING_PREFERENCE_PATTERN.search(item.content)
+        ][-2:]
+        if standing_preferences:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Standing preferences explicitly stated by this user are listed next. "
+                        "Honor the latest applicable preference naturally in the answer."
+                    ),
+                }
+            )
+            messages.extend(self._context_message(item) for item in standing_preferences)
 
         messages.append(
             {

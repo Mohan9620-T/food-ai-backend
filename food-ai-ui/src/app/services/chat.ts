@@ -400,9 +400,17 @@ export class ChatService {
 
   getReferenceHistory(query: string, activeConversationId: string): ChatHistoryMessage[] {
     const keywords = query.toLowerCase().match(/[a-z0-9]+/g)?.filter((word) => word.length > 2) ?? [];
-    if (keywords.length === 0) return [];
-    return this.conversationsState()
+    const otherConversations = this.conversationsState()
       .filter((conversation) => conversation.id !== activeConversationId)
+      .sort((first, second) => first.updatedAt - second.updatedAt);
+    const standingPreferences = otherConversations
+      .flatMap((conversation) => conversation.messages)
+      .filter((message) => message.sender === 'user' && this.isStandingPreference(message.text))
+      .slice(-4)
+      .map((message) => ({ role: 'user' as const, content: message.text }));
+    if (keywords.length === 0) return standingPreferences;
+
+    const topicalContext: ChatHistoryMessage[] = otherConversations
       .map((conversation) => ({
         conversation,
         score: keywords.reduce((total, keyword) => {
@@ -418,6 +426,20 @@ export class ChatService {
         role: message.sender === 'user' ? 'user' : 'assistant',
         content: message.text
       }));
+
+    const seen = new Set<string>();
+    return [...topicalContext, ...standingPreferences]
+      .filter((message) => {
+        const key = `${message.role}:${message.content}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(-8);
+  }
+
+  private isStandingPreference(text: string): boolean {
+    return /\b(?:call|address|refer to)\s+(?:me\s+)?(?:as\s+)?[a-z0-9_-]+|\bmy name is\b|\bi (?:prefer|always (?:prefer|like|want))\b|\bremember (?:that|to)\b/i.test(text);
   }
 
   renameConversation(conversationId: string, title: string): void {

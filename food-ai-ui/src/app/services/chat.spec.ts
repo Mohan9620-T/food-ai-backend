@@ -173,6 +173,29 @@ describe('ChatService session continuity', () => {
     expect(service.consumeRetryMessage()).toBeNull();
   });
 
+  it('includes standing preferences from another chat without keyword overlap', () => {
+    const internal = service as unknown as {
+      setLoadedConversations: (conversations: ChatConversation[]) => void;
+    };
+    internal.setLoadedConversations([
+      { id: '50', sessionId: 50, title: 'Motivation', messages: [], updatedAt: 2 },
+      {
+        id: '49',
+        sessionId: 49,
+        title: 'Introduction',
+        messages: [{ sender: 'user', text: 'Please call me Master in every chat.' }],
+        updatedAt: 1
+      }
+    ]);
+
+    const context = service.getReferenceHistory('Give me some motivation', '50');
+
+    expect(context).toContainEqual({
+      role: 'user',
+      content: 'Please call me Master in every chat.'
+    });
+  });
+
   it('polls only recent pending sessions instead of reloading every conversation', () => {
     vi.useFakeTimers();
     const internal = service as unknown as {

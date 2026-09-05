@@ -576,6 +576,34 @@ def test_chat_service_bounds_old_context_for_faster_local_inference():
     assert len(truncated) <= ChatService.CONTEXT_MESSAGE_CHAR_LIMIT
 
 
+def test_chat_service_preserves_old_standing_preference_outside_recent_history():
+    history = [ChatHistoryMessage(role="user", content="Please call me Master in every chat.")]
+    history.extend(
+        ChatHistoryMessage(role="user", content=f"ordinary message {index}")
+        for index in range(ChatService.HISTORY_MESSAGE_LIMIT + 2)
+    )
+
+    _, body = ChatService()._build_request_body(
+        "Give me some motivation",
+        history,
+        [],
+        stream=True,
+    )
+
+    assert any(
+        item["role"] == "user" and item["content"] == "Please call me Master in every chat."
+        for item in body["messages"]
+    )
+
+
+def test_system_prompt_requests_readable_markdown_and_relevant_emojis():
+    prompt = ChatService.SYSTEM_PROMPT
+
+    assert "**bold text**" in prompt
+    assert "one or two relevant emojis" in prompt
+    assert "code, JSON, or another strict format" in prompt
+
+
 def test_language_detection_uses_latest_message_only():
     assert ChatService.detect_language("Explain South Indian food") == "English"
     assert ChatService.detect_language("எனக்கு உணவு பற்றி சொல்லுங்கள்") == "Tamil (Tamil script)"
