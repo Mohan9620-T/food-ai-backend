@@ -17,6 +17,9 @@ class ChatModelUnavailableError(RuntimeError):
 
 
 class ChatService:
+    HISTORY_MESSAGE_LIMIT = 8
+    REFERENCE_MESSAGE_LIMIT = 4
+    CONTEXT_MESSAGE_CHAR_LIMIT = 2000
     TAMIL_LATIN_WORDS = {
         "aama",
         "athu",
@@ -107,6 +110,8 @@ Language handling:
 
 Accuracy rules:
 - Answer the latest user message directly and use conversation history only as context.
+- Keep ordinary answers concise (normally under 150 words). Give a longer response only
+  when the user explicitly requests detail, steps, a list, code, or a full explanation.
 - Preserve explicit user preferences and standing instructions throughout the current
   chat. For example, if the user asks to be called "boss", naturally use "boss" in
   later replies until the user changes or withdraws that preference.
@@ -258,10 +263,13 @@ Content-versus-format rules:
             response = requests.post(
                 settings.OLLAMA_URL,
                 json=body,
-                timeout=settings.OLLAMA_TIMEOUT_SECONDS,
+                timeout=(
+                    settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
+                    settings.OLLAMA_TIMEOUT_SECONDS,
+                ),
             )
             response.raise_for_status()
-        except (requests.Timeout, requests.ConnectionError) as error:
+        except requests.RequestException as error:
             logger.warning("chat.text_model_unavailable")
             raise ChatModelUnavailableError(
                 "Text chat model is still loading or unavailable. Please try again shortly."
@@ -292,10 +300,13 @@ Content-versus-format rules:
                 response = requests.post(
                     settings.OLLAMA_URL,
                     json=body,
-                    timeout=settings.OLLAMA_TIMEOUT_SECONDS,
+                    timeout=(
+                        settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
+                        settings.OLLAMA_TIMEOUT_SECONDS,
+                    ),
                 )
                 response.raise_for_status()
-            except (requests.Timeout, requests.ConnectionError) as error:
+            except requests.RequestException as error:
                 logger.warning("chat.text_model_unavailable")
                 raise ChatModelUnavailableError(
                     "Text chat model is still loading or unavailable. Please try again shortly."
@@ -317,7 +328,12 @@ Content-versus-format rules:
             return
 
         _, body = self._build_request_body(message, history, reference_history, stream=True)
-        timeout = httpx.Timeout(settings.OLLAMA_TIMEOUT_SECONDS)
+        timeout = httpx.Timeout(
+            connect=settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
+            read=settings.OLLAMA_TIMEOUT_SECONDS,
+            write=30,
+            pool=settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
+        )
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("POST", settings.OLLAMA_URL, json=body) as response:
@@ -331,7 +347,7 @@ Content-versus-format rules:
                             yield content
                         if event.get("done"):
                             break
-        except (httpx.TimeoutException, httpx.ConnectError) as error:
+        except httpx.TransportError as error:
             logger.warning("chat.text_stream_model_unavailable")
             raise ChatModelUnavailableError(
                 "Text chat model is still loading or unavailable. Please try again shortly."
@@ -371,15 +387,15 @@ Content-versus-format rules:
                 }
             )
             messages.extend(
-                item.model_dump()
-                for item in reference_history[-8:]
+                self._context_message(item)
+                for item in reference_history[-self.REFERENCE_MESSAGE_LIMIT :]
                 if item.role == "user"
                 or not self.response_uses_wrong_language(item.content, response_language)
             )
 
         # Keep the latest request separate so its language rule is adjacent to it and
         # cannot be overridden by the style of an earlier assistant response.
-        previous_history = history[-12:]
+        previous_history = history[-self.HISTORY_MESSAGE_LIMIT :]
         if (
             previous_history
             and previous_history[-1].role == "user"
@@ -387,7 +403,7 @@ Content-versus-format rules:
         ):
             previous_history = previous_history[:-1]
         messages.extend(
-            item.model_dump()
+            self._context_message(item)
             for item in previous_history
             if item.role == "user"
             or not self.response_uses_wrong_language(item.content, response_language)
@@ -422,3 +438,12 @@ Content-versus-format rules:
         }
 
         return response_language, body
+
+    @classmethod
+    def _context_message(cls, item: ChatHistoryMessage) -> dict[str, str]:
+        content = item.content
+        limit = cls.CONTEXT_MESSAGE_CHAR_LIMIT
+        if len(content) > limit:
+            half = (limit - len("\n...[truncated]...\n")) // 2
+            content = f"{content[:half]}\n...[truncated]...\n{content[-half:]}"
+        return {"role": item.role, "content": content}

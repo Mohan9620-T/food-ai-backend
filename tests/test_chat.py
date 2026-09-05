@@ -5,6 +5,7 @@ import requests
 
 from app.config import settings
 from app.models.chat import ChatMessageRecord, ChatSession
+from app.schemas.chat import ChatHistoryMessage
 from app.services.chat_service import ChatService
 from app.services.chat_vision_service import ChatVisionService
 from app.services.image_parser_service import VisionModelUnavailableError
@@ -297,7 +298,10 @@ def test_chat_timeout_returns_clean_503(client, monkeypatch):
     token = _register_and_login(client, email="text-timeout@example.com")
 
     def timeout(*args, **kwargs):
-        assert kwargs["timeout"] == settings.OLLAMA_TIMEOUT_SECONDS
+        assert kwargs["timeout"] == (
+            settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
+            settings.OLLAMA_TIMEOUT_SECONDS,
+        )
         assert kwargs["json"]["keep_alive"] == settings.OLLAMA_KEEP_ALIVE
         raise requests.ReadTimeout("cold model load exceeded the deadline")
 
@@ -338,6 +342,7 @@ def test_chat_stream_timeout_returns_error_chunk_and_closes_cleanly(client, monk
     class FakeAsyncClient:
         def __init__(self, *, timeout):
             assert timeout.read == settings.OLLAMA_TIMEOUT_SECONDS
+            assert timeout.connect == settings.OLLAMA_CONNECT_TIMEOUT_SECONDS
 
         async def __aenter__(self):
             return self
@@ -541,6 +546,34 @@ def test_chat_service_does_not_duplicate_latest_message(monkeypatch):
         if item["role"] == "user" and item["content"] == "sapadu list sollu"
     ]
     assert len(matches) == 1
+
+
+def test_chat_service_bounds_old_context_for_faster_local_inference():
+    history = [
+        ChatHistoryMessage(role="user", content=f"history-{index}")
+        for index in range(ChatService.HISTORY_MESSAGE_LIMIT + 3)
+    ]
+    long_reference = "x" * (ChatService.CONTEXT_MESSAGE_CHAR_LIMIT + 500)
+    reference_history = [
+        ChatHistoryMessage(role="user", content=f"reference-{index}")
+        for index in range(ChatService.REFERENCE_MESSAGE_LIMIT + 2)
+    ]
+    reference_history[-1] = ChatHistoryMessage(role="user", content=long_reference)
+
+    _, body = ChatService()._build_request_body(
+        "latest question",
+        history,
+        reference_history,
+        stream=True,
+    )
+    contents = [item["content"] for item in body["messages"]]
+
+    assert "history-0" not in contents
+    assert "history-3" in contents
+    assert "reference-0" not in contents
+    assert "reference-2" in contents
+    truncated = next(content for content in contents if "[truncated]" in content)
+    assert len(truncated) <= ChatService.CONTEXT_MESSAGE_CHAR_LIMIT
 
 
 def test_language_detection_uses_latest_message_only():
