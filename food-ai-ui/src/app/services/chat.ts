@@ -33,6 +33,7 @@ interface ChatSessionSummaryApi {
 }
 
 interface ChatMessageApi {
+  id?: number;
   sender: 'user' | 'bot';
   content: string;
   created_at: string;
@@ -438,6 +439,33 @@ export class ChatService {
       .slice(-8);
   }
 
+  deleteMessage(index: number): void {
+    const conversation = this.getActiveConversation();
+    const message = conversation?.messages[index];
+    if (!conversation || !message || message.sender !== 'user' || this.isResponding()) return;
+    const removeTurn = (): void => {
+      this.conversationsState.update((conversations) => conversations.map((item) => {
+        if (item.id !== conversation.id) return item;
+        const deleteCount = item.messages[index + 1]?.sender === 'bot' ? 2 : 1;
+        return {
+          ...item,
+          messages: [...item.messages.slice(0, index), ...item.messages.slice(index + deleteCount)],
+          updatedAt: Date.now()
+        };
+      }));
+    };
+    if (conversation.sessionId === undefined || message.id === undefined) {
+      removeTurn();
+      return;
+    }
+    this.http.delete(
+      `${this.sessionsUrl}/${conversation.sessionId}/messages/${message.id}`
+    ).subscribe({
+      next: removeTurn,
+      error: () => this.migrationNoticeState.set('The message could not be deleted. Please try again.')
+    });
+  }
+
   private isStandingPreference(text: string): boolean {
     // Language choices are scoped to one chat and must not override another chat.
     if (/\b(?:english|t(?:h)?anglish|tamil|hinglish|hindi)\b/i.test(text)) return false;
@@ -671,6 +699,7 @@ export class ChatService {
       sessionId: session.id,
       title: session.title,
       messages: session.messages.map((message) => ({
+        id: message.id,
         sender: message.sender,
         text: message.content,
         createdAt: message.created_at,

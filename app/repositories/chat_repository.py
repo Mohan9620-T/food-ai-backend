@@ -151,3 +151,21 @@ class ChatRepository:
         db.delete(session)
         db.commit()
         return True
+
+    def delete_user_turn(
+        self, db: Session, session_id: int, message_id: int, user_id: int
+    ) -> bool:
+        session = self.get_session(db, session_id, user_id)
+        if not session:
+            return False
+        messages = list(session.messages)
+        message_index = next(
+            (index for index, message in enumerate(messages) if message.id == message_id), None
+        )
+        if message_index is None or messages[message_index].sender != "user":
+            return False
+        db.delete(messages[message_index])
+        if message_index + 1 < len(messages) and messages[message_index + 1].sender == "bot":
+            db.delete(messages[message_index + 1])
+        db.commit()
+        return True

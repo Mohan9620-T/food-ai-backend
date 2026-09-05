@@ -207,6 +207,30 @@ def delete_session(
     return {"detail": "Chat session deleted"}
 
 
+@router.delete(
+    "/sessions/{session_id}/messages/{message_id}",
+    summary="Delete a user chat turn",
+    description="Delete an owned user message and its immediately following assistant response.",
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        404: {"description": "The session or user message was not found."},
+        422: {"description": "A path parameter failed validation."},
+    },
+)
+def delete_user_turn(
+    session_id: int,
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    deleted = repository.delete_user_turn(
+        db, session_id, message_id, _get_user_id(current_user)
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Chat message not found")
+    return {"detail": "Chat turn deleted"}
+
+
 @router.post(
     "/",
     response_model=ChatResponse,

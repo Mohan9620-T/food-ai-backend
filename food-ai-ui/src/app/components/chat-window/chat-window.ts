@@ -1,6 +1,6 @@
 import { DOCUMENT } from '@angular/common';
 import { DomSanitizer } from '@angular/platform-browser';
-import { AfterViewChecked, afterNextRender, Component, DestroyRef, effect, ElementRef, HostListener, inject, SecurityContext, signal, viewChild } from '@angular/core';
+import { AfterViewChecked, Component, DestroyRef, effect, ElementRef, HostListener, inject, SecurityContext, signal, viewChild } from '@angular/core';
 import { ChatService } from '../../services/chat';
 import { marked } from 'marked';
 
@@ -22,7 +22,6 @@ export class ChatWindow implements AfterViewChecked {
   private previousMessageCount = -1;
   private previousContentLength = -1;
   private previousRespondingState = false;
-  readonly openMessageMenuIndex = signal<number | null>(null);
   readonly previewImageUrl = signal<string | null>(null);
   readonly copiedMessageIndex = signal<number | null>(null);
   private copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
@@ -32,18 +31,8 @@ export class ChatWindow implements AfterViewChecked {
       this.chatService.activeConversationId();
       queueMicrotask(() => this.chatContainer()?.nativeElement.focus({ preventScroll: true }));
     });
-    afterNextRender(() => {
-      const closeMenuOnOutsideClick = (event: PointerEvent): void => {
-        const target = event.target;
-        if (!(target instanceof Element) || target.closest('.message-actions')) return;
-        this.openMessageMenuIndex.set(null);
-      };
-
-      this.document.addEventListener('pointerdown', closeMenuOnOutsideClick);
-      this.destroyRef.onDestroy(() => {
-        this.document.removeEventListener('pointerdown', closeMenuOnOutsideClick);
-        if (this.copyFeedbackTimer !== null) clearTimeout(this.copyFeedbackTimer);
-      });
+    this.destroyRef.onDestroy(() => {
+      if (this.copyFeedbackTimer !== null) clearTimeout(this.copyFeedbackTimer);
     });
   }
 
@@ -61,7 +50,6 @@ export class ChatWindow implements AfterViewChecked {
       || responding !== this.previousRespondingState;
 
     if (conversationChanged) {
-      this.openMessageMenuIndex.set(null);
       container.scrollTop = container.scrollHeight;
     } else if (contentChanged) {
       container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
@@ -74,21 +62,19 @@ export class ChatWindow implements AfterViewChecked {
   }
 
   editMessage(index: number): void {
-    this.openMessageMenuIndex.set(null);
     this.chatService.beginEditingMessage(index);
   }
 
   retryMessage(index: number): void {
-    this.openMessageMenuIndex.set(null);
     this.chatService.requestMessageRetry(index);
+  }
+
+  deleteMessage(index: number): void {
+    this.chatService.deleteMessage(index);
   }
 
   isAwaitingResponse(index: number): boolean {
     return this.chatService.isMessageAwaitingResponse(index);
-  }
-
-  toggleMessageMenu(index: number): void {
-    this.openMessageMenuIndex.update((openIndex) => openIndex === index ? null : index);
   }
 
   openImagePreview(imageUrl: string): void {

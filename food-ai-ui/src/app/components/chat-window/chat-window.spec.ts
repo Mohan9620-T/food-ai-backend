@@ -12,6 +12,7 @@ class ChatServiceStub {
   readonly activeConversationId = signal<string | null>('chat-1');
   readonly beginEditingMessage = vi.fn();
   readonly requestMessageRetry = vi.fn();
+  readonly deleteMessage = vi.fn();
   isMessageAwaitingResponse(index: number): boolean {
     return this.messages()[index]?.sender === 'user' && !this.messages()[index + 1];
   }
@@ -40,30 +41,25 @@ describe('ChatWindow', () => {
     expect(fixture.nativeElement.querySelector('h1')?.textContent).toContain('How can I help?');
   });
 
-  it('opens message actions and delegates retry', () => {
+  it('shows icon actions and delegates retry, edit, and delete', () => {
     service.messages.set([
       { sender: 'user', text: 'Try this' },
       { sender: 'bot', text: 'Previous answer' }
     ]);
     fixture.detectChanges();
-    (fixture.nativeElement.querySelector('.message-menu-button') as HTMLButtonElement).click();
-    fixture.detectChanges();
-    const retry = Array.from(fixture.nativeElement.querySelectorAll('[role="menuitem"]') as NodeListOf<HTMLButtonElement>)
-      .find((item) => item.textContent?.trim() === 'Retry') as HTMLButtonElement;
-    retry.click();
+    (fixture.nativeElement.querySelector('[aria-label="Retry message"]') as HTMLButtonElement).click();
+    (fixture.nativeElement.querySelector('[aria-label="Edit message"]') as HTMLButtonElement).click();
+    (fixture.nativeElement.querySelector('[aria-label="Delete message"]') as HTMLButtonElement).click();
     expect(service.requestMessageRetry).toHaveBeenCalledWith(0);
+    expect(service.beginEditingMessage).toHaveBeenCalledWith(0);
+    expect(service.deleteMessage).toHaveBeenCalledWith(0);
   });
 
   it('disables retry while a restored user message is awaiting its response', () => {
     service.messages.set([{ sender: 'user', text: 'Still processing' }]);
     fixture.detectChanges();
 
-    (fixture.nativeElement.querySelector('.message-menu-button') as HTMLButtonElement).click();
-    fixture.detectChanges();
-
-    const pending = Array.from(
-      fixture.nativeElement.querySelectorAll('[role="menuitem"]') as NodeListOf<HTMLButtonElement>
-    ).find(item => item.textContent?.trim() === 'Response pending');
+    const pending = fixture.nativeElement.querySelector('[aria-label="Retry message"]') as HTMLButtonElement;
     expect(pending?.disabled).toBe(true);
     pending?.click();
     expect(service.requestMessageRetry).not.toHaveBeenCalled();

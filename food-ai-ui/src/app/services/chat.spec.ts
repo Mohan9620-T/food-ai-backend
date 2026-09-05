@@ -14,6 +14,7 @@ interface TestChatSession {
   title: string;
   updated_at: string;
   messages: Array<{
+    id?: number;
     sender: 'user' | 'bot';
     content: string;
     created_at: string;
@@ -171,6 +172,30 @@ describe('ChatService session continuity', () => {
 
     expect(service.isMessageAwaitingResponse(0)).toBe(true);
     expect(service.consumeRetryMessage()).toBeNull();
+  });
+
+  it('deletes a persisted user turn and its assistant response', () => {
+    const internal = service as unknown as {
+      setLoadedConversations: (conversations: ChatConversation[]) => void;
+    };
+    internal.setLoadedConversations([{
+      id: '50',
+      sessionId: 50,
+      title: 'Delete turn',
+      updatedAt: 1,
+      messages: [
+        { id: 80, sender: 'user', text: 'Remove this' },
+        { id: 81, sender: 'bot', text: 'Remove this response' },
+        { id: 82, sender: 'user', text: 'Keep this' }
+      ]
+    }]);
+
+    service.deleteMessage(0);
+    const request = http.expectOne((candidate) => candidate.url.endsWith('/chat/sessions/50/messages/80'));
+    expect(request.request.method).toBe('DELETE');
+    request.flush({ detail: 'Chat turn deleted' });
+
+    expect(service.messages().map((message) => message.text)).toEqual(['Keep this']);
   });
 
   it('includes standing preferences from another chat without keyword overlap', () => {

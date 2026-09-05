@@ -576,6 +576,34 @@ def test_chat_service_bounds_old_context_for_faster_local_inference():
     assert len(truncated) <= ChatService.CONTEXT_MESSAGE_CHAR_LIMIT
 
 
+def test_delete_user_turn_removes_its_following_bot_response(client):
+    token = _register_and_login(client, "delete-turn@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session = client.post(
+        "/chat/sessions", headers=headers, json={"title": "Delete turn"}
+    ).json()
+    imported = client.post(
+        f"/chat/sessions/{session['id']}/import",
+        headers=headers,
+        json={
+            "messages": [
+                {"sender": "user", "content": "Remove this"},
+                {"sender": "bot", "content": "Remove this response"},
+                {"sender": "user", "content": "Keep this"},
+            ]
+        },
+    ).json()
+
+    response = client.delete(
+        f"/chat/sessions/{session['id']}/messages/{imported['messages'][0]['id']}",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    history = client.get(f"/chat/sessions/{session['id']}", headers=headers).json()["messages"]
+    assert [message["content"] for message in history] == ["Keep this"]
+
+
 def test_chat_service_preserves_old_standing_preference_outside_recent_history():
     history = [ChatHistoryMessage(role="user", content="Please call me Master in every chat.")]
     history.extend(
