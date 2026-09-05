@@ -95,6 +95,12 @@ use the documented default or disable the associated integration when empty.
 | `OLLAMA_VISION_TIMEOUT_SECONDS` | Optional | Meal-image request timeout; default `660`. |
 | `OLLAMA_VISION_MAX_DIMENSION` | Optional | Longest image edge sent to Ollama; default `1024`. Stored originals are unchanged. |
 | `OLLAMA_CHAT_VISION_MODEL` | Optional | General image-chat model; default `qwen3-vl:4b`. |
+| `NVIDIA_CHAT_VISION_MODEL` | Optional | NVIDIA image-chat model; defaults to the faster `meta/llama-3.2-11b-vision-instruct`. |
+| `NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA connection timeout; default `2`. |
+| `NVIDIA_VISION_TIMEOUT_SECONDS` | Optional | NVIDIA response-read timeout; default `7`. |
+| `NVIDIA_VISION_MAX_DIMENSION` | Optional | Longest image edge sent to NVIDIA; default `768`. Stored originals are unchanged. |
+| `NVIDIA_VISION_MAX_TOKENS` | Optional | Maximum NVIDIA response tokens; default `384`. |
+| `CHAT_VISION_OCR_ENABLED` | Optional | Enables a second local Tesseract OCR pass; default `false` for lower latency. |
 | `OLLAMA_CHAT_VISION_TIMEOUT_SECONDS` | Optional | General image-chat timeout; default `660`. |
 | `USDA_API_KEY` | Optional | USDA FoodData Central key; nutrition matches are unavailable when empty. |
 | `USDA_API_URL` | Optional | USDA API base URL; default `https://api.nal.usda.gov/fdc/v1`. |

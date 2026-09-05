@@ -38,7 +38,7 @@ def test_infer_requires_api_key(monkeypatch):
 
 def test_infer_returns_validated_result(monkeypatch):
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "nvapi-test")
-    monkeypatch.setattr("requests.post", lambda *args, **kwargs: response_with(valid_result_json()))
+    monkeypatch.setattr("app.services.vision_providers.nvidia_provider._HTTP_SESSION.post", lambda *args, **kwargs: response_with(valid_result_json()))
 
     result = NvidiaVisionProvider().infer("system", "user", "encoded-image")
 
@@ -48,14 +48,14 @@ def test_infer_returns_validated_result(monkeypatch):
 def test_infer_strips_json_markdown_fence(monkeypatch):
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "nvapi-test")
     fenced = f"```json\n{valid_result_json()}\n```"
-    monkeypatch.setattr("requests.post", lambda *args, **kwargs: response_with(fenced))
+    monkeypatch.setattr("app.services.vision_providers.nvidia_provider._HTTP_SESSION.post", lambda *args, **kwargs: response_with(fenced))
 
     assert NvidiaVisionProvider().infer("system", "user", "encoded-image").image_type == "food"
 
 
 def test_infer_rejects_malformed_json(monkeypatch):
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "nvapi-test")
-    monkeypatch.setattr("requests.post", lambda *args, **kwargs: response_with("not-json"))
+    monkeypatch.setattr("app.services.vision_providers.nvidia_provider._HTTP_SESSION.post", lambda *args, **kwargs: response_with("not-json"))
 
     with pytest.raises(ValueError, match="NVIDIA vision response was not valid JSON"):
         NvidiaVisionProvider().infer("system", "user", "encoded-image")
@@ -64,7 +64,7 @@ def test_infer_rejects_malformed_json(monkeypatch):
 def test_infer_rejects_invalid_schema(monkeypatch):
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "nvapi-test")
     monkeypatch.setattr(
-        "requests.post",
+        "app.services.vision_providers.nvidia_provider._HTTP_SESSION.post",
         lambda *args, **kwargs: response_with(json.dumps({"image_type": "unknown"})),
     )
 
@@ -78,7 +78,7 @@ def test_infer_translates_timeout(monkeypatch):
     def timeout(*args, **kwargs):
         raise requests.Timeout("timed out")
 
-    monkeypatch.setattr("requests.post", timeout)
+    monkeypatch.setattr("app.services.vision_providers.nvidia_provider._HTTP_SESSION.post", timeout)
 
     with pytest.raises(VisionModelUnavailableError, match="NVIDIA vision analysis timed out"):
         NvidiaVisionProvider().infer("system", "user", "encoded-image")
@@ -88,7 +88,7 @@ def test_infer_translates_http_error(monkeypatch):
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "nvapi-test")
     response = response_with(valid_result_json())
     response.raise_for_status.side_effect = requests.HTTPError("rate limited")
-    monkeypatch.setattr("requests.post", lambda *args, **kwargs: response)
+    monkeypatch.setattr("app.services.vision_providers.nvidia_provider._HTTP_SESSION.post", lambda *args, **kwargs: response)
 
     with pytest.raises(VisionModelUnavailableError, match="NVIDIA vision API unavailable"):
         NvidiaVisionProvider().infer("system", "user", "encoded-image")
@@ -97,7 +97,7 @@ def test_infer_translates_http_error(monkeypatch):
 def test_infer_uses_openai_image_url_payload(monkeypatch):
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "nvapi-test")
     post = Mock(return_value=response_with(valid_result_json()))
-    monkeypatch.setattr("requests.post", post)
+    monkeypatch.setattr("app.services.vision_providers.nvidia_provider._HTTP_SESSION.post", post)
 
     NvidiaVisionProvider().infer("system", "user question", "encoded-image")
 
@@ -106,12 +106,15 @@ def test_infer_uses_openai_image_url_payload(monkeypatch):
         "Authorization": "Bearer nvapi-test",
         "Content-Type": "application/json",
     }
-    assert post.call_args.kwargs["timeout"] == settings.NVIDIA_VISION_TIMEOUT_SECONDS
+    assert post.call_args.kwargs["timeout"] == (
+        settings.NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS,
+        settings.NVIDIA_VISION_TIMEOUT_SECONDS,
+    )
     payload = post.call_args.kwargs["json"]
     assert payload["model"] == settings.NVIDIA_CHAT_VISION_MODEL
     assert payload["stream"] is False
     assert payload["temperature"] == 0
-    assert payload["max_tokens"] == 1024
+    assert payload["max_tokens"] == settings.NVIDIA_VISION_MAX_TOKENS
     assert "Respond with ONLY a single JSON object" in payload["messages"][0]["content"]
     user_content = payload["messages"][1]["content"]
     assert user_content == [

@@ -10,6 +10,7 @@ from app.services.image_parser_service import VisionModelUnavailableError
 from app.services.vision_providers.base import VisionProvider
 
 logger = logging.getLogger(__name__)
+_HTTP_SESSION = requests.Session()
 
 
 class NvidiaConfigurationError(VisionModelUnavailableError):
@@ -40,7 +41,7 @@ class NvidiaVisionProvider(VisionProvider):
         )
 
         try:
-            response = requests.post(
+            response = _HTTP_SESSION.post(
                 f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
@@ -50,7 +51,7 @@ class NvidiaVisionProvider(VisionProvider):
                     "model": settings.NVIDIA_CHAT_VISION_MODEL,
                     "stream": False,
                     "temperature": 0,
-                    "max_tokens": 1024,
+                    "max_tokens": settings.NVIDIA_VISION_MAX_TOKENS,
                     "messages": [
                         {
                             "role": "system",
@@ -68,14 +69,17 @@ class NvidiaVisionProvider(VisionProvider):
                         },
                     ],
                 },
-                timeout=settings.NVIDIA_VISION_TIMEOUT_SECONDS,
+                timeout=(
+                    settings.NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS,
+                    settings.NVIDIA_VISION_TIMEOUT_SECONDS,
+                ),
             )
             response.raise_for_status()
         except requests.Timeout as error:
             logger.warning("chat.vision_model_timeout", extra={"provider": "nvidia"})
             raise VisionModelUnavailableError(
                 "NVIDIA vision analysis timed out after "
-                f"{settings.NVIDIA_VISION_TIMEOUT_SECONDS} seconds. Please try "
+                f"{settings.NVIDIA_VISION_TIMEOUT_SECONDS:g} seconds. Please try "
                 "again."
             ) from error
         except requests.RequestException as error:

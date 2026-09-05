@@ -2,6 +2,7 @@ import base64
 
 import pytest
 
+from app.config import settings
 from app.schemas.vision_result import VisionResult
 from app.services.chat_vision_service import ChatVisionService
 from app.services.image_parser_service import VisionModelUnavailableError
@@ -195,6 +196,7 @@ def test_describe_includes_model_uncertainty_in_user_response(monkeypatch):
 
 
 def test_ocr_detected_text_is_included_in_the_single_vision_prompt(monkeypatch):
+    monkeypatch.setattr(settings, "CHAT_VISION_OCR_ENABLED", True)
     monkeypatch.setattr(
         ChatVisionService,
         "_extract_ocr_text",

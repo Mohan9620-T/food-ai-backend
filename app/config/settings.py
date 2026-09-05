@@ -63,9 +63,15 @@ NVIDIA_API_BASE_URL = os.getenv(
     "NVIDIA_API_BASE_URL", "https://integrate.api.nvidia.com/v1"
 ).rstrip("/")
 NVIDIA_CHAT_VISION_MODEL = os.getenv(
-    "NVIDIA_CHAT_VISION_MODEL", "meta/llama-3.2-90b-vision-instruct"
+    "NVIDIA_CHAT_VISION_MODEL", "meta/llama-3.2-11b-vision-instruct"
 ).strip()
-NVIDIA_VISION_TIMEOUT_SECONDS = int(os.getenv("NVIDIA_VISION_TIMEOUT_SECONDS", "180"))
+NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS = float(
+    os.getenv("NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS", "2")
+)
+NVIDIA_VISION_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_VISION_TIMEOUT_SECONDS", "7"))
+NVIDIA_VISION_MAX_DIMENSION = int(os.getenv("NVIDIA_VISION_MAX_DIMENSION", "768"))
+NVIDIA_VISION_MAX_TOKENS = int(os.getenv("NVIDIA_VISION_MAX_TOKENS", "384"))
+CHAT_VISION_OCR_ENABLED = os.getenv("CHAT_VISION_OCR_ENABLED", "false").lower() == "true"
 USDA_API_KEY = os.getenv("USDA_API_KEY", "").strip()
 USDA_API_URL = os.getenv("USDA_API_URL", "https://api.nal.usda.gov/fdc/v1").rstrip("/")
 USDA_TIMEOUT_SECONDS = int(os.getenv("USDA_TIMEOUT_SECONDS", "15"))
