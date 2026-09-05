@@ -76,6 +76,38 @@ describe('ChatWindow', () => {
     expect(rendered).not.toContain('<script>');
   });
 
+  it('copies an assistant response and shows copied feedback', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    });
+    service.messages.set([{ sender: 'bot', text: '**Useful answer**' }]);
+    fixture.detectChanges();
+
+    (fixture.nativeElement.querySelector('.copy-message-button') as HTMLButtonElement).click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(writeText).toHaveBeenCalledWith('**Useful answer**');
+    expect(fixture.nativeElement.querySelector('.copy-message-button')?.getAttribute('title')).toBe('Copied');
+  });
+
+  it('does not show copied feedback when clipboard access fails', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error('Denied')) }
+    });
+    service.messages.set([{ sender: 'bot', text: 'Private answer' }]);
+    fixture.detectChanges();
+
+    (fixture.nativeElement.querySelector('.copy-message-button') as HTMLButtonElement).click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.copy-message-button')?.getAttribute('title')).toBe('Copy');
+  });
+
   it('opens a large image preview and closes it with Escape', () => {
     service.messages.set([{
       sender: 'user',

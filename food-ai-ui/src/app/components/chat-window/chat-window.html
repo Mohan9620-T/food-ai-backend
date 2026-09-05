@@ -46,7 +46,24 @@
       </div>
     </div>
     } @else {
-    <div class="message bot-message markdown-body" [innerHTML]="renderMarkdown(msg.text)">
+    <div class="bot-message-group">
+      <button
+        type="button"
+        class="copy-message-button"
+        (click)="copyMessage(msg.text, $index)"
+        [attr.aria-label]="copiedMessageIndex() === $index ? 'Content copied' : 'Copy response'"
+        [title]="copiedMessageIndex() === $index ? 'Copied' : 'Copy'">
+        @if (copiedMessageIndex() === $index) {
+          <span aria-hidden="true">&#10003;</span>
+        } @else {
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+            <path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"></path>
+          </svg>
+        }
+      </button>
+      <div class="message bot-message markdown-body" [innerHTML]="renderMarkdown(msg.text)">
+      </div>
     </div>
     }
   }

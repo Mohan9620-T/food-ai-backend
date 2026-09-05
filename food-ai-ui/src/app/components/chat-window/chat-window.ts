@@ -24,6 +24,8 @@ export class ChatWindow implements AfterViewChecked {
   private previousRespondingState = false;
   readonly openMessageMenuIndex = signal<number | null>(null);
   readonly previewImageUrl = signal<string | null>(null);
+  readonly copiedMessageIndex = signal<number | null>(null);
+  private copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     effect(() => {
@@ -40,6 +42,7 @@ export class ChatWindow implements AfterViewChecked {
       this.document.addEventListener('pointerdown', closeMenuOnOutsideClick);
       this.destroyRef.onDestroy(() => {
         this.document.removeEventListener('pointerdown', closeMenuOnOutsideClick);
+        if (this.copyFeedbackTimer !== null) clearTimeout(this.copyFeedbackTimer);
       });
     });
   }
@@ -103,6 +106,19 @@ export class ChatWindow implements AfterViewChecked {
   @HostListener('document:keydown.escape')
   closeImagePreviewFromKeyboard(): void {
     this.closeImagePreview();
+  }
+
+  async copyMessage(text: string, index: number): Promise<void> {
+    try {
+      const clipboard = this.document.defaultView?.navigator.clipboard;
+      if (!clipboard) throw new Error('Clipboard API unavailable');
+      await clipboard.writeText(text);
+      this.copiedMessageIndex.set(index);
+      if (this.copyFeedbackTimer !== null) clearTimeout(this.copyFeedbackTimer);
+      this.copyFeedbackTimer = setTimeout(() => this.copiedMessageIndex.set(null), 2000);
+    } catch {
+      this.copiedMessageIndex.set(null);
+    }
   }
 
   shouldShowDateSeparator(index: number): boolean {

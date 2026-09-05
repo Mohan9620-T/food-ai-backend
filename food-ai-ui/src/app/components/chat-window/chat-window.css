@@ -103,9 +103,55 @@
   background: var(--surface-hover);
 }
 .bot-message {
-  align-self: flex-start;
+  margin: 0;
+  padding-right: 48px;
   background: var(--surface-subtle);
   color: var(--text);
+}
+.bot-message-group {
+  position: relative;
+  align-self: flex-start;
+  max-width: min(82%, 850px);
+  margin: var(--space-2);
+}
+.bot-message-group .bot-message {
+  max-width: 100%;
+}
+.copy-message-button {
+  position: absolute;
+  z-index: 1;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 6px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+.copy-message-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+.bot-message-group:hover .copy-message-button,
+.copy-message-button:focus-visible,
+.copy-message-button[aria-label='Content copied'] {
+  opacity: 1;
+}
+.copy-message-button:hover,
+.copy-message-button:focus-visible {
+  background: var(--surface-hover);
 }
 .markdown-body :first-child {
   margin-top: 0;
@@ -215,5 +261,12 @@
     max-width: 92%;
     margin: var(--space-1);
     padding: var(--space-3);
+  }
+  .bot-message-group {
+    max-width: 92%;
+    margin: var(--space-1);
+  }
+  .copy-message-button {
+    opacity: 1;
   }
 }
