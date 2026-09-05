@@ -99,17 +99,7 @@ Language handling:
   because the user writes a greeting, non-English text, mixed language, or transliteration.
 - Change the response language only when the user explicitly asks you to speak, reply,
   answer, continue, or switch to that language. Keep that choice until the user explicitly
-  requests another language. For Tanglish, reply in clear, natural Tanglish; do not switch
-  to Tamil script unless requested.
-- Natural Tanglish means conversational Tamil written with Latin letters, mixed with
-  ordinary English words only where a Tamil speaker would naturally use them. Never
-  produce literal word-by-word translations, made-up Tamil words, Tamil script, or an
-  English translation in parentheses unless the user asks for a translation.
-- Examples of the required Tanglish style:
-  User: "hi can you speak thanglish"
-  Assistant: "Aama, kandippa! Namma Thanglish-la pesalaam. Enna help venum nu sollunga."
-  User: "can I send some content, can you explain it in thanglish?"
-  Assistant: "Kandippa, content-a anuppunga. Adha simple-ah puriyura maadhiri Thanglish-la explain panren."
+  requests another language.
 - Do not imitate spelling mistakes or invent slang merely to mirror the user.
 - If a phrase has more than one plausible meaning and that difference affects the
   answer, ask one short clarifying question instead of guessing.
@@ -169,8 +159,15 @@ Content-versus-format rules:
   format instructions, explanations, or a closing offer unless explicitly requested.
 - Put Markdown bold markers around headings, including the issue title, "Repro Steps:",
   and "Expected Result:". Return only the formatted result without introductory or
-  explanatory commentary.
+explanatory commentary.
 """
+
+    TANGLISH_STYLE_PROMPT = """The user explicitly selected Tanglish for this chat.
+Reply in natural conversational Tamil written with Latin letters, mixing ordinary English
+words only where a Tamil speaker naturally would. Never produce a literal word-by-word
+translation, made-up Tamil words, Tamil script, or an English translation in parentheses
+unless requested. Example style: "Kandippa, content-a anuppunga. Adha simple-ah puriyura
+maadhiri Thanglish-la explain panren."""
 
     @classmethod
     def detect_language(cls, message: str) -> str:
@@ -388,6 +385,8 @@ Content-versus-format rules:
     ) -> tuple[str, dict]:
         response_language = self.response_language(message, history)
         messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
+        if response_language == "Tanglish (Tamil written in Latin letters)":
+            messages.append({"role": "system", "content": self.TANGLISH_STYLE_PROMPT})
 
         if reference_history:
             messages.append(
@@ -428,7 +427,7 @@ Content-versus-format rules:
             for item in history
             if item.role == "user"
             and item.content not in recent_contents
-            and self.STANDING_PREFERENCE_PATTERN.search(item.content)
+            and self.is_standing_preference(item.content)
         ][-2:]
         if standing_preferences:
             messages.append(
@@ -471,6 +470,13 @@ Content-versus-format rules:
         }
 
         return response_language, body
+
+    @classmethod
+    def is_standing_preference(cls, content: str) -> bool:
+        """Return non-language preferences that may safely carry across chats."""
+        if re.search(r"\b(?:english|t(?:h)?anglish|tamil|hinglish|hindi)\b", content, re.IGNORECASE):
+            return False
+        return cls.STANDING_PREFERENCE_PATTERN.search(content) is not None
 
     @classmethod
     def _context_message(cls, item: ChatHistoryMessage) -> dict[str, str]:

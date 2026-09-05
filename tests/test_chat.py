@@ -820,12 +820,39 @@ def test_system_prompt_separates_source_content_from_format_example():
 
 
 def test_system_prompt_requires_natural_tanglish_without_inventing_content():
-    prompt = ChatService.SYSTEM_PROMPT
+    prompt = ChatService.TANGLISH_STYLE_PROMPT
 
-    assert "Natural Tanglish means conversational Tamil" in prompt
-    assert "Never" in prompt and "word-by-word translations" in prompt
-    assert "Do not invent the content the user intends to send" in prompt
+    assert "natural conversational Tamil" in prompt
+    assert "Never" in prompt and "word-by-word" in prompt
     assert "content-a anuppunga" in prompt
+    assert "Do not invent the content the user intends to send" in ChatService.SYSTEM_PROMPT
+
+
+def test_english_request_does_not_receive_tanglish_examples():
+    _, body = ChatService()._build_request_body(
+        "Give me some motivation", [], [], stream=True
+    )
+
+    prompt_text = "\n".join(item["content"] for item in body["messages"])
+    assert "respond only in English" in prompt_text
+    assert "content-a anuppunga" not in prompt_text
+    assert "Aama, kandippa" not in prompt_text
+
+
+def test_explicit_tanglish_request_receives_tanglish_style_prompt():
+    _, body = ChatService()._build_request_body(
+        "Please reply in Tanglish", [], [], stream=True
+    )
+
+    assert any(
+        item["role"] == "system" and "content-a anuppunga" in item["content"]
+        for item in body["messages"]
+    )
+
+
+def test_language_choice_is_not_a_cross_chat_standing_preference():
+    assert ChatService.is_standing_preference("Please call me Master in every chat")
+    assert not ChatService.is_standing_preference("I prefer Tanglish")
 
 
 def test_latest_instruction_forbids_metadata_from_old_examples(monkeypatch):

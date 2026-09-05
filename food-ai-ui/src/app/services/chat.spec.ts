@@ -196,6 +196,26 @@ describe('ChatService session continuity', () => {
     });
   });
 
+  it('does not carry a language preference into another chat', () => {
+    const internal = service as unknown as {
+      setLoadedConversations: (conversations: ChatConversation[]) => void;
+    };
+    internal.setLoadedConversations([
+      { id: '50', sessionId: 50, title: 'Motivation', messages: [], updatedAt: 2 },
+      {
+        id: '49',
+        sessionId: 49,
+        title: 'Language preference',
+        messages: [{ sender: 'user', text: 'I prefer Tanglish.' }],
+        updatedAt: 1
+      }
+    ]);
+
+    const context = service.getReferenceHistory('Give me some motivation', '50');
+
+    expect(context).not.toContainEqual({ role: 'user', content: 'I prefer Tanglish.' });
+  });
+
   it('polls only recent pending sessions instead of reloading every conversation', () => {
     vi.useFakeTimers();
     const internal = service as unknown as {

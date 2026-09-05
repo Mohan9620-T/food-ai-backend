@@ -439,6 +439,8 @@ export class ChatService {
   }
 
   private isStandingPreference(text: string): boolean {
+    // Language choices are scoped to one chat and must not override another chat.
+    if (/\b(?:english|t(?:h)?anglish|tamil|hinglish|hindi)\b/i.test(text)) return false;
     return /\b(?:call|address|refer to)\s+(?:me\s+)?(?:as\s+)?[a-z0-9_-]+|\bmy name is\b|\bi (?:prefer|always (?:prefer|like|want))\b|\bremember (?:that|to)\b/i.test(text);
   }
 
