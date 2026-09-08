@@ -632,6 +632,9 @@ def test_system_prompt_requests_readable_markdown_and_relevant_emojis():
     assert "**bold text**" in prompt
     assert "one or two relevant emojis" in prompt
     assert "code, JSON, or another strict format" in prompt
+    assert "one short, relevant next-step suggestion" in prompt
+    assert "Do not use the same generic suggestion every time" in prompt
+    assert "Omit this closing" in prompt and "suggestion when" in prompt
 
 
 def test_language_detection_uses_latest_message_only():
