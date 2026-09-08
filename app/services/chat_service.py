@@ -16,6 +16,10 @@ class ChatModelUnavailableError(RuntimeError):
     pass
 
 
+class _NvidiaFallbackError(RuntimeError):
+    """Internal signal that NVIDIA could not produce a usable response."""
+
+
 class ChatService:
     HISTORY_MESSAGE_LIMIT = 8
     REFERENCE_MESSAGE_LIMIT = 4
@@ -269,22 +273,16 @@ maadhiri Thanglish-la explain panren."""
             message, history, reference_history, stream=False
         )
 
-        try:
-            response = requests.post(
-                settings.OLLAMA_URL,
-                json=body,
-                timeout=(
-                    settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
-                    settings.OLLAMA_TIMEOUT_SECONDS,
-                ),
-            )
-            response.raise_for_status()
-        except requests.RequestException as error:
-            logger.warning("chat.text_model_unavailable")
-            raise ChatModelUnavailableError(
-                "Text chat model is still loading or unavailable. Please try again shortly."
-            ) from error
-        answer = response.json()["message"]["content"]
+        provider = "ollama"
+        if self._use_nvidia_primary():
+            try:
+                answer = self._chat_with_nvidia(body)
+                provider = "nvidia"
+            except _NvidiaFallbackError:
+                logger.warning("chat.text_nvidia_fallback_to_ollama")
+                answer = self._chat_with_ollama(body)
+        else:
+            answer = self._chat_with_ollama(body)
 
         # Smaller local models can acknowledge the requested transliteration but still
         # answer in the native script. Give them one focused correction opportunity.
@@ -306,22 +304,13 @@ maadhiri Thanglish-la explain panren."""
                     {"role": "system", "content": rewrite_instruction},
                 ]
             )
-            try:
-                response = requests.post(
-                    settings.OLLAMA_URL,
-                    json=body,
-                    timeout=(
-                        settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
-                        settings.OLLAMA_TIMEOUT_SECONDS,
-                    ),
-                )
-                response.raise_for_status()
-            except requests.RequestException as error:
-                logger.warning("chat.text_model_unavailable")
-                raise ChatModelUnavailableError(
-                    "Text chat model is still loading or unavailable. Please try again shortly."
-                ) from error
-            answer = response.json()["message"]["content"]
+            # Wrong language is not provider failure: correct with the provider that
+            # produced the original answer and never cross over to the fallback.
+            answer = (
+                self._chat_with_nvidia(body, allow_fallback=False)
+                if provider == "nvidia"
+                else self._chat_with_ollama(body)
+            )
 
         return answer
 
@@ -331,13 +320,146 @@ maadhiri Thanglish-la explain panren."""
         history: list[ChatHistoryMessage],
         reference_history: list[ChatHistoryMessage],
     ) -> AsyncIterator[str]:
-        """Yield Ollama response text and close its socket when iteration stops."""
+        """Yield one provider stream without mixing partial answers."""
         immediate_answer = self._immediate_answer(message)
         if immediate_answer:
             yield immediate_answer
             return
 
         _, body = self._build_request_body(message, history, reference_history, stream=True)
+        if not self._use_nvidia_primary():
+            async for chunk in self._stream_ollama(body):
+                yield chunk
+            return
+
+        nvidia_stream = self._stream_nvidia(body)
+        try:
+            first_chunk = await anext(nvidia_stream)
+        except (StopAsyncIteration, _NvidiaFallbackError):
+            logger.warning("chat.text_stream_nvidia_fallback_to_ollama")
+            async for chunk in self._stream_ollama(body):
+                yield chunk
+            return
+
+        # Only after the first usable chunk is buffered is NVIDIA content exposed.
+        yield first_chunk
+        try:
+            async for chunk in nvidia_stream:
+                yield chunk
+        except _NvidiaFallbackError as error:
+            raise ChatModelUnavailableError(
+                "The response stream was interrupted. Please try again."
+            ) from error
+
+    @staticmethod
+    def _use_nvidia_primary() -> bool:
+        return settings.APP_ENVIRONMENT == "production" or settings.LLM_PROVIDER == "nvidia"
+
+    def _chat_with_ollama(self, body: dict) -> str:
+        try:
+            response = requests.post(
+                settings.OLLAMA_URL,
+                json=body,
+                timeout=(
+                    settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
+                    settings.OLLAMA_TIMEOUT_SECONDS,
+                ),
+            )
+            response.raise_for_status()
+            answer = response.json()["message"]["content"]
+            if not isinstance(answer, str) or not answer.strip():
+                raise ValueError("missing Ollama response content")
+            return answer
+        except (requests.RequestException, KeyError, TypeError, ValueError) as error:
+            logger.warning("chat.text_model_unavailable", extra={"provider": "ollama"})
+            raise ChatModelUnavailableError(
+                "Text chat model is still loading or unavailable. Please try again shortly."
+            ) from error
+
+    def _chat_with_nvidia(self, body: dict, *, allow_fallback: bool = True) -> str:
+        try:
+            if not settings.NVIDIA_API_KEY:
+                raise _NvidiaFallbackError("NVIDIA is not configured")
+            response = requests.post(
+                f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=self._nvidia_body(body, stream=False),
+                timeout=(
+                    settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
+                    settings.NVIDIA_CHAT_TIMEOUT_SECONDS,
+                ),
+            )
+            if response.status_code >= 400:
+                if response.status_code in {401, 403, 408, 429, 500, 502, 503, 504}:
+                    raise _NvidiaFallbackError("NVIDIA provider request failed")
+                response.raise_for_status()
+            answer = response.json()["choices"][0]["message"]["content"]
+            if not isinstance(answer, str) or not answer.strip():
+                raise _NvidiaFallbackError("missing NVIDIA response content")
+            return answer
+        except _NvidiaFallbackError as error:
+            if allow_fallback:
+                raise
+            raise ChatModelUnavailableError(
+                "The NVIDIA text provider could not correct the response."
+            ) from error
+        except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as error:
+            if allow_fallback:
+                raise _NvidiaFallbackError("unusable NVIDIA response") from error
+            raise ChatModelUnavailableError(
+                "The NVIDIA text provider could not correct the response."
+            ) from error
+
+    @staticmethod
+    def _nvidia_body(body: dict, *, stream: bool) -> dict:
+        return {
+            "model": settings.NVIDIA_CHAT_MODEL,
+            "messages": body["messages"],
+            "stream": stream,
+            "temperature": body["options"]["temperature"],
+            "max_tokens": body["options"]["num_predict"],
+        }
+
+    async def _stream_nvidia(self, body: dict) -> AsyncIterator[str]:
+        if not settings.NVIDIA_API_KEY:
+            raise _NvidiaFallbackError("NVIDIA is not configured")
+        timeout = httpx.Timeout(
+            connect=settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
+            read=settings.NVIDIA_CHAT_TIMEOUT_SECONDS,
+            write=30,
+            pool=settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
+        )
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream(
+                    "POST",
+                    f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=self._nvidia_body(body, stream=True),
+                ) as response:
+                    if response.status_code >= 400:
+                        response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        event = json.loads(data)
+                        content = event["choices"][0]["delta"].get("content", "")
+                        if content:
+                            yield content
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
+            logger.warning("chat.text_stream_model_unavailable", extra={"provider": "nvidia"})
+            raise _NvidiaFallbackError("NVIDIA stream unavailable") from error
+
+    async def _stream_ollama(self, body: dict) -> AsyncIterator[str]:
         timeout = httpx.Timeout(
             connect=settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
             read=settings.OLLAMA_TIMEOUT_SECONDS,
@@ -357,8 +479,8 @@ maadhiri Thanglish-la explain panren."""
                             yield content
                         if event.get("done"):
                             break
-        except httpx.TransportError as error:
-            logger.warning("chat.text_stream_model_unavailable")
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+            logger.warning("chat.text_stream_model_unavailable", extra={"provider": "ollama"})
             raise ChatModelUnavailableError(
                 "Text chat model is still loading or unavailable. Please try again shortly."
             ) from error

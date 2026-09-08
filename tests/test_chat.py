@@ -1,12 +1,14 @@
+import asyncio
 from datetime import datetime, timezone
 
 import httpx
+import pytest
 import requests
 
 from app.config import settings
 from app.models.chat import ChatMessageRecord, ChatSession
 from app.schemas.chat import ChatHistoryMessage
-from app.services.chat_service import ChatService
+from app.services.chat_service import ChatModelUnavailableError, ChatService, _NvidiaFallbackError
 from app.services.chat_vision_service import ChatVisionService
 from app.services.image_parser_service import VisionModelUnavailableError
 
@@ -908,3 +910,155 @@ def test_latest_instruction_forbids_metadata_from_old_examples(monkeypatch):
     instruction = captured["body"]["messages"][-2]["content"]
     assert "Use no timestamp, category, priority, issue number" in instruction
     assert "Never copy metadata or facts from an example" in instruction
+
+
+def test_nvidia_chat_success_does_not_call_ollama(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    calls = []
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "NVIDIA answer"}}]}
+
+    def post(url, **kwargs):
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr("app.services.chat_service.requests.post", post)
+
+    assert ChatService().chat("Hello", [], []) == "NVIDIA answer"
+    assert calls == [f"{settings.NVIDIA_API_BASE_URL}/chat/completions"]
+
+
+def test_nvidia_chat_failure_calls_ollama_once_with_same_messages(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    calls = []
+
+    class Response:
+        def __init__(self, nvidia):
+            self.status_code = 503 if nvidia else 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "Ollama answer"}}
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs["json"]["messages"]))
+        return Response("nvidia.com" in url)
+
+    monkeypatch.setattr("app.services.chat_service.requests.post", post)
+
+    assert ChatService().chat("Hello", [], []) == "Ollama answer"
+    assert len(calls) == 2
+    assert calls[0][1] == calls[1][1]
+
+
+def test_malformed_nvidia_chat_200_response_calls_ollama_once(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    calls = []
+
+    class NvidiaResponse:
+        status_code = 200
+
+        def json(self):
+            return {"choices": []}
+
+    class OllamaResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "Fallback answer"}}
+
+    def post(url, **kwargs):
+        calls.append(url)
+        return NvidiaResponse() if "nvidia.com" in url else OllamaResponse()
+
+    monkeypatch.setattr("app.services.chat_service.requests.post", post)
+
+    assert ChatService().chat("Hello", [], []) == "Fallback answer"
+    assert len(calls) == 2
+
+
+def test_nvidia_language_correction_stays_on_nvidia(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    calls = []
+    answers = iter(["Aama, enna help venum?", "How can I help you?"])
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": next(answers)}}]}
+
+    def post(url, **kwargs):
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr("app.services.chat_service.requests.post", post)
+
+    assert ChatService().chat("Hello", [], []) == "How can I help you?"
+    assert calls == [
+        f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
+        f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
+    ]
+
+
+def test_stream_falls_back_before_nvidia_content_is_exposed(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    calls = {"nvidia": 0, "ollama": 0}
+
+    async def nvidia(_body):
+        calls["nvidia"] += 1
+        if False:
+            yield ""
+        raise _NvidiaFallbackError("unavailable")
+
+    async def ollama(_body):
+        calls["ollama"] += 1
+        yield "fallback"
+
+    service = ChatService()
+    monkeypatch.setattr(service, "_stream_nvidia", nvidia)
+    monkeypatch.setattr(service, "_stream_ollama", ollama)
+
+    async def collect():
+        return [chunk async for chunk in service.stream_chat("Hello", [], [])]
+
+    assert asyncio.run(collect()) == ["fallback"]
+    assert calls == {"nvidia": 1, "ollama": 1}
+
+
+def test_stream_does_not_fallback_after_nvidia_content_is_exposed(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    ollama_calls = 0
+
+    async def nvidia(_body):
+        yield "partial"
+        raise _NvidiaFallbackError("interrupted")
+
+    async def ollama(_body):
+        nonlocal ollama_calls
+        ollama_calls += 1
+        yield "fallback"
+
+    service = ChatService()
+    monkeypatch.setattr(service, "_stream_nvidia", nvidia)
+    monkeypatch.setattr(service, "_stream_ollama", ollama)
+
+    async def collect():
+        return [chunk async for chunk in service.stream_chat("Hello", [], [])]
+
+    with pytest.raises(ChatModelUnavailableError, match="interrupted"):
+        asyncio.run(collect())
+    assert ollama_calls == 0

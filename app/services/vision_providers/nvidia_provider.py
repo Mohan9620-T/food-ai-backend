@@ -14,7 +14,7 @@ _HTTP_SESSION = requests.Session()
 
 
 class NvidiaConfigurationError(VisionModelUnavailableError):
-    """Raised when LLM_PROVIDER=nvidia but NVIDIA_API_KEY is not set."""
+    """Raised when NVIDIA is selected but its API key is not set."""
 
 
 class NvidiaVisionProvider(VisionProvider):
@@ -29,9 +29,7 @@ class NvidiaVisionProvider(VisionProvider):
     def infer(self, system_prompt: str, user_prompt: str, encoded_image: str) -> VisionResult:
         if not settings.NVIDIA_API_KEY:
             raise NvidiaConfigurationError(
-                "LLM_PROVIDER is set to 'nvidia' but NVIDIA_API_KEY is not "
-                "configured. Get a free key at https://build.nvidia.com/settings "
-                "and set NVIDIA_API_KEY in your .env file."
+                "NVIDIA_API_KEY is not configured."
             )
 
         schema_instructions = (

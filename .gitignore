@@ -10,6 +10,8 @@ __pycache__/
 *.pyo
 .coverage
 htmlcov/
+.pytest_cache/
+pytest-cache-files-*/
  
 # Node / Angular
 food-ai-ui/node_modules/

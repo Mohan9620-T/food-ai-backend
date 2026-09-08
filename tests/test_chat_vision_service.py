@@ -85,6 +85,35 @@ def test_describe_passes_accompanying_user_question(monkeypatch):
     assert "Transcribe any clearly visible text" in provider.calls[0]["system_prompt"]
 
 
+def test_production_prepares_nvidia_compatible_jpeg_even_with_ollama_dev_override(
+    monkeypatch,
+):
+    provider = install_provider(monkeypatch, vision_result(answer="description"))
+    captured = {}
+
+    def prepare(image_bytes, *, max_dimension=None, force_jpeg=False):
+        captured.update(
+            image_bytes=image_bytes,
+            max_dimension=max_dimension,
+            force_jpeg=force_jpeg,
+        )
+        return b"jpeg-image"
+
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "ollama")
+    monkeypatch.setattr("app.services.chat_vision_service.prepare_vision_image", prepare)
+
+    assert ChatVisionService().describe(b"source-image", "Describe it") == "description"
+    assert captured == {
+        "image_bytes": b"source-image",
+        "max_dimension": settings.NVIDIA_VISION_MAX_DIMENSION,
+        "force_jpeg": True,
+    }
+    assert provider.calls[0]["encoded_image"] == base64.b64encode(b"jpeg-image").decode(
+        "ascii"
+    )
+
+
 def test_describe_returns_direct_person_compliance_answer_instead_of_object_inventory(
     monkeypatch,
 ):

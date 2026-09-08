@@ -95,9 +95,16 @@ use the documented default or disable the associated integration when empty.
 | `OLLAMA_VISION_TIMEOUT_SECONDS` | Optional | Meal-image request timeout; default `660`. |
 | `OLLAMA_VISION_MAX_DIMENSION` | Optional | Longest image edge sent to Ollama; default `1024`. Stored originals are unchanged. |
 | `OLLAMA_CHAT_VISION_MODEL` | Optional | General image-chat model; default `qwen3-vl:4b`. |
-| `NVIDIA_CHAT_VISION_MODEL` | Optional | NVIDIA image-chat model; defaults to the faster `meta/llama-3.2-11b-vision-instruct`. |
-| `NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA connection timeout; default `2`. |
-| `NVIDIA_VISION_TIMEOUT_SECONDS` | Optional | NVIDIA response-read timeout; default `7`. |
+| `APP_ENVIRONMENT` | Optional | Set to `production` to enforce NVIDIA-first, Ollama-fallback routing regardless of `LLM_PROVIDER`; default `development`. |
+| `LLM_PROVIDER` | Optional | Development override: `ollama` is local-only; `nvidia` uses NVIDIA first with one Ollama fallback. |
+| `NVIDIA_API_KEY` | Required for NVIDIA | NVIDIA API credential. Never commit a real value. |
+| `NVIDIA_API_BASE_URL` | Optional | NVIDIA OpenAI-compatible API base URL. |
+| `NVIDIA_CHAT_MODEL` | Optional | NVIDIA text model; defaults to `deepseek-ai/deepseek-v4-pro-0813`. |
+| `NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA text connection timeout; default `5`. |
+| `NVIDIA_CHAT_TIMEOUT_SECONDS` | Optional | NVIDIA text response-read timeout; default `30`. |
+| `NVIDIA_CHAT_VISION_MODEL` | Optional | NVIDIA image-chat model; defaults to `meta/llama-3.2-90b-vision-instruct`. |
+| `NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA vision connection timeout; default `5`. |
+| `NVIDIA_VISION_TIMEOUT_SECONDS` | Optional | NVIDIA vision response-read timeout; default `45`. |
 | `NVIDIA_VISION_MAX_DIMENSION` | Optional | Longest image edge sent to NVIDIA; default `768`. Stored originals are unchanged. |
 | `NVIDIA_VISION_MAX_TOKENS` | Optional | Maximum NVIDIA response tokens; default `384`. |
 | `CHAT_VISION_OCR_ENABLED` | Optional | Enables a second local Tesseract OCR pass; default `false` for lower latency. |

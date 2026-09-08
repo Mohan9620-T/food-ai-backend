@@ -1,8 +1,8 @@
 import base64
 import logging
 import re
-from time import perf_counter
 from io import BytesIO
+from time import perf_counter
 
 from app.config import settings
 from app.schemas.vision_result import VisionResult
@@ -41,7 +41,9 @@ Group repeated objects of the same kind into one item. Keep every name and visua
 
     def describe(self, image_bytes: bytes, user_message: str | None) -> str:
         started_at = perf_counter()
-        using_nvidia = settings.LLM_PROVIDER == "nvidia"
+        using_nvidia = (
+            settings.APP_ENVIRONMENT == "production" or settings.LLM_PROVIDER == "nvidia"
+        )
         inference_image = prepare_vision_image(
             image_bytes,
             max_dimension=(settings.NVIDIA_VISION_MAX_DIMENSION if using_nvidia else None),

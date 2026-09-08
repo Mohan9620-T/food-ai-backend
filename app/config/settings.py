@@ -52,23 +52,29 @@ OLLAMA_VISION_MAX_DIMENSION = int(os.getenv("OLLAMA_VISION_MAX_DIMENSION", "1024
 OLLAMA_CHAT_VISION_MODEL = os.getenv("OLLAMA_CHAT_VISION_MODEL", "qwen3-vl:4b").strip()
 OLLAMA_CHAT_VISION_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_CHAT_VISION_TIMEOUT_SECONDS", "660"))
 
-# Vision provider routing: "ollama" (local, private, free-forever) or
-# "nvidia" (hosted API via build.nvidia.com, free credits, requires
-# internet and sends images off-device). Ollama remains the default so
-# existing deployments are unaffected unless this is explicitly set.
+# Production always uses NVIDIA first with one Ollama fallback. In development,
+# LLM_PROVIDER=ollama keeps inference local-only and nvidia exercises failover.
+APP_ENVIRONMENT = os.getenv("APP_ENVIRONMENT", "development").strip().lower()
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
 
-NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
+NVIDIA_API_KEY = (_read_secret("NVIDIA_API_KEY", "") or "").strip()
 NVIDIA_API_BASE_URL = os.getenv(
     "NVIDIA_API_BASE_URL", "https://integrate.api.nvidia.com/v1"
 ).rstrip("/")
+NVIDIA_CHAT_MODEL = os.getenv(
+    "NVIDIA_CHAT_MODEL", "deepseek-ai/deepseek-v4-pro-0813"
+).strip()
+NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS = float(
+    os.getenv("NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS", "5")
+)
+NVIDIA_CHAT_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_CHAT_TIMEOUT_SECONDS", "30"))
 NVIDIA_CHAT_VISION_MODEL = os.getenv(
-    "NVIDIA_CHAT_VISION_MODEL", "meta/llama-3.2-11b-vision-instruct"
+    "NVIDIA_CHAT_VISION_MODEL", "meta/llama-3.2-90b-vision-instruct"
 ).strip()
 NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS = float(
-    os.getenv("NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS", "2")
+    os.getenv("NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS", "5")
 )
-NVIDIA_VISION_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_VISION_TIMEOUT_SECONDS", "7"))
+NVIDIA_VISION_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_VISION_TIMEOUT_SECONDS", "45"))
 NVIDIA_VISION_MAX_DIMENSION = int(os.getenv("NVIDIA_VISION_MAX_DIMENSION", "768"))
 NVIDIA_VISION_MAX_TOKENS = int(os.getenv("NVIDIA_VISION_MAX_TOKENS", "384"))
 CHAT_VISION_OCR_ENABLED = os.getenv("CHAT_VISION_OCR_ENABLED", "false").lower() == "true"
