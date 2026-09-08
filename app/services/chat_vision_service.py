@@ -1,10 +1,12 @@
 import base64
 import logging
 import re
+from collections.abc import Sequence
 from io import BytesIO
 from time import perf_counter
 
 from app.config import settings
+from app.schemas.chat import ChatHistoryMessage
 from app.schemas.vision_result import VisionResult
 from app.services.vision_image_preprocessor import prepare_vision_image
 from app.services.vision_providers import get_vision_provider
@@ -34,12 +36,19 @@ food, text, or other.
 For every visible item include its name, confidence, and concrete visual evidence. Put ambiguous
 possibilities in uncertain_items rather than presenting them as facts.
 Group repeated objects of the same kind into one item. Keep every name and visual_evidence concise.
+For ordinary conversational answers, end with one short, relevant next-step suggestion. Omit it
+when the user requests JSON, code, plain text, a specific format, or only the direct answer.
 """
     EMPTY_RESPONSE_MESSAGE = (
         "I couldn't produce a description for this image. Please try again with a clearer image."
     )
 
-    def describe(self, image_bytes: bytes, user_message: str | None) -> str:
+    def describe(
+        self,
+        image_bytes: bytes,
+        user_message: str | None,
+        conversation_history: Sequence[ChatHistoryMessage] = (),
+    ) -> str:
         started_at = perf_counter()
         using_nvidia = (
             settings.APP_ENVIRONMENT == "production" or settings.LLM_PROVIDER == "nvidia"
@@ -51,6 +60,17 @@ Group repeated objects of the same kind into one item. Keep every name and visua
         )
         encoded_image = base64.b64encode(inference_image).decode("ascii")
         prompt = (user_message or "").strip() or "Please describe this image."
+        if conversation_history:
+            context = "\n".join(
+                f"{item.role}: {item.content[:1000]}"
+                for item in conversation_history[-6:]
+            )
+            prompt = (
+                "The following is recent conversation about this same image. Use it only "
+                "as context and answer the latest question.\n"
+                f"--- CONVERSATION ---\n{context}\n--- END CONVERSATION ---\n\n"
+                f"Latest question: {prompt}"
+            )
         # Hosted vision models already read image text. Local Tesseract can add several
         # seconds, so it is opt-in for cases that specifically require a second OCR pass.
         ocr_text = self._extract_ocr_text(image_bytes) if settings.CHAT_VISION_OCR_ENABLED else None

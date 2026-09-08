@@ -410,6 +410,175 @@ def test_chat_stream_returns_session_tokens_and_persists_answer(client, monkeypa
     assert session_response.json()["messages"][-1]["content"] == "Hello there"
 
 
+def test_chat_stream_reuses_latest_persisted_image_for_follow_up(
+    client,
+    db_session,
+    monkeypatch,
+):
+    token = _register_and_login(client, email="image-follow-up@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = client.post(
+        "/chat/sessions",
+        json={"title": "Image chat"},
+        headers=headers,
+    ).json()["id"]
+    db_session.add(
+        ChatMessageRecord(
+            session_id=session_id,
+            sender="user",
+            content="What is shown?",
+            image_data=b"persisted-image",
+            image_content_type="image/png",
+        )
+    )
+    db_session.add(
+        ChatMessageRecord(
+            session_id=session_id,
+            sender="bot",
+            content="The image shows several foods.",
+        )
+    )
+    db_session.commit()
+    captured = {}
+
+    def describe(self, image_bytes, user_message, conversation_history=()):
+        captured["image"] = image_bytes
+        captured["message"] = user_message
+        captured["history"] = [item.content for item in conversation_history]
+        return "The Indian food shown is dosa."
+
+    async def unexpected_text_stream(*args, **kwargs):
+        raise AssertionError("An image follow-up must use the vision service")
+        yield ""
+
+    monkeypatch.setattr(ChatVisionService, "describe", describe)
+    monkeypatch.setattr(ChatService, "stream_chat", unexpected_text_stream)
+
+    response = client.post(
+        f"/chat/stream?session_id={session_id}",
+        json={
+            "message": "Can you identify the Indian food?",
+            "history": [],
+            "reference_history": [],
+        },
+        headers=headers,
+    )
+
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    assert [event.get("content") for event in events if event["type"] == "token"] == [
+        "The Indian food shown is dosa."
+    ]
+    assert captured == {
+        "image": b"persisted-image",
+        "message": "Can you identify the Indian food?",
+        "history": ["What is shown?", "The image shows several foods."],
+    }
+    persisted = client.get(f"/chat/sessions/{session_id}", headers=headers).json()["messages"]
+    assert persisted[-2]["content"] == "Can you identify the Indian food?"
+    assert persisted[-1]["content"] == "The Indian food shown is dosa."
+
+
+def test_chat_stream_selects_relevant_older_image_in_multi_image_history(
+    client,
+    db_session,
+    monkeypatch,
+):
+    token = _register_and_login(client, email="multi-image-follow-up@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = client.post(
+        "/chat/sessions", json={"title": "Multiple images"}, headers=headers
+    ).json()["id"]
+    db_session.add_all(
+        [
+            ChatMessageRecord(
+                session_id=session_id,
+                sender="user",
+                content="How many food items are in this image?",
+                image_data=b"food-image",
+                image_content_type="image/png",
+            ),
+            ChatMessageRecord(
+                session_id=session_id,
+                sender="bot",
+                content="The image contains sixteen international food items.",
+            ),
+            ChatMessageRecord(
+                session_id=session_id,
+                sender="user",
+                content="How many people are in this image?",
+                image_data=b"people-image",
+                image_content_type="image/png",
+            ),
+            ChatMessageRecord(
+                session_id=session_id,
+                sender="bot",
+                content="The image shows a group of eighteen people.",
+            ),
+        ]
+    )
+    db_session.commit()
+    selected_images = []
+
+    def describe(self, image_bytes, user_message, conversation_history=()):
+        selected_images.append(image_bytes)
+        return "The selected historical image was analyzed."
+
+    monkeypatch.setattr(ChatVisionService, "describe", describe)
+    response = client.post(
+        f"/chat/stream?session_id={session_id}",
+        json={"message": "Can you identify the UAE food?"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert selected_images == [b"food-image"]
+
+
+def test_chat_stream_honors_explicit_historical_image_number(
+    client,
+    db_session,
+    monkeypatch,
+):
+    token = _register_and_login(client, email="numbered-image-follow-up@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = client.post(
+        "/chat/sessions", json={"title": "Numbered images"}, headers=headers
+    ).json()["id"]
+    for index in range(3):
+        db_session.add(
+            ChatMessageRecord(
+                session_id=session_id,
+                sender="user",
+                content=f"Uploaded picture {index + 1}",
+                image_data=f"image-{index + 1}".encode(),
+                image_content_type="image/png",
+            )
+        )
+        db_session.add(
+            ChatMessageRecord(
+                session_id=session_id,
+                sender="bot",
+                content=f"Description {index + 1}",
+            )
+        )
+    db_session.commit()
+    selected_images = []
+
+    def describe(self, image_bytes, user_message, conversation_history=()):
+        selected_images.append(image_bytes)
+        return "Done"
+
+    monkeypatch.setattr(ChatVisionService, "describe", describe)
+    response = client.post(
+        f"/chat/stream?session_id={session_id}",
+        json={"message": "Tell me more about the second image"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert selected_images == [b"image-2"]
+
+
 def test_chat_stream_generation_is_not_stopped_by_request_disconnect_check(client, monkeypatch):
     from starlette.requests import Request
 

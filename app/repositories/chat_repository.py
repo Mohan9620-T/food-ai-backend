@@ -19,6 +19,28 @@ class ChatRepository:
         )
         return list(reversed(messages))
 
+    def get_image_turns(
+        self,
+        db: Session,
+        session_id: int,
+    ) -> list[tuple[ChatMessageRecord, str]]:
+        """Return every persisted image and its immediate assistant response."""
+        messages = (
+            db.query(ChatMessageRecord)
+            .filter(ChatMessageRecord.session_id == session_id)
+            .order_by(ChatMessageRecord.created_at.asc(), ChatMessageRecord.id.asc())
+            .all()
+        )
+        turns: list[tuple[ChatMessageRecord, str]] = []
+        for index, message in enumerate(messages):
+            if message.image_data is None or message.image_content_type is None:
+                continue
+            response = ""
+            if index + 1 < len(messages) and messages[index + 1].sender == "bot":
+                response = str(messages[index + 1].content)
+            turns.append((message, response))
+        return turns
+
     def consolidate_sessions(self, db: Session, user_id: int) -> list[ChatSession]:
         sessions = (
             db.query(ChatSession)

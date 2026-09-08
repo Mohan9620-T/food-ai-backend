@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from typing import cast
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database.database import get_db
+from app.models.chat import ChatMessageRecord
 from app.rate_limit import limiter
 from app.repositories.chat_repository import ChatRepository
 from app.schemas.chat import ChatHistoryMessage, ChatRequest, ChatResponse
@@ -34,6 +36,41 @@ logger = logging.getLogger(__name__)
 stream_tasks: set[asyncio.Task] = set()
 MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024
 ALLOWED_CHAT_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+IMAGE_REFERENCE_ORDINALS = {
+    "first": 0,
+    "1st": 0,
+    "second": 1,
+    "2nd": 1,
+    "third": 2,
+    "3rd": 2,
+    "fourth": 3,
+    "4th": 3,
+    "fifth": 4,
+    "5th": 4,
+}
+IMAGE_MATCH_STOP_WORDS = {
+    "about",
+    "also",
+    "and",
+    "are",
+    "can",
+    "could",
+    "from",
+    "have",
+    "identify",
+    "image",
+    "picture",
+    "please",
+    "show",
+    "shown",
+    "that",
+    "the",
+    "this",
+    "what",
+    "which",
+    "with",
+    "you",
+}
 
 
 def _get_user_id(current_user: dict) -> int:
@@ -63,6 +100,44 @@ def _get_persisted_history(db: Session, session_id: int) -> list[ChatHistoryMess
         )
         for message in repository.get_message_history(db, session_id)
     ]
+
+
+def _select_referenced_image(
+    question: str,
+    image_turns: list[tuple[ChatMessageRecord, str]],
+) -> ChatMessageRecord | None:
+    """Choose the historical image whose original turn best matches a follow-up."""
+    if not image_turns:
+        return None
+
+    normalized = question.lower()
+    for label, index in IMAGE_REFERENCE_ORDINALS.items():
+        if re.search(rf"\b{re.escape(label)}\s+(?:uploaded\s+)?(?:image|picture|photo)\b", normalized):
+            if index < len(image_turns):
+                return image_turns[index][0]
+    if re.search(r"\b(?:previous|prior)\s+(?:image|picture|photo)\b", normalized):
+        return image_turns[-2][0] if len(image_turns) > 1 else image_turns[0][0]
+    if re.search(r"\b(?:latest|last|current)\s+(?:image|picture|photo)\b", normalized):
+        return image_turns[-1][0]
+
+    question_tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]+", normalized)
+        if len(token) >= 3 and token not in IMAGE_MATCH_STOP_WORDS
+    }
+    if not question_tokens:
+        return image_turns[-1][0]
+
+    best_index = len(image_turns) - 1
+    best_score = 0
+    for index, (image_message, immediate_response) in enumerate(image_turns):
+        context = f"{getattr(image_message, 'content', '')} {immediate_response}".lower()
+        context_tokens = set(re.findall(r"[a-z0-9]+", context))
+        score = len(question_tokens & context_tokens)
+        if score >= best_score and score > 0:
+            best_index = index
+            best_score = score
+    return image_turns[best_index][0]
 
 
 @router.get(
@@ -395,6 +470,20 @@ async def stream_chat(
     session = _get_or_create_chat_session(db, user_id, session_id, payload.message)
 
     history = _get_persisted_history(db, session.id)
+    image_turns = repository.get_image_turns(db, session.id)
+    referenced_image = _select_referenced_image(payload.message, image_turns)
+    referenced_turn = next(
+        (turn for turn in image_turns if turn[0] is referenced_image),
+        None,
+    )
+    vision_history = (
+        [
+            ChatHistoryMessage(role="user", content=cast(str, referenced_turn[0].content)),
+            ChatHistoryMessage(role="assistant", content=referenced_turn[1]),
+        ]
+        if referenced_turn is not None
+        else []
+    )
     repository.add_message(db, session.id, "user", payload.message)
     logger.info("chat.stream_started", extra={"user_id": user_id, "session_id": session.id})
 
@@ -403,6 +492,38 @@ async def stream_chat(
 
     async def produce_response():
         chunks: list[str] = []
+        if referenced_image is not None:
+            try:
+                answer = await asyncio.to_thread(
+                    vision_service.describe,
+                    cast(bytes, referenced_image.image_data),
+                    payload.message,
+                    vision_history,
+                )
+                chunks.append(answer)
+                await events.put({"type": "token", "content": answer})
+            except VisionModelUnavailableError as error:
+                logger.warning(
+                    "chat.follow_up_vision_unavailable",
+                    extra={"user_id": user_id, "session_id": session.id},
+                )
+                await events.put({"type": "error", "message": str(error)})
+                return
+        else:
+            if not await _produce_text_stream(chunks):
+                return
+
+        answer = "".join(chunks)
+        if answer:
+            worker_db = Session(bind=database_bind)
+            try:
+                repository.add_message(worker_db, session.id, "bot", answer)
+            finally:
+                worker_db.close()
+        logger.info("chat.stream_completed", extra={"user_id": user_id, "session_id": session.id})
+        await events.put({"type": "done"})
+
+    async def _produce_text_stream(chunks: list[str]) -> bool:
         iterator = service.stream_chat(
             payload.message,
             history,
@@ -418,7 +539,7 @@ async def stream_chat(
                 extra={"user_id": user_id, "session_id": session.id},
             )
             await events.put({"type": "error", "message": str(error)})
-            return
+            return False
         except Exception:
             logger.exception(
                 "chat.stream_generation_failed",
@@ -430,21 +551,12 @@ async def stream_chat(
                     "message": "The response could not be generated. Please try again.",
                 }
             )
-            return
+            return False
         finally:
             close = getattr(iterator, "aclose", None)
             if close:
                 await close()
-
-        answer = "".join(chunks)
-        if answer:
-            worker_db = Session(bind=database_bind)
-            try:
-                repository.add_message(worker_db, session.id, "bot", answer)
-            finally:
-                worker_db.close()
-        logger.info("chat.stream_completed", extra={"user_id": user_id, "session_id": session.id})
-        await events.put({"type": "done"})
+        return True
 
     producer = asyncio.create_task(produce_response())
     stream_tasks.add(producer)
