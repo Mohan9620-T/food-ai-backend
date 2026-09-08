@@ -55,3 +55,15 @@ h1 {
 .btn-secondary:hover {
   background: #f0faf7;
 }
+:host{display:grid;min-height:100dvh;overflow:hidden;place-items:center;background:radial-gradient(circle at 18% 18%,color-mix(in srgb,var(--herb) 17%,transparent),transparent 25%),radial-gradient(circle at 82% 80%,color-mix(in srgb,var(--accent) 15%,transparent),transparent 28%),var(--surface)}
+:host .welcome-container{position:relative;width:min(620px,calc(100% - 32px));margin:0;padding:clamp(36px,7vw,76px);gap:16px;border:1px solid var(--border);border-radius:32px;background:color-mix(in srgb,var(--surface-raised) 92%,transparent);box-shadow:var(--shadow);backdrop-filter:blur(16px)}
+:host .welcome-container::before{display:grid;width:64px;height:64px;place-items:center;border-radius:20px;background:var(--herb-soft);color:var(--herb);content:'✦';font-size:1.7rem}
+:host h1{margin:8px 0 0;font-size:clamp(3rem,8vw,5.6rem);line-height:.92}
+:host .subtitle{max-width:390px;margin:0;color:var(--text-muted);font-size:1.05rem;line-height:1.6}
+:host .button-group{max-width:390px;flex-direction:row}
+:host .btn{flex:1;border-radius:999px;font-weight:750;transition:transform 160ms ease,box-shadow 160ms ease}
+:host .btn-primary{background:var(--accent);color:var(--accent-contrast)}
+:host .btn-primary:hover{background:var(--accent-hover);transform:translateY(-2px);box-shadow:0 10px 24px color-mix(in srgb,var(--accent) 22%,transparent)}
+:host .btn-secondary{border-color:var(--border);background:var(--surface-raised);color:var(--text)}
+:host .btn-secondary:hover{background:var(--surface-hover);transform:translateY(-2px)}
+@media(max-width:520px){:host .button-group{flex-direction:column}:host .welcome-container{border-radius:22px}}

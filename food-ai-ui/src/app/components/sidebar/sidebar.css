@@ -5,11 +5,11 @@
 .sidebar {
   display: flex;
   flex-direction: column;
-  width: 280px;
+  width: 292px;
   height: 100%;
-  padding: var(--space-3) var(--space-2) 0;
+  padding: var(--space-4) var(--space-3) 0;
   border-right: 1px solid var(--border);
-  background: var(--surface-subtle);
+  background: radial-gradient(circle at 10% 0, color-mix(in srgb, var(--accent) 13%, transparent), transparent 28%), var(--surface-subtle);
   color: var(--text);
 }
 button {
@@ -30,10 +30,13 @@ button {
   padding: var(--space-3);
   border-radius: 10px;
   text-align: left;
+  font-weight: 650;
+  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
 }
 .primary-navigation button:hover,
 .profile-trigger:hover {
   background: var(--surface-hover);
+  color: var(--accent);
 }
 .primary-navigation span {
   width: 18px;
@@ -41,8 +44,12 @@ button {
 }
 h2 {
   margin: var(--space-5) var(--space-3) var(--space-2);
-  color: var(--text-muted);
+  color: var(--accent);
   font-size: 0.75rem;
+  font-family: var(--font-ui);
+  font-weight: 800;
+  letter-spacing: .11em;
+  text-transform: uppercase;
 }
 .conversation-list {
   flex: 1;
@@ -57,12 +64,16 @@ h2 {
   display: flex;
   align-items: center;
   margin: 2px 0;
-  border-radius: 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  transition: background 160ms ease, border-color 160ms ease;
 }
 .conversation-row:hover,
 .conversation-row.active {
-  background: var(--surface-hover);
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+  background: color-mix(in srgb, var(--surface-raised) 80%, var(--accent) 5%);
 }
+.conversation-row.active::before{position:absolute;left:-5px;width:3px;height:54%;border-radius:999px;background:var(--accent);content:''}
 .conversation {
   display: flex;
   flex: 1;
@@ -163,7 +174,7 @@ h2 {
   height: 34px;
   place-items: center;
   border-radius: 50%;
-  background: var(--accent);
+  background: linear-gradient(145deg, var(--accent), var(--gold));
   color: var(--accent-contrast);
   font-size: 0.75rem;
 }

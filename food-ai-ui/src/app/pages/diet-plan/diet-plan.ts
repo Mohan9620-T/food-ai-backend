@@ -15,5 +15,6 @@ export class DietPlanPage {
   generate():void{if(!this.profile()||this.loading())return;this.error='';this.service.generate().subscribe({error:(e:HttpErrorResponse)=>this.error=typeof e.error?.detail==='string'?e.error.detail:'Plan could not be generated.'});}
   meals(plan:DietPlan,day:number):DietPlanMeal[]{return plan.meals.filter(m=>m.day_of_week===day);}
   totals(plan:DietPlan,day:number):PlanTotals|undefined{return plan.daily_totals.find(t=>t.day_of_week===day);}
+  progress(actual:number,target:number|null):number{return target&&target>0?Math.min(100,Math.round(actual/target*100)):0;}
   select(plan:DietPlan):void{this.service.select(plan);} delete(id:number):void{this.service.delete(id).subscribe();}
 }

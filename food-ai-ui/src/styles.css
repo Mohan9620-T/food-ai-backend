@@ -5,35 +5,43 @@
   --space-4: 1rem;
   --space-5: 1.5rem;
   --space-6: 2rem;
-  --surface: #fff;
-  --surface-subtle: #f7f8fa;
-  --surface-raised: #fff;
-  --surface-hover: #eceff3;
-  --text: #17202a;
-  --text-muted: #667085;
-  --border: #dde2e8;
-  --accent: #0f8f72;
-  --accent-hover: #0b755d;
+  --surface: #f8f3ea;
+  --surface-subtle: #f1e9dc;
+  --surface-raised: #fffdf8;
+  --surface-hover: #eadfce;
+  --text: #29241f;
+  --text-muted: #776b60;
+  --border: #ded3c5;
+  --accent: #d85c41;
+  --accent-hover: #b94731;
   --accent-contrast: #fff;
-  --danger: #c43242;
-  --focus: #54bca3;
-  --shadow: 0 12px 32px rgb(16 24 40 / 14%);
+  --herb: #397a54;
+  --herb-soft: #e2eee5;
+  --gold: #e6a23c;
+  --danger: #b83b3f;
+  --focus: #d85c41;
+  --shadow: 0 18px 44px rgb(70 48 31 / 14%);
+  --font-display: "DM Serif Display", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --font-ui: Inter, "Avenir Next", Avenir, ui-sans-serif, system-ui, sans-serif;
 }
 
 :root[data-theme='dark'] {
-  --surface: #14181f;
-  --surface-subtle: #0e1218;
-  --surface-raised: #202630;
-  --surface-hover: #29313d;
-  --text: #edf1f5;
-  --text-muted: #a8b1bd;
-  --border: #303946;
-  --accent: #28b18f;
-  --accent-hover: #39c6a2;
-  --accent-contrast: #071812;
-  --danger: #ff7180;
-  --focus: #6bd4ba;
-  --shadow: 0 12px 32px rgb(0 0 0 / 35%);
+  --surface: #1d1a17;
+  --surface-subtle: #171411;
+  --surface-raised: #29241f;
+  --surface-hover: #373029;
+  --text: #f7f0e6;
+  --text-muted: #b9aa9d;
+  --border: #463d35;
+  --accent: #f07a5e;
+  --accent-hover: #ff8d70;
+  --accent-contrast: #24120d;
+  --herb: #78b98c;
+  --herb-soft: #24382a;
+  --gold: #f1b85c;
+  --danger: #ff7c7f;
+  --focus: #f07a5e;
+  --shadow: 0 18px 44px rgb(0 0 0 / 42%);
 }
 
 * { box-sizing: border-box; }
@@ -41,9 +49,11 @@ html, body { height: 100%; margin: 0; }
 body {
   background: var(--surface);
   color: var(--text);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-ui);
 }
 button, input, textarea { font: inherit; }
+h1, h2, .display-title { font-family: var(--font-display); font-weight: 400; letter-spacing: -.02em; }
+dd, .numeric { font-variant-numeric: tabular-nums; }
 :focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 55%, transparent); outline-offset: 2px; }
 .dialog-backdrop{position:fixed;z-index:100;inset:0;display:grid;place-items:center;padding:20px;background:rgb(0 0 0/45%)}
 .delete-dialog{width:min(420px,100%);padding:var(--space-5);border:1px solid var(--border);border-radius:14px;background:var(--surface-raised);box-shadow:var(--shadow)}

@@ -254,3 +254,12 @@ dd {
     text-align: left;
   }
 }
+:host .meal-page{background:radial-gradient(circle at 90% 0,color-mix(in srgb,var(--herb) 9%,transparent),transparent 26%)}
+:host .page-header h1{font-size:clamp(2.4rem,5vw,4rem);line-height:1}
+:host .eyebrow{color:var(--herb);letter-spacing:.12em}
+:host .entry-card,:host .totals-card,:host .meal-card{border-radius:20px;box-shadow:0 10px 30px rgb(70 48 31/7%)}
+:host .entry-footer button,:host .photo-button{transition:transform 160ms ease,box-shadow 160ms ease,background 160ms ease}
+:host .entry-footer button:hover:not(:disabled),:host .photo-button:hover{transform:translateY(-2px);box-shadow:0 8px 20px color-mix(in srgb,var(--accent) 18%,transparent)}
+:host .totals-card dl div{border:1px solid color-mix(in srgb,var(--herb) 18%,var(--border));background:var(--herb-soft)}
+:host .totals-card dd{color:var(--herb);font-variant-numeric:tabular-nums}
+:host .source-badge{background:var(--herb-soft);color:var(--herb)}
