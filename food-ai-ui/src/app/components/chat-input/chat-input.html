@@ -2,8 +2,9 @@
   @if (isDraggingImage) {
     <div class="image-drop-overlay" role="status" aria-live="polite">
       <div>
-        <span aria-hidden="true">&#128444;</span><strong>Drop image to attach</strong
-        ><small>JPEG, PNG, WebP, or GIF · maximum 8 MB</small>
+        <span aria-hidden="true">&#128206;</span><strong>Drop an image or document to attach</strong
+        ><small>Images: JPEG, PNG, WebP, GIF (8 MB maximum)</small>
+        <small>Documents: PDF, DOCX, TXT, CSV, XLSX (15 MB maximum)</small>
       </div>
     </div>
   }
@@ -18,6 +19,7 @@
         type="button"
         class="remove-image"
         (click)="removeImage()"
+        [disabled]="isSending()"
         aria-label="Remove attached image"
       >
         &times;
@@ -27,8 +29,8 @@
   @if (selectedDocument) {
     <div class="image-preview document-preview">
       <span aria-hidden="true">&#128196;</span>
-      <div><strong>{{ selectedDocument.name }}</strong><small>Ready to read end-to-end</small></div>
-      <button type="button" class="remove-image" (click)="removeDocument()" aria-label="Remove attached document">&times;</button>
+      <div><strong>{{ selectedDocument.name }}</strong><small>{{ processingDocument() ? 'Processing document…' : 'Send to import, or create a document using this file' }}</small></div>
+      <button type="button" class="remove-image" (click)="removeDocument()" [disabled]="isSending()" aria-label="Remove attached document">&times;</button>
     </div>
   }
   @if (imageError) {
@@ -40,6 +42,23 @@
   @if (speechError) {
     <div class="image-error speech-error" role="alert">{{ speechError }}</div>
   }
+  @if (showDocumentCreator) {
+    <form id="document-creator" class="document-creator" [formGroup]="documentForm" (ngSubmit)="submitDocument()" aria-labelledby="document-creator-title">
+      <h2 id="document-creator-title">Create a document</h2>
+      <p id="document-source-help">Describe what you need. Any attached document will be imported first, and the current conversation will be used as context.</p>
+      <label for="document-instruction">Document instructions</label>
+      <textarea #documentInstructionInput id="document-instruction" formControlName="instruction" rows="3" maxlength="2000" required aria-describedby="document-source-help" placeholder="For example: Create a nutrition summary with headings and recommendations." [readOnly]="isSending()"></textarea>
+      <div class="document-actions">
+        <label for="document-format">File format</label>
+        <select id="document-format" formControlName="format">
+          <option value="pdf">PDF</option>
+          <option value="docx">Word (.docx)</option>
+        </select>
+        <button type="button" class="cancel-document" (click)="closeDocumentCreator()" [disabled]="isSending()">Cancel</button>
+        <button type="submit" [disabled]="isSending()">{{ processingDocument() ? 'Creating…' : 'Create document' }}</button>
+      </div>
+    </form>
+  }
   <div class="chat-input">
     <input
       #imagePicker
@@ -47,14 +66,16 @@
       type="file"
       accept="image/jpeg,image/png,image/webp,image/gif,.pdf,.docx,.txt,.csv,.xlsx"
       (change)="selectImage($event)"
+      aria-label="Choose an image or document"
+      tabindex="-1"
     />
     <button
       type="button"
       class="attach-button"
       (click)="imagePicker.click()"
       [disabled]="isSending()"
-      aria-label="Attach image"
-      title="Attach image"
+      aria-label="Attach image or document"
+      title="Import image or document"
     >
       <span aria-hidden="true">&#128206;</span>
     </button>
@@ -72,7 +93,7 @@
         <span aria-hidden="true">&#127908;</span>
       </button>
     }
-    <button type="button" class="attach-button" (click)="createDocument()" [disabled]="isSending()" aria-label="Create document" title="Create document"><span aria-hidden="true">&#10010;</span></button>
+    <button #createDocumentButton type="button" class="attach-button" (click)="createDocument()" [disabled]="isSending()" [attr.aria-expanded]="showDocumentCreator" [attr.aria-controls]="showDocumentCreator ? 'document-creator' : null" aria-label="Create document" title="Create document"><span aria-hidden="true">&#128196;</span></button>
     <textarea
       #messageInput
       rows="1"

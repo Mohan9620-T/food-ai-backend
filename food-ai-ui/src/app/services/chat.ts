@@ -4,6 +4,7 @@ import { isPlatformBrowser } from '@angular/common';
 import {
   catchError,
   concatMap,
+  defer,
   finalize,
   forkJoin,
   from,
@@ -82,6 +83,7 @@ export class ChatService {
   private readonly loadingSessionsState = signal(false);
   private readonly analyzingImageConversationIdsState = signal<ReadonlySet<string>>(new Set());
   private readonly processingDocumentConversationIdsState = signal<ReadonlySet<string>>(new Set());
+  private readonly documentOperationCounts = new Map<string, number>();
   private streamAbortController: AbortController | null = null;
   private pendingHistoryTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingHistoryRefreshes = 0;
@@ -176,26 +178,30 @@ export class ChatService {
   }
 
   uploadDocument(file: File, message: string | null, conversationId = this.activeConversationIdState()): Observable<ChatResponse> {
-    const form = new FormData();
-    form.append('file', file, file.name);
-    if (message?.trim()) form.append('message', message.trim());
-    const sessionId = this.toServerSessionId(conversationId);
-    if (sessionId !== null) form.append('session_id', String(sessionId));
-    this.setDocumentProcessing(conversationId, true);
-    return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/documents`, form).pipe(
-      tap(response => { if (conversationId) this.acceptResponse(conversationId, response); }),
-      finalize(() => this.setDocumentProcessing(conversationId, false))
-    );
+    return defer(() => {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      if (message?.trim()) form.append('message', message.trim());
+      const sessionId = this.toServerSessionId(conversationId);
+      if (sessionId !== null) form.append('session_id', String(sessionId));
+      this.setDocumentProcessing(conversationId, true);
+      return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/documents`, form).pipe(
+        tap(response => { if (conversationId) this.acceptResponse(conversationId, response); }),
+        finalize(() => this.setDocumentProcessing(conversationId, false))
+      );
+    });
   }
 
-  generateDocument(sessionId: number, instruction: string, outputFormat: 'pdf' | 'docx' = 'pdf', conversationId = this.activeConversationIdState()): Observable<ChatResponse> {
-    this.setDocumentProcessing(conversationId, true);
-    return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/documents/generate`, {
-      session_id: sessionId, instruction, output_format: outputFormat
-    }).pipe(
-      tap(response => { if (conversationId) this.acceptResponse(conversationId, response); }),
-      finalize(() => this.setDocumentProcessing(conversationId, false))
-    );
+  generateDocument(sessionId: number | null, instruction: string, outputFormat: 'pdf' | 'docx' = 'pdf', conversationId = this.activeConversationIdState()): Observable<ChatResponse> {
+    return defer(() => {
+      this.setDocumentProcessing(conversationId, true);
+      return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/documents/generate`, {
+        session_id: sessionId, instruction, output_format: outputFormat
+      }).pipe(
+        tap(response => { if (conversationId) this.acceptResponse(conversationId, response); }),
+        finalize(() => this.setDocumentProcessing(conversationId, false))
+      );
+    });
   }
 
   downloadDocument(documentId: number, filename: string): void {
@@ -211,9 +217,13 @@ export class ChatService {
 
   private setDocumentProcessing(conversationId: string | null, processing: boolean): void {
     if (!conversationId) return;
+    const count = Math.max(0, (this.documentOperationCounts.get(conversationId) ?? 0) + (processing ? 1 : -1));
+    if (count) this.documentOperationCounts.set(conversationId, count);
+    else this.documentOperationCounts.delete(conversationId);
     this.processingDocumentConversationIdsState.update(ids => {
       const updated = new Set(ids);
-      processing ? updated.add(conversationId) : updated.delete(conversationId);
+      if (count) updated.add(conversationId);
+      else updated.delete(conversationId);
       return updated;
     });
   }
@@ -831,6 +841,7 @@ export class ChatService {
     this.migrationNoticeState.set(null);
     this.analyzingImageConversationIdsState.set(new Set());
     this.processingDocumentConversationIdsState.set(new Set());
+    this.documentOperationCounts.clear();
   }
 
   private updateConversationTitle(conversationId: string, title: string): void {

@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ChatHistoryMessage(BaseModel):
@@ -38,6 +38,13 @@ class ChatDocumentResponse(ChatResponse):
 
 
 class ChatDocumentGenerateRequest(BaseModel):
-    session_id: int
+    session_id: int | None = Field(default=None, gt=0)
     instruction: str = Field(min_length=1, max_length=2000)
     output_format: Literal["pdf", "docx"] = "pdf"
+
+    @field_validator("instruction")
+    @classmethod
+    def strip_instruction(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Describe the document you want to create.")
+        return value.strip()

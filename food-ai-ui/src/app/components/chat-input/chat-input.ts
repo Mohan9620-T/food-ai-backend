@@ -1,26 +1,47 @@
-import { afterNextRender, ChangeDetectorRef, Component, DestroyRef, effect, ElementRef, HostListener, inject, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectorRef, Component, computed, DestroyRef, effect, ElementRef, inject, signal, viewChild } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
-import { FormsModule } from '@angular/forms';
+import { FormControl, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ChatService, ChatStreamError } from '../../services/chat';
 import { AuthService } from '../../services/auth';
 import { ChatRequest } from '../../models/chat';
-import { Subscription } from 'rxjs';
+import { defer, finalize, Subscription, switchMap, tap } from 'rxjs';
 import { SpeechRecognitionService } from '../../services/speech-recognition';
+
+interface ComposerDraft {
+  message: string;
+  selectedImage: File | null;
+  selectedDocument: File | null;
+  imagePreviewUrl: string | null;
+  imageError: string | null;
+  showDocumentCreator: boolean;
+}
+
+const EMPTY_DRAFT: ComposerDraft = {
+  message: '', selectedImage: null, selectedDocument: null,
+  imagePreviewUrl: null, imageError: null, showDocumentCreator: false
+};
 
 @Component({
   selector: 'app-chat-input',
-  imports: [FormsModule],
+  imports: [FormsModule, ReactiveFormsModule],
   templateUrl: './chat-input.html',
-  styleUrls: ['./chat-input.css']
+  styleUrls: ['./chat-input.css'],
+  host: {
+    '(document:dragenter)': 'handleDragEnter($event)',
+    '(document:dragover)': 'handleDragOver($event)',
+    '(document:dragleave)': 'handleDragLeave($event)',
+    '(document:drop)': 'handleDrop($event)'
+  }
 })
 export class ChatInput {
-  message = '';
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
+  private readonly documentInstructionInput = viewChild<ElementRef<HTMLTextAreaElement>>('documentInstructionInput');
+  private readonly createDocumentButton = viewChild<ElementRef<HTMLButtonElement>>('createDocumentButton');
   private readonly destroyRef = inject(DestroyRef);
   private readonly changeDetectorRef = inject(ChangeDetectorRef);
   private readonly chatService = inject(ChatService);
-  readonly isSending = this.chatService.isResponding;
+  readonly isSending = computed(() => this.chatService.isResponding() || this.processingDocument());
   readonly editingMessage = this.chatService.editingMessage;
   readonly analyzingImage = this.chatService.analyzingImage;
   readonly processingDocument = this.chatService.processingDocument;
@@ -29,14 +50,35 @@ export class ChatInput {
   readonly isListening = this.speechService.isListening;
   private readonly authService = inject(AuthService);
   private readonly router = inject(Router);
-  selectedImage: File | null = null;
-  selectedDocument: File | null = null;
-  imagePreviewUrl: string | null = null;
-  imageError: string | null = null;
+  private readonly drafts = signal<ReadonlyMap<string, ComposerDraft>>(new Map());
+  private readonly draft = computed(() => this.drafts().get(this.chatService.getActiveConversationId() ?? '') ?? EMPTY_DRAFT);
+  get message(): string { return this.draft().message; }
+  set message(value: string) { this.updateDraft({ message: value }); }
+  get selectedImage(): File | null { return this.draft().selectedImage; }
+  set selectedImage(value: File | null) { this.updateDraft({ selectedImage: value }); }
+  get selectedDocument(): File | null { return this.draft().selectedDocument; }
+  set selectedDocument(value: File | null) { this.updateDraft({ selectedDocument: value }); }
+  get imagePreviewUrl(): string | null { return this.draft().imagePreviewUrl; }
+  set imagePreviewUrl(value: string | null) { this.updateDraft({ imagePreviewUrl: value }); }
+  get imageError(): string | null { return this.draft().imageError; }
+  set imageError(value: string | null) { this.updateDraft({ imageError: value }); }
+  get showDocumentCreator(): boolean { return this.draft().showDocumentCreator; }
+  private readonly documentForms = new Map<string, ReturnType<ChatInput['newDocumentForm']>>();
+  get documentForm(): ReturnType<ChatInput['newDocumentForm']> {
+    const conversationId = this.chatService.getActiveConversationId() ?? '';
+    let form = this.documentForms.get(conversationId);
+    if (!form) {
+      form = this.newDocumentForm();
+      this.documentForms.set(conversationId, form);
+    }
+    return form;
+  }
   isDraggingImage = false;
   private dragDepth = 0;
   private visionSubscription: Subscription | null = null;
-  private documentSubscription: Subscription | null = null;
+  private readonly documentSubscriptions = new Map<string, Subscription>();
+  private readonly pendingUploads = new Map<string, { file: File; message: string }>();
+  private readonly pendingGenerations = new Map<string, string>();
   private dictationPrefix = '';
   private finalDictation = '';
 
@@ -62,9 +104,11 @@ export class ChatInput {
     });
     this.destroyRef.onDestroy(() => {
       this.visionSubscription?.unsubscribe();
-      this.documentSubscription?.unsubscribe();
+      this.documentSubscriptions.forEach(subscription => subscription.unsubscribe());
       this.speechService.stop();
-      if (this.imagePreviewUrl) URL.revokeObjectURL(this.imagePreviewUrl);
+      this.drafts().forEach(draft => {
+        if (draft.imagePreviewUrl) URL.revokeObjectURL(draft.imagePreviewUrl);
+      });
     });
   }
 
@@ -72,9 +116,19 @@ export class ChatInput {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0] ?? null;
     input.value = '';
-    if (!file) return;
-    if (file.type.startsWith('image/')) this.attachImage(file);
-    else this.attachDocument(file);
+    if (!file || this.isSending()) return;
+    this.attachFile(file);
+  }
+
+  private attachFile(file: File): void {
+    const imageTypes: Record<string, string> = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif'
+    };
+    const extension = file.name.split('.').at(-1)?.toLowerCase() ?? '';
+    const inferredType = (!file.type || file.type === 'application/octet-stream') ? imageTypes[extension] : undefined;
+    const attachment = inferredType ? new File([file], file.name, { type: inferredType, lastModified: file.lastModified }) : file;
+    if (attachment.type.startsWith('image/')) this.attachImage(attachment);
+    else this.attachDocument(attachment);
   }
 
   private attachDocument(file: File): void {
@@ -117,29 +171,26 @@ export class ChatInput {
     );
   }
 
-  @HostListener('document:dragenter', ['$event'])
   handleDragEnter(event: DragEvent): void {
-    if (!this.hasDraggedFiles(event) || this.isSending()) return;
+    if (!this.hasDraggedFiles(event)) return;
     event.preventDefault();
+    if (this.isSending()) return;
     this.dragDepth += 1;
     this.isDraggingImage = true;
   }
 
-  @HostListener('document:dragover', ['$event'])
   handleDragOver(event: DragEvent): void {
-    if (!this.hasDraggedFiles(event) || this.isSending()) return;
+    if (!this.hasDraggedFiles(event)) return;
     event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    if (event.dataTransfer) event.dataTransfer.dropEffect = this.isSending() ? 'none' : 'copy';
   }
 
-  @HostListener('document:dragleave', ['$event'])
   handleDragLeave(event: DragEvent): void {
     if (!this.hasDraggedFiles(event)) return;
     this.dragDepth = Math.max(0, this.dragDepth - 1);
     if (this.dragDepth === 0) this.isDraggingImage = false;
   }
 
-  @HostListener('document:drop', ['$event'])
   handleDrop(event: DragEvent): void {
     if (!this.hasDraggedFiles(event)) return;
     event.preventDefault();
@@ -150,11 +201,10 @@ export class ChatInput {
     const files = Array.from(event.dataTransfer?.files ?? []);
     if (files.length === 0) return;
     if (files.length > 1) {
-      this.imageError = 'Drop one image at a time.';
+      this.imageError = 'Drop one image or document at a time.';
       return;
     }
-    if (files[0].type.startsWith('image/')) this.attachImage(files[0]);
-    else this.attachDocument(files[0]);
+    this.attachFile(files[0]);
   }
 
   private hasDraggedFiles(event: DragEvent): boolean {
@@ -172,6 +222,7 @@ export class ChatInput {
       return;
     }
     this.removeImage();
+    this.removeDocument();
     this.selectedImage = file;
     this.imagePreviewUrl = URL.createObjectURL(file);
   }
@@ -214,6 +265,13 @@ export class ChatInput {
 
     const image = this.selectedImage;
     const documentFile = this.selectedDocument;
+    if (documentFile) {
+      this.imageError = null;
+      this.addUploadMessage(conversationId, documentFile, userMessage);
+      this.startDocumentResponse(conversationId, userMessage);
+      this.requestDocumentResponse(conversationId, documentFile, userMessage || null);
+      return;
+    }
     const previewUrl = this.imagePreviewUrl;
     if (!isEditing) {
       this.chatService.addMessage({ sender: 'user', text: userMessage || '[Image]', imageUrl: previewUrl ?? undefined }, conversationId);
@@ -235,26 +293,94 @@ export class ChatInput {
     };
     this.chatService.startResponse(conversationId, request);
     if (image) this.requestVisionResponse(conversationId, image, userMessage || null);
-    else if (documentFile) this.requestDocumentResponse(conversationId, documentFile, userMessage || null);
     else this.requestResponse(conversationId, request);
   }
 
   createDocument(): void {
-    const sessionId = this.chatService.getActiveSessionId();
-    if (sessionId === null || this.isSending()) { this.imageError = 'Send or upload something first, then create a document.'; return; }
-    const instruction = window.prompt('What document should I create?', 'Nutrition summary for my doctor');
+    if (this.isSending()) return;
+    this.updateDraft({ showDocumentCreator: true, imageError: null });
+    if (!this.documentForm.controls.instruction.value.trim() && this.message.trim()) {
+      this.documentForm.controls.instruction.setValue(this.message.trim());
+    }
+    this.changeDetectorRef.detectChanges();
+    this.documentInstructionInput()?.nativeElement.focus();
+  }
+
+  closeDocumentCreator(): void {
+    if (this.isSending()) return;
+    this.updateDraft({ showDocumentCreator: false, imageError: null });
+    this.createDocumentButton()?.nativeElement.focus();
+  }
+
+  submitDocument(): void {
+    if (this.isSending()) return;
+    const form = this.documentForm;
+    const instruction = form.controls.instruction.value.trim();
+    if (!instruction || form.invalid) {
+      this.imageError = 'Describe the document you want to create (up to 2,000 characters).';
+      this.documentInstructionInput()?.nativeElement.focus();
+      return;
+    }
     const conversationId = this.chatService.getActiveConversationId();
-    if (!instruction?.trim() || !conversationId) return;
-    this.chatService.addMessage({ sender: 'user', text: instruction.trim() }, conversationId);
-    this.documentSubscription = this.chatService.generateDocument(sessionId, instruction.trim(), 'pdf', conversationId).subscribe({
-      error: () => { this.imageError = 'The document could not be generated. Please try again.'; },
-      complete: () => { this.documentSubscription = null; }
+    if (!conversationId) return;
+    if (this.selectedImage) {
+      this.imageError = 'Send the attached image first, then create a document from the conversation.';
+      return;
+    }
+    if (this.isListening()) this.speechService.stop();
+    this.imageError = null;
+    const file = this.selectedDocument;
+    const message = this.message.trim();
+    const format = form.controls.format.value;
+    const sessionId = this.chatService.getActiveSessionId();
+    this.startDocumentResponse(conversationId, instruction);
+    const generate = (sourceSessionId: number | null) => defer(() => {
+      if (this.pendingGenerations.get(conversationId) !== instruction) {
+        this.chatService.addMessage({ sender: 'user', text: instruction }, conversationId);
+        this.pendingGenerations.set(conversationId, instruction);
+      }
+      return this.chatService.generateDocument(sourceSessionId, instruction, format, conversationId);
+    });
+    const request = file
+      ? defer(() => {
+          this.addUploadMessage(conversationId, file, message);
+          return this.chatService.uploadDocument(file, message || null, conversationId);
+        }).pipe(
+          tap(() => this.acceptDocumentUpload(conversationId, file, message)),
+          switchMap(response => generate(response.session_id))
+        )
+      : generate(sessionId);
+    const operation = new Subscription();
+    this.documentSubscriptions.set(conversationId, operation);
+    operation.add(request.pipe(finalize(() => this.finishDocumentResponse(conversationId))).subscribe({
+      next: () => {
+        this.pendingGenerations.delete(conversationId);
+        this.updateDraft({ showDocumentCreator: false, imageError: null }, conversationId);
+        form.reset({ instruction: '', format });
+        if (this.drafts().get(conversationId)?.message.trim() === instruction) {
+          this.updateDraft({ message: '' }, conversationId);
+        }
+      },
+      error: (error: HttpErrorResponse) => {
+        this.updateDraft({ imageError: this.documentError(error, 'The document could not be generated. Please try again.') }, conversationId);
+      }
+    }));
+  }
+
+  private newDocumentForm() {
+    return new FormGroup({
+      instruction: new FormControl('', { nonNullable: true, validators: [Validators.required, Validators.maxLength(2000)] }),
+      format: new FormControl<'pdf' | 'docx'>('pdf', { nonNullable: true })
     });
   }
 
   stopResponse(): void {
     if (!this.isSending()) return;
-    if (this.analyzingImage()) {
+    const conversationId = this.chatService.getActiveConversationId();
+    if (conversationId && this.documentSubscriptions.has(conversationId)) {
+      this.documentSubscriptions.get(conversationId)?.unsubscribe();
+      this.imageError = 'Document processing was cancelled. You can try again.';
+    } else if (this.analyzingImage()) {
       this.visionSubscription?.unsubscribe();
       this.visionSubscription = null;
       this.imageError = 'Image analysis was cancelled.';
@@ -262,7 +388,7 @@ export class ChatInput {
       this.chatService.stopStreaming();
     }
     const pending = this.chatService.getPendingResponse();
-    if (pending) this.chatService.finishResponse(pending.conversationId);
+    if (pending && pending.conversationId === conversationId) this.chatService.finishResponse(pending.conversationId);
     queueMicrotask(() => this.messageInput()?.nativeElement.focus());
   }
 
@@ -270,7 +396,7 @@ export class ChatInput {
     this.visionSubscription = this.chatService.sendVisionMessage(image, message, conversationId).subscribe({
       error: (error: HttpErrorResponse) => {
         const detail = typeof error.error?.detail === 'string' ? error.error.detail : null;
-        this.imageError = error.status === 503 ? detail ?? 'Vision model unavailable. Please start Ollama and try again.' : detail ?? 'The image could not be analyzed. Please try again.';
+        this.updateDraft({ imageError: error.status === 503 ? detail ?? 'Vision model unavailable. Please start Ollama and try again.' : detail ?? 'The image could not be analyzed. Please try again.' }, conversationId);
         this.finishVisionResponse(conversationId);
       },
       complete: () => this.finishVisionResponse(conversationId)
@@ -331,13 +457,56 @@ export class ChatInput {
   }
 
   private requestDocumentResponse(conversationId: string, file: File, message: string | null): void {
-    this.documentSubscription = this.chatService.uploadDocument(file, message, conversationId).subscribe({
+    const operation = new Subscription();
+    this.documentSubscriptions.set(conversationId, operation);
+    operation.add(this.chatService.uploadDocument(file, message, conversationId).pipe(
+      finalize(() => this.finishDocumentResponse(conversationId))
+    ).subscribe({
+      next: () => this.acceptDocumentUpload(conversationId, file, message ?? ''),
       error: (error: HttpErrorResponse) => {
-        this.imageError = typeof error.error?.detail === 'string' ? error.error.detail : 'The document could not be processed.';
-        this.chatService.finishResponse(conversationId);
-      },
-      complete: () => { this.documentSubscription = null; this.chatService.finishResponse(conversationId); }
+        this.updateDraft({ imageError: this.documentError(error, 'The document could not be processed. Your file is still attached; please try again.') }, conversationId);
+      }
+    }));
+  }
+
+  private addUploadMessage(conversationId: string, file: File, message: string): void {
+    const pending = this.pendingUploads.get(conversationId);
+    if (pending?.file === file && pending.message === message) return;
+    this.chatService.addMessage({ sender: 'user', text: message || `[Document: ${file.name}]` }, conversationId);
+    this.pendingUploads.set(conversationId, { file, message });
+  }
+
+  private startDocumentResponse(conversationId: string, message: string): void {
+    this.chatService.startResponse(conversationId, {
+      message, history: this.chatService.getHistory(conversationId),
+      referenceHistory: this.chatService.getReferenceHistory(message, conversationId)
     });
+  }
+
+  private acceptDocumentUpload(conversationId: string, file: File, message: string): void {
+    this.pendingUploads.delete(conversationId);
+    const draft = this.drafts().get(conversationId);
+    this.updateDraft({
+      ...(draft?.selectedDocument === file ? { selectedDocument: null } : {}),
+      ...(draft?.message.trim() === message ? { message: '' } : {}),
+      imageError: null
+    }, conversationId);
+  }
+
+  private finishDocumentResponse(conversationId: string): void {
+    this.documentSubscriptions.delete(conversationId);
+    this.chatService.finishResponse(conversationId);
+    if (this.chatService.getActiveConversationId() === conversationId) {
+      queueMicrotask(() => this.messageInput()?.nativeElement.focus());
+    }
+  }
+
+  private documentError(error: HttpErrorResponse, fallback: string): string {
+    return typeof error.error?.detail === 'string' ? error.error.detail : fallback;
+  }
+
+  private updateDraft(patch: Partial<ComposerDraft>, conversationId = this.chatService.getActiveConversationId() ?? ''): void {
+    this.drafts.update(drafts => new Map(drafts).set(conversationId, { ...EMPTY_DRAFT, ...drafts.get(conversationId), ...patch }));
   }
 
   private updateDictatedMessage(dictatedText: string): void {

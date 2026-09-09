@@ -1,13 +1,16 @@
 import csv
 import re
+from codecs import BOM_UTF16_BE, BOM_UTF16_LE
+from contextlib import closing
+from html import escape
 from io import BytesIO, StringIO
 from pathlib import Path
 
 import pytesseract
 from docx import Document
 from openpyxl import load_workbook
-from PIL import Image
 from pypdf import PdfReader
+from pypdf.errors import DependencyError
 from pypdfium2 import PdfDocument
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
@@ -21,7 +24,13 @@ class InvalidDocumentError(ValueError):
     pass
 
 
+class DocumentProcessingUnavailableError(RuntimeError):
+    pass
+
+
 class ChatDocumentService:
+    OCR_PAGE_TIMEOUT_SECONDS = 30
+
     def __init__(self, chat_service: ChatService | None = None):
         self.chat_service = chat_service or ChatService()
 
@@ -38,23 +47,30 @@ class ChatDocumentService:
                         "\t".join(cell.text for cell in row.cells) for row in table.rows
                     )
             elif extension == ".xlsx":
-                workbook = load_workbook(BytesIO(file_data), read_only=True, data_only=True)
-                text = "\n".join(
-                    f"[{sheet.title}]\n" + "\n".join(
-                        "\t".join("" if value is None else str(value) for value in row)
-                        for row in sheet.iter_rows(values_only=True)
-                    )
-                    for sheet in workbook.worksheets
-                )
+                sheets = []
+                with closing(load_workbook(BytesIO(file_data), read_only=True, data_only=True)) as workbook:
+                    for sheet in workbook.worksheets:
+                        rows = "\n".join(
+                            "\t".join("" if value is None else str(value) for value in row)
+                            for row in sheet.iter_rows(values_only=True)
+                            if any(value is not None for value in row)
+                        )
+                        if rows.strip():
+                            sheets.append(f"[{sheet.title}]\n{rows}")
+                text = "\n".join(sheets)
             elif extension == ".csv":
-                decoded = file_data.decode("utf-8-sig")
+                decoded = self._decode_text(file_data)
                 text = "\n".join("\t".join(row) for row in csv.reader(StringIO(decoded)))
             elif extension == ".txt":
-                text = file_data.decode("utf-8-sig")
+                text = self._decode_text(file_data)
             else:
                 raise InvalidDocumentError("Unsupported document type.")
-        except InvalidDocumentError:
+        except (InvalidDocumentError, DocumentProcessingUnavailableError):
             raise
+        except DependencyError as error:
+            raise DocumentProcessingUnavailableError(
+                "The server cannot read this PDF's encryption. Upload an unencrypted copy."
+            ) from error
         except Exception as error:
             raise InvalidDocumentError("The document is corrupt or could not be read.") from error
         if not text.strip():
@@ -63,9 +79,11 @@ class ChatDocumentService:
 
     def summarize(self, raw_text: str, instruction: str | None) -> str:
         prompt = (
-            "Extract a concise, structured nutrition-assistant summary from this document. "
-            "Include only supported facts such as lab values, diet plans, ingredients, allergies, "
-            "restrictions, medications, dates, and food preferences. Do not diagnose.\n\n"
+            "Read the uploaded document and respond to the user note using only its supported facts. "
+            "If there is no specific request, provide a concise, structured summary. "
+            "Preserve relevant headings, subheadings, names, dates, values, and table details. "
+            "Summarize the actual subject of the document; do not omit information just because "
+            "it is unrelated to nutrition. For health information, do not diagnose.\n\n"
             f"User note: {instruction or 'No additional note.'}\n\nDocument:\n{raw_text[:30000]}"
         )
         return self.chat_service.chat(prompt, [], [])
@@ -112,20 +130,67 @@ class ChatDocumentService:
                 story.append(Spacer(1, 8))
             else:
                 style = styles["Heading2"] if stripped.startswith("#") else styles["BodyText"]
-                story.append(Paragraph(stripped.lstrip("# "), style))
+                story.append(Paragraph(escape(stripped.lstrip("# ")), style))
                 story.append(Spacer(1, 5))
         pdf.build(story)
         return buffer.getvalue(), f"{safe_name}.pdf", "application/pdf"
 
+    @staticmethod
+    def _decode_text(file_data: bytes) -> str:
+        encoding = "utf-16" if file_data.startswith((BOM_UTF16_LE, BOM_UTF16_BE)) else "utf-8-sig"
+        try:
+            text = file_data.decode(encoding)
+        except UnicodeDecodeError as error:
+            raise InvalidDocumentError(
+                "The text file uses an unsupported encoding. Save it as UTF-8 or UTF-16 and upload it again."
+            ) from error
+        if any(ord(character) < 32 and character not in "\t\n\r\f" for character in text):
+            raise InvalidDocumentError("The file contains binary data instead of readable text.")
+        return text
+
     def _extract_pdf(self, file_data: bytes) -> str:
         reader = PdfReader(BytesIO(file_data))
-        text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        if text.strip():
-            return text
-        pdf = PdfDocument(file_data)
+        if reader.is_encrypted and not reader.decrypt(""):
+            raise InvalidDocumentError(
+                "This PDF is password-protected. Remove its password and upload it again."
+            )
         pages = []
-        for page in pdf:
-            bitmap = page.render(scale=2)
-            image = Image.fromarray(bitmap.to_numpy())
-            pages.append(pytesseract.image_to_string(image))
+        ocr_indexes = []
+        for index, source_page in enumerate(reader.pages):
+            text = source_page.extract_text() or ""
+            pages.append(text)
+            # Retain searchable pages and only render pages that need OCR.
+            # A page with no content stream is physically empty, so skip it.
+            if not text.strip() and source_page.get_contents() is not None:
+                ocr_indexes.append(index)
+        if not ocr_indexes:
+            return "\n".join(pages)
+        try:
+            with closing(PdfDocument(file_data)) as pdf:
+                for index in ocr_indexes:
+                    with closing(pdf[index]) as page:
+                        with closing(page.render(scale=2)) as bitmap:
+                            # PDFium can create a Pillow image directly; to_numpy()
+                            # requires an optional dependency that we do not install.
+                            with closing(bitmap.to_pil()) as image:
+                                pages[index] = pytesseract.image_to_string(
+                                    image, timeout=self.OCR_PAGE_TIMEOUT_SECONDS
+                                )
+        except pytesseract.TesseractNotFoundError as error:
+            raise DocumentProcessingUnavailableError(
+                "This PDF contains scanned pages, but OCR is unavailable on the server. "
+                "Upload a searchable PDF or ask the administrator to enable OCR."
+            ) from error
+        except pytesseract.TesseractError as error:
+            raise DocumentProcessingUnavailableError(
+                "The server could not read the scanned PDF using OCR. "
+                "Upload a searchable PDF or contact the administrator."
+            ) from error
+        except RuntimeError as error:
+            if "timeout" in str(error).lower():
+                raise DocumentProcessingUnavailableError(
+                    "Reading the scanned PDF took too long. "
+                    "Try a smaller document or upload a searchable PDF."
+                ) from error
+            raise
         return "\n".join(pages)

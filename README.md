@@ -293,6 +293,30 @@ npm start
 
 App available at \`http://localhost:4200\`.
 
+## Chat document import and creation
+
+- Use the paperclip (**Import image or document**) or drag one file into the chat,
+  then press **Send**. Supported documents are PDF, DOCX, TXT, CSV, and XLSX, up to
+  15 MB. Images remain supported up to 8 MB.
+- Use **Create document**, enter instructions, and select PDF or Word (.docx).
+  This works in a new chat without first sending a message. If a document is
+  attached, it is imported before generation so it can supply the source content.
+- A failed upload keeps the selected file and note available to retry. Uploaded
+  attachments and generated documents are saved with the conversation.
+- TXT and CSV files support UTF-8 (with or without a BOM) and BOM-marked UTF-16
+  exports. Legacy `.doc` and `.xls`, password-protected files, corrupt files, and
+  files without readable text are not supported; export a supported readable copy.
+- Scanned PDF pages require the **Tesseract system executable**, not just the
+  `pytesseract` Python package. Ensure `tesseract --version` works in the same
+  terminal used to start the backend, then restart the backend. The Docker image
+  already installs Tesseract. Without it, searchable PDFs still work, while scanned
+  and mixed PDFs requiring OCR return a clear 503 instead of a misleading corrupt
+  file error. OCR defaults to English; other languages require appropriate OCR
+  configuration and language data.
+- AI summarization and generation still require the configured LLM provider to be
+  available. Supported file formats do not imply that every encrypted or scanned
+  document can be read without the required local dependencies.
+
 ## Pre-commit checks
 
 Install the development dependencies and enable the repository hooks once per clone:
