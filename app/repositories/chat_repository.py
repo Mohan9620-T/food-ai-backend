@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 
-from app.models.chat import ChatMessageRecord, ChatSession
+from app.models.chat import ChatDocumentAttachment, ChatMessageRecord, ChatSession
 
 
 class ChatRepository:
@@ -138,6 +138,57 @@ class ChatRepository:
         db.refresh(user_message)
         db.refresh(bot_message)
         return user_message, bot_message
+
+    def add_document_attachment(
+        self,
+        db: Session,
+        *,
+        session_id: int,
+        message_id: int,
+        filename: str,
+        content_type: str,
+        file_data: bytes,
+        kind: str,
+        raw_text: str | None = None,
+        structured_summary: str | None = None,
+    ) -> ChatDocumentAttachment:
+        attachment = ChatDocumentAttachment(
+            session_id=session_id,
+            message_id=message_id,
+            filename=filename,
+            content_type=content_type,
+            file_size=len(file_data),
+            file_data=file_data,
+            kind=kind,
+            raw_text=raw_text,
+            structured_summary=structured_summary,
+        )
+        db.add(attachment)
+        db.commit()
+        db.refresh(attachment)
+        return attachment
+
+    def get_document_for_user(
+        self, db: Session, document_id: int, user_id: int
+    ) -> ChatDocumentAttachment | None:
+        return (
+            db.query(ChatDocumentAttachment)
+            .join(ChatSession, ChatSession.id == ChatDocumentAttachment.session_id)
+            .filter(ChatDocumentAttachment.id == document_id, ChatSession.user_id == user_id)
+            .first()
+        )
+
+    def get_document_summaries(self, db: Session, session_id: int) -> list[str]:
+        rows = (
+            db.query(ChatDocumentAttachment)
+            .filter(
+                ChatDocumentAttachment.session_id == session_id,
+                ChatDocumentAttachment.structured_summary.is_not(None),
+            )
+            .order_by(ChatDocumentAttachment.created_at.asc(), ChatDocumentAttachment.id.asc())
+            .all()
+        )
+        return [str(row.structured_summary) for row in rows if row.structured_summary]
 
     def import_messages(
         self,

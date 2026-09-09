@@ -8,73 +8,162 @@
   }
   @for (msg of messages(); track $index) {
     @if (shouldShowDateSeparator($index)) {
-      <div class="date-separator" role="separator" [attr.aria-label]="formatMessageDate(msg.createdAt)">
+      <div
+        class="date-separator"
+        role="separator"
+        [attr.aria-label]="formatMessageDate(msg.createdAt)"
+      >
         <span>{{ formatMessageDate(msg.createdAt) }}</span>
       </div>
     }
     @if (msg.sender === 'user') {
-    <div class="user-message-group">
-      <div class="message user-message">
+      <div class="user-message-group">
+        <div class="message user-message">
         @if (msg.imageUrl) {
-          <button type="button" class="message-image-button" (click)="openImagePreview(msg.imageUrl)" aria-label="View attached image larger">
-            <img class="message-image" [src]="msg.imageUrl" alt="Attached image preview" />
+            <button
+              type="button"
+              class="message-image-button"
+              (click)="openImagePreview(msg.imageUrl)"
+              aria-label="View attached image larger"
+            >
+              <img class="message-image" [src]="msg.imageUrl" alt="Attached image preview" />
+            </button>
+        }
+        @if (msg.attachment) {
+          <div class="document-card"><span aria-hidden="true">&#128196;</span><div><strong>{{ msg.attachment.filename }}</strong><small>{{ msg.attachment.kind }} · {{ msg.attachment.file_size }} bytes</small></div></div>
+        }
+          @if (msg.text !== '[Image]') {
+            <span>{{ msg.text }}</span>
+          }
+        </div>
+        <div class="user-message-actions" aria-label="User message actions">
+          <button
+            type="button"
+            (click)="retryMessage($index)"
+            [disabled]="isAwaitingResponse($index) || isResponding()"
+            title="Retry"
+            aria-label="Retry message"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 4v6h6"></path>
+              <path d="M5.5 15a8 8 0 1 0 .5-7L4 10"></path>
+            </svg>
           </button>
-        }
-        @if (msg.text !== '[Image]') { <span>{{ msg.text }}</span> }
+          <button
+            type="button"
+            (click)="editMessage($index)"
+            [disabled]="isResponding()"
+            title="Edit"
+            aria-label="Edit message"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 20h9"></path>
+              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            (click)="copyMessage(msg.text, $index)"
+            [title]="copiedMessageIndex() === $index ? 'Copied' : 'Copy'"
+            [attr.aria-label]="copiedMessageIndex() === $index ? 'Message copied' : 'Copy message'"
+          >
+            @if (copiedMessageIndex() === $index) {
+              <span aria-hidden="true">&#10003;</span>
+            } @else {
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                <path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"></path>
+              </svg>
+            }
+          </button>
+          <button
+            type="button"
+            class="delete-message-button"
+            (click)="deleteMessage($index)"
+            [disabled]="isResponding()"
+            title="Delete"
+            aria-label="Delete message"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 6h18"></path>
+              <path d="M8 6V4h8v2"></path>
+              <path d="m19 6-1 14H6L5 6"></path>
+              <path d="M10 11v5M14 11v5"></path>
+            </svg>
+          </button>
+        </div>
       </div>
-      <div class="user-message-actions" aria-label="User message actions">
-        <button type="button" (click)="retryMessage($index)" [disabled]="isAwaitingResponse($index) || isResponding()" title="Retry" aria-label="Retry message">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v6h6"></path><path d="M5.5 15a8 8 0 1 0 .5-7L4 10"></path></svg>
+    } @else if (msg.text.trim() || msg.attachment) {
+      <article class="bot-message-group" aria-label="AI assistant response">
+        <div class="assistant-label">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6Z"></path></svg>
+          <span>AI assistant</span>
+        </div>
+        <button
+          type="button"
+          class="copy-message-button"
+          (click)="copyMessage(msg.text, $index)"
+          [attr.aria-label]="copiedMessageIndex() === $index ? 'Content copied' : 'Copy response'"
+          [title]="copiedMessageIndex() === $index ? 'Copied' : 'Copy'"
+        >
+          @if (copiedMessageIndex() === $index) {
+            <span aria-hidden="true">&#10003;</span>
+          } @else {
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+              <path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"></path>
+            </svg>
+          }
         </button>
-        <button type="button" (click)="editMessage($index)" [disabled]="isResponding()" title="Edit" aria-label="Edit message">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"></path></svg>
-        </button>
-        <button type="button" (click)="copyMessage(msg.text, $index)" [title]="copiedMessageIndex() === $index ? 'Copied' : 'Copy'" [attr.aria-label]="copiedMessageIndex() === $index ? 'Message copied' : 'Copy message'">
-          @if (copiedMessageIndex() === $index) { <span aria-hidden="true">&#10003;</span> }
-          @else { <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="10" height="10" rx="2"></rect><path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"></path></svg> }
-        </button>
-        <button type="button" class="delete-message-button" (click)="deleteMessage($index)" [disabled]="isResponding()" title="Delete" aria-label="Delete message">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="m19 6-1 14H6L5 6"></path><path d="M10 11v5M14 11v5"></path></svg>
-        </button>
-      </div>
-    </div>
-    } @else {
-    <div class="bot-message-group">
-      <button
-        type="button"
-        class="copy-message-button"
-        (click)="copyMessage(msg.text, $index)"
-        [attr.aria-label]="copiedMessageIndex() === $index ? 'Content copied' : 'Copy response'"
-        [title]="copiedMessageIndex() === $index ? 'Copied' : 'Copy'">
-        @if (copiedMessageIndex() === $index) {
-          <span aria-hidden="true">&#10003;</span>
-        } @else {
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="9" y="9" width="10" height="10" rx="2"></rect>
-            <path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"></path>
-          </svg>
-        }
-      </button>
-      <div class="message bot-message markdown-body" [innerHTML]="renderMarkdown(msg.text)">
-      </div>
-    </div>
+      <div class="message bot-message markdown-body" [innerHTML]="renderMarkdown(msg.text)"></div>
+      @if (streamingMessageIndex() === $index) {
+        <div class="writing-status" role="status" aria-live="polite">
+          <span class="writing-indicator" aria-hidden="true"></span>
+          Writing response&hellip;
+        </div>
+      }
+      @if (msg.attachment) {
+        <div class="document-card generated"><span aria-hidden="true">&#128196;</span><div><strong>{{ msg.attachment.filename }}</strong><small>Generated document · {{ msg.attachment.file_size }} bytes</small></div><button type="button" (click)="downloadDocument(msg.attachment.id, msg.attachment.filename)" aria-label="Download {{ msg.attachment.filename }}">Download</button></div>
+      }
+      </article>
     }
   }
-  @if (analyzingImage()) {
+  @if (analyzingImage() && streamingMessageIndex() === -1) {
     <div class="response-skeleton image-analysis" role="status" aria-live="polite">
       <strong>Analyzing image…</strong>
       <small>Optimizing and analyzing the uploaded image.</small>
       <span></span><span></span><span></span>
     </div>
-  } @else if (isResponding()) {
-    <div class="response-skeleton" role="status" aria-live="polite" aria-label="AI is preparing a response">
-      <span></span><span></span><span></span>
+  } @else if (isResponding() && streamingMessageIndex() === -1) {
+    <div
+      class="response-skeleton"
+      role="status"
+      aria-live="polite"
+      aria-label="AI is preparing a response"
+    >
+      <strong>Preparing a response&hellip;</strong>
+      <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
     </div>
   }
 </div>
 @if (previewImageUrl(); as imageUrl) {
-  <div class="image-lightbox" role="dialog" aria-modal="true" aria-label="Image preview" (click)="closeImagePreviewFromBackdrop($event)" (keydown.escape)="closeImagePreview()" tabindex="-1">
-    <button type="button" class="image-lightbox-close" (click)="closeImagePreview()" aria-label="Close image preview">&times;</button>
+  <div
+    class="image-lightbox"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Image preview"
+    (click)="closeImagePreviewFromBackdrop($event)"
+    (keydown.escape)="closeImagePreview()"
+    tabindex="-1"
+  >
+    <button
+      type="button"
+      class="image-lightbox-close"
+      (click)="closeImagePreview()"
+      aria-label="Close image preview"
+    >
+      &times;
+    </button>
     <img [src]="imageUrl" alt="Attached image full-size preview" />
   </div>
 }

@@ -99,9 +99,11 @@ use the documented default or disable the associated integration when empty.
 | `LLM_PROVIDER` | Optional | Development override: `ollama` is local-only; `nvidia` uses NVIDIA first with one Ollama fallback. |
 | `NVIDIA_API_KEY` | Required for NVIDIA | NVIDIA API credential. Never commit a real value. |
 | `NVIDIA_API_BASE_URL` | Optional | NVIDIA OpenAI-compatible API base URL. |
-| `NVIDIA_CHAT_MODEL` | Optional | NVIDIA text model; defaults to `deepseek-ai/deepseek-v4-pro-0813`. |
+| `NVIDIA_CHAT_MODEL` | Optional | NVIDIA text model; defaults to `google/gemma-4-31b-it`. |
 | `NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA text connection timeout; default `5`. |
-| `NVIDIA_CHAT_TIMEOUT_SECONDS` | Optional | NVIDIA text response-read timeout; default `30`. |
+| `NVIDIA_CHAT_TIMEOUT_SECONDS` | Optional | NVIDIA text response-read timeout; default `60`. |
+| `NVIDIA_CHAT_MAX_TOKENS` | Optional | NVIDIA text output budget; default `1024`, independent of Ollama's limit. Nemotron 3 chat disables thinking to reserve this budget for the answer. |
+| `NVIDIA_TEST_CHAT_MODEL` | Optional | NVIDIA model used only by `/nvidia-chat`; defaults to `nvidia/nemotron-3-ultra-550b-a55b`. |
 | `NVIDIA_CHAT_VISION_MODEL` | Optional | NVIDIA image-chat model; defaults to `meta/llama-3.2-90b-vision-instruct`. |
 | `NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA vision connection timeout; default `5`. |
 | `NVIDIA_VISION_TIMEOUT_SECONDS` | Optional | NVIDIA vision response-read timeout; default `45`. |

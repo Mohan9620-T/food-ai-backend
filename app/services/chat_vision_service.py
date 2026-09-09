@@ -8,6 +8,7 @@ from time import perf_counter
 from app.config import settings
 from app.schemas.chat import ChatHistoryMessage
 from app.schemas.vision_result import VisionResult
+from app.services.conversation_guidance import CONVERSATION_GUIDANCE
 from app.services.vision_image_preprocessor import prepare_vision_image
 from app.services.vision_providers import get_vision_provider
 from app.services.vision_runtime import vision_inference_slot
@@ -38,7 +39,7 @@ possibilities in uncertain_items rather than presenting them as facts.
 Group repeated objects of the same kind into one item. Keep every name and visual_evidence concise.
 For ordinary conversational answers, end with one short, relevant next-step suggestion. Omit it
 when the user requests JSON, code, plain text, a specific format, or only the direct answer.
-"""
+""" + "\n" + CONVERSATION_GUIDANCE + "\nKeep the required JSON schema; apply conversation guidance to answer only."
     EMPTY_RESPONSE_MESSAGE = (
         "I couldn't produce a description for this image. Please try again with a clearer image."
     )
@@ -63,10 +64,10 @@ when the user requests JSON, code, plain text, a specific format, or only the di
         if conversation_history:
             context = "\n".join(
                 f"{item.role}: {item.content[:1000]}"
-                for item in conversation_history[-6:]
+                for item in conversation_history[-24:]
             )
             prompt = (
-                "The following is recent conversation about this same image. Use it only "
+                "The following is recent conversation in this chat, possibly about different topics. Use it only "
                 "as context and answer the latest question.\n"
                 f"--- CONVERSATION ---\n{context}\n--- END CONVERSATION ---\n\n"
                 f"Latest question: {prompt}"

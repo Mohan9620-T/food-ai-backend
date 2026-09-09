@@ -7,6 +7,15 @@ export interface ChatRequest {
 export interface ChatResponse {
   response: string;
   session_id: number;
+  attachment?: ChatDocumentAttachment;
+}
+
+export interface ChatDocumentAttachment {
+  id: number;
+  filename: string;
+  content_type: string;
+  file_size: number;
+  kind: 'uploaded' | 'generated';
 }
 
 export interface PendingChatResponse {
@@ -20,6 +29,7 @@ export interface ChatMessage {
   text: string;
   createdAt?: string;
   imageUrl?: string;
+  attachment?: ChatDocumentAttachment;
 }
 
 export interface ChatHistoryMessage {

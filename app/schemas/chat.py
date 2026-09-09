@@ -20,3 +20,24 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     session_id: int
+
+
+class ChatDocumentAttachmentOut(BaseModel):
+    id: int
+    filename: str
+    content_type: str
+    file_size: int
+    kind: Literal["uploaded", "generated"]
+
+    class Config:
+        from_attributes = True
+
+
+class ChatDocumentResponse(ChatResponse):
+    attachment: ChatDocumentAttachmentOut
+
+
+class ChatDocumentGenerateRequest(BaseModel):
+    session_id: int
+    instruction: str = Field(min_length=1, max_length=2000)
+    output_format: Literal["pdf", "docx"] = "pdf"

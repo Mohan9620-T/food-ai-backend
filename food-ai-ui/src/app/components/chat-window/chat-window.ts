@@ -1,13 +1,14 @@
 import { DOCUMENT } from '@angular/common';
 import { DomSanitizer } from '@angular/platform-browser';
-import { AfterViewChecked, Component, DestroyRef, effect, ElementRef, HostListener, inject, SecurityContext, signal, viewChild } from '@angular/core';
+import { AfterViewChecked, Component, computed, DestroyRef, effect, ElementRef, inject, SecurityContext, signal, viewChild } from '@angular/core';
 import { ChatService } from '../../services/chat';
 import { marked } from 'marked';
 
 @Component({
   selector: 'app-chat-window',
   templateUrl: './chat-window.html',
-  styleUrls: ['./chat-window.css']
+  styleUrls: ['./chat-window.css'],
+  host: { '(document:keydown.escape)': 'closeImagePreviewFromKeyboard()' }
 })
 export class ChatWindow implements AfterViewChecked {
   private readonly chatService = inject(ChatService);
@@ -17,6 +18,14 @@ export class ChatWindow implements AfterViewChecked {
   readonly messages = this.chatService.messages;
   readonly isResponding = this.chatService.isResponding;
   readonly analyzingImage = this.chatService.analyzingImage;
+  readonly streamingMessageIndex = computed(() => {
+    const messages = this.messages();
+    const lastIndex = messages.length - 1;
+    const lastMessage = messages[lastIndex];
+    return this.isResponding() && lastMessage?.sender === 'bot' && lastMessage.text.trim()
+      ? lastIndex
+      : -1;
+  });
   private readonly chatContainer = viewChild<ElementRef<HTMLDivElement>>('chatContainer');
   private previousConversationId: string | null | undefined;
   private previousMessageCount = -1;
@@ -73,6 +82,8 @@ export class ChatWindow implements AfterViewChecked {
     this.chatService.deleteMessage(index);
   }
 
+  downloadDocument(id: number, filename: string): void { this.chatService.downloadDocument(id, filename); }
+
   isAwaitingResponse(index: number): boolean {
     return this.chatService.isMessageAwaitingResponse(index);
   }
@@ -89,7 +100,6 @@ export class ChatWindow implements AfterViewChecked {
     if (event.target === event.currentTarget) this.closeImagePreview();
   }
 
-  @HostListener('document:keydown.escape')
   closeImagePreviewFromKeyboard(): void {
     this.closeImagePreview();
   }

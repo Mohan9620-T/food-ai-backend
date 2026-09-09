@@ -38,6 +38,7 @@ interface ChatMessageApi {
   content: string;
   created_at: string;
   image_url?: string | null;
+  document_attachment?: import('../models/chat').ChatDocumentAttachment | null;
 }
 
 interface ChatSessionDetailApi extends ChatSessionSummaryApi {
@@ -47,6 +48,12 @@ interface ChatSessionDetailApi extends ChatSessionSummaryApi {
 interface LegacyConversation {
   title: string;
   messages: ChatMessage[];
+}
+
+export class ChatStreamError extends Error {
+  constructor(message: string, readonly displayed = false) {
+    super(message);
+  }
 }
 
 @Injectable({ providedIn: 'root' })
@@ -74,6 +81,7 @@ export class ChatService {
   private readonly migrationNoticeState = signal<string | null>(null);
   private readonly loadingSessionsState = signal(false);
   private readonly analyzingImageConversationIdsState = signal<ReadonlySet<string>>(new Set());
+  private readonly processingDocumentConversationIdsState = signal<ReadonlySet<string>>(new Set());
   private streamAbortController: AbortController | null = null;
   private pendingHistoryTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingHistoryRefreshes = 0;
@@ -88,6 +96,10 @@ export class ChatService {
   readonly analyzingImage = computed(() => {
     const conversationId = this.activeConversationIdState();
     return conversationId !== null && this.analyzingImageConversationIdsState().has(conversationId);
+  });
+  readonly processingDocument = computed(() => {
+    const conversationId = this.activeConversationIdState();
+    return conversationId !== null && this.processingDocumentConversationIdsState().has(conversationId);
   });
   readonly isResponding = computed(() => {
     const pendingConversationId = this.pendingConversationIdState();
@@ -163,6 +175,49 @@ export class ChatService {
     );
   }
 
+  uploadDocument(file: File, message: string | null, conversationId = this.activeConversationIdState()): Observable<ChatResponse> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    if (message?.trim()) form.append('message', message.trim());
+    const sessionId = this.toServerSessionId(conversationId);
+    if (sessionId !== null) form.append('session_id', String(sessionId));
+    this.setDocumentProcessing(conversationId, true);
+    return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/documents`, form).pipe(
+      tap(response => { if (conversationId) this.acceptResponse(conversationId, response); }),
+      finalize(() => this.setDocumentProcessing(conversationId, false))
+    );
+  }
+
+  generateDocument(sessionId: number, instruction: string, outputFormat: 'pdf' | 'docx' = 'pdf', conversationId = this.activeConversationIdState()): Observable<ChatResponse> {
+    this.setDocumentProcessing(conversationId, true);
+    return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/documents/generate`, {
+      session_id: sessionId, instruction, output_format: outputFormat
+    }).pipe(
+      tap(response => { if (conversationId) this.acceptResponse(conversationId, response); }),
+      finalize(() => this.setDocumentProcessing(conversationId, false))
+    );
+  }
+
+  downloadDocument(documentId: number, filename: string): void {
+    this.http.get(`${environment.apiUrl}/chat/documents/${documentId}/download`, { responseType: 'blob' }).subscribe(blob => {
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  private setDocumentProcessing(conversationId: string | null, processing: boolean): void {
+    if (!conversationId) return;
+    this.processingDocumentConversationIdsState.update(ids => {
+      const updated = new Set(ids);
+      processing ? updated.add(conversationId) : updated.delete(conversationId);
+      return updated;
+    });
+  }
+
   async streamMessage(data: ChatRequest, conversationId: string): Promise<void> {
     this.streamAbortController?.abort();
     const controller = new AbortController();
@@ -190,10 +245,21 @@ export class ChatService {
   acceptResponse(conversationId: string, response: ChatResponse): void {
     this.conversationsState.update((conversations) => conversations.map((conversation) => {
       if (conversation.id !== conversationId) return conversation;
+      const messages = [...conversation.messages];
+      if (response.attachment?.kind === 'uploaded') {
+        const lastUserIndex = messages.map(message => message.sender).lastIndexOf('user');
+        if (lastUserIndex >= 0) messages[lastUserIndex] = { ...messages[lastUserIndex], attachment: response.attachment };
+      }
+      messages.push({
+        sender: 'bot' as const,
+        text: response.response,
+        attachment: response.attachment?.kind === 'generated' ? response.attachment : undefined,
+        createdAt: new Date().toISOString()
+      });
       return {
         ...conversation,
         sessionId: response.session_id,
-        messages: [...conversation.messages, { sender: 'bot' as const, text: response.response, createdAt: new Date().toISOString() }],
+        messages,
         updatedAt: Date.now()
       };
     }).sort((first, second) => second.updatedAt - first.updatedAt));
@@ -260,29 +326,64 @@ export class ChatService {
     const decoder = new TextDecoder();
     let buffer = '';
     let conversationId = draftConversationId;
+    let completed = false;
+    let closed = false;
+    const cancelReader = () => { void reader.cancel().catch(() => undefined); };
+    const consumeLine = (line: string): void => {
+      if (!line.trim() || completed) return;
+      const event = JSON.parse(line) as {
+        type: 'session' | 'token' | 'done' | 'error';
+        session_id?: number;
+        content?: string;
+        message?: string;
+      };
+      if (event.type === 'session' && event.session_id !== undefined) {
+        conversationId = this.acceptStreamSession(conversationId, event.session_id);
+      } else if (event.type === 'token' && event.content) {
+        this.appendStreamChunk(conversationId, event.content);
+      } else if (event.type === 'error') {
+        throw new ChatStreamError(
+          event.message?.trim() || 'The response could not be generated. Please try again.'
+        );
+      } else if (event.type === 'done') {
+        completed = true;
+      }
+    };
+    // Cancelling the reader also wakes a pending read when no more tokens arrive.
+    signal.addEventListener('abort', cancelReader, { once: true });
     try {
-      while (!signal.aborted) {
+      while (!completed) {
+        signal.throwIfAborted();
         const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        signal.throwIfAborted();
+        closed = done;
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          const event = JSON.parse(line) as {
-            type: 'session' | 'token' | 'done';
-            session_id?: number;
-            content?: string;
-          };
-          if (event.type === 'session' && event.session_id !== undefined) {
-            conversationId = this.acceptStreamSession(conversationId, event.session_id);
-          } else if (event.type === 'token' && event.content) {
-            this.appendStreamChunk(conversationId, event.content);
-          }
+        for (const line of lines) consumeLine(line);
+        if (done) {
+          consumeLine(buffer);
+          break;
         }
       }
+      if (!completed) {
+        throw new ChatStreamError('The connection ended before the response finished. Please retry.');
+      }
+    } catch (error) {
+      signal.throwIfAborted();
+      const message = error instanceof ChatStreamError
+        ? error.message
+        : 'The connection ended before the response finished. Please retry.';
+      const conversation = this.conversationsState().find(item => item.id === conversationId);
+      const lastMessage = conversation?.messages.at(-1);
+      const displayed = lastMessage?.sender === 'bot';
+      if (displayed) {
+        this.appendStreamChunk(conversationId, `${lastMessage.text ? '\n\n> ' : ''}Response interrupted: ${message}`);
+      }
+      throw new ChatStreamError(message, displayed);
     } finally {
-      if (signal.aborted) await reader.cancel().catch(() => undefined);
+      signal.removeEventListener('abort', cancelReader);
+      if (!closed) await reader.cancel().catch(() => undefined);
       reader.releaseLock();
     }
   }
@@ -438,6 +539,7 @@ export class ChatService {
       })
       .slice(-8);
   }
+  getActiveSessionId(): number | null { return this.toServerSessionId(this.activeConversationIdState()); }
 
   deleteMessage(index: number): void {
     const conversation = this.getActiveConversation();
@@ -703,7 +805,8 @@ export class ChatService {
         sender: message.sender,
         text: message.content,
         createdAt: message.created_at,
-        imageUrl: message.image_url ?? undefined
+        imageUrl: message.image_url ?? undefined,
+        attachment: message.document_attachment ?? undefined
       })),
       updatedAt: Date.parse(session.updated_at)
     };
@@ -727,6 +830,7 @@ export class ChatService {
     this.retryMessageState.set(null);
     this.migrationNoticeState.set(null);
     this.analyzingImageConversationIdsState.set(new Set());
+    this.processingDocumentConversationIdsState.set(new Set());
   }
 
   private updateConversationTitle(conversationId: string, title: string): void {

@@ -4,7 +4,8 @@ import { Router } from '@angular/router';
 import { vi } from 'vitest';
 
 import { ChatInput } from './chat-input';
-import { ChatService } from '../../services/chat';
+import { ChatService, ChatStreamError } from '../../services/chat';
+import { ChatRequest } from '../../models/chat';
 import { AuthService } from '../../services/auth';
 import { SpeechRecognitionService } from '../../services/speech-recognition';
 
@@ -13,6 +14,7 @@ class ChatServiceStub {
   readonly editingMessage = signal<null>(null);
   readonly analyzingImage = signal(false);
   readonly retryMessage = signal<null>(null);
+  readonly finishResponse = vi.fn();
 }
 
 class SpeechRecognitionServiceStub {
@@ -140,6 +142,51 @@ describe('ChatInput image drag and drop', () => {
     expect(component.message).toBe('');
   });
 
+  it('displays the stream failure in its original conversation without overwriting another composer', async () => {
+    const detail = 'The response reached its output limit before it finished. Please retry with a shorter request.';
+    const chatService = TestBed.inject(ChatService);
+    chatService.streamMessage = vi.fn().mockRejectedValue(new ChatStreamError(detail));
+    chatService.getActiveConversationId = () => 'another-conversation';
+    chatService.addMessage = vi.fn();
+    const request = { message: 'Original question', history: [], referenceHistory: [] };
+
+    await (component as unknown as {
+      requestResponse: (conversationId: string, request: ChatRequest) => Promise<void>;
+    }).requestResponse('original-conversation', request);
+
+    expect(chatService.addMessage).toHaveBeenCalledWith({ sender: 'bot', text: `Response interrupted: ${detail}` }, 'original-conversation');
+    expect(chatService.finishResponse).toHaveBeenCalledExactlyOnceWith('original-conversation');
+    expect(component.message).toBe('');
+  });
+
+  it('does not append a failure message when the user stops the response', async () => {
+    const chatService = TestBed.inject(ChatService);
+    chatService.streamMessage = vi.fn().mockRejectedValue(new DOMException('Stopped', 'AbortError'));
+    chatService.addMessage = vi.fn();
+
+    await (component as unknown as {
+      requestResponse: (conversationId: string, request: ChatRequest) => Promise<void>;
+    }).requestResponse('original-conversation', { message: 'Question', history: [], referenceHistory: [] });
+
+    expect(chatService.addMessage).not.toHaveBeenCalled();
+    expect(chatService.finishResponse).toHaveBeenCalledExactlyOnceWith('original-conversation');
+  });
+
+  it('does not duplicate an interruption notice already attached to the partial response', async () => {
+    const chatService = TestBed.inject(ChatService);
+    chatService.streamMessage = vi.fn().mockRejectedValue(new ChatStreamError('Please retry.', true));
+    chatService.getActiveConversationId = () => 'original-conversation';
+    chatService.addMessage = vi.fn();
+
+    await (component as unknown as {
+      requestResponse: (conversationId: string, request: ChatRequest) => Promise<void>;
+    }).requestResponse('original-conversation', { message: 'Question', history: [], referenceHistory: [] });
+
+    expect(chatService.addMessage).not.toHaveBeenCalled();
+    expect(chatService.finishResponse).toHaveBeenCalledExactlyOnceWith('original-conversation');
+    expect(component.message).toBe('Question');
+  });
+
   it('attaches a valid image dropped from the file system', () => {
     const image = new File([new Uint8Array([1, 2, 3])], 'meal.png', {
       type: 'image/png'
@@ -154,13 +201,21 @@ describe('ChatInput image drag and drop', () => {
     expect(component.imageError).toBeNull();
   });
 
-  it('rejects a dropped non-image file', () => {
-    const textFile = new File(['not an image'], 'notes.txt', { type: 'text/plain' });
+  it('accepts a supported document dropped from the file system', () => {
+    const textFile = new File(['nutrition notes'], 'notes.txt', { type: 'text/plain' });
 
     component.handleDrop(dropEvent([textFile]));
 
     expect(component.selectedImage).toBeNull();
-    expect(component.imageError).toContain('Unsupported file type');
+    expect(component.selectedDocument).toBe(textFile);
+    expect(component.imageError).toBeNull();
+  });
+
+  it('rejects a dropped unsupported file', () => {
+    const executable = new File(['unsafe'], 'program.exe', { type: 'application/octet-stream' });
+    component.handleDrop(dropEvent([executable]));
+    expect(component.selectedDocument).toBeNull();
+    expect(component.imageError).toContain('Upload an image');
   });
 
   it('rejects dropping more than one image', () => {

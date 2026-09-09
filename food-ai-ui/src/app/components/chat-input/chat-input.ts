@@ -2,7 +2,7 @@ import { afterNextRender, ChangeDetectorRef, Component, DestroyRef, effect, Elem
 import { HttpErrorResponse } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { ChatService } from '../../services/chat';
+import { ChatService, ChatStreamError } from '../../services/chat';
 import { AuthService } from '../../services/auth';
 import { ChatRequest } from '../../models/chat';
 import { Subscription } from 'rxjs';
@@ -23,17 +23,20 @@ export class ChatInput {
   readonly isSending = this.chatService.isResponding;
   readonly editingMessage = this.chatService.editingMessage;
   readonly analyzingImage = this.chatService.analyzingImage;
+  readonly processingDocument = this.chatService.processingDocument;
   private readonly speechService = inject(SpeechRecognitionService);
   readonly speechSupported = this.speechService.isSupported;
   readonly isListening = this.speechService.isListening;
   private readonly authService = inject(AuthService);
   private readonly router = inject(Router);
   selectedImage: File | null = null;
+  selectedDocument: File | null = null;
   imagePreviewUrl: string | null = null;
   imageError: string | null = null;
   isDraggingImage = false;
   private dragDepth = 0;
   private visionSubscription: Subscription | null = null;
+  private documentSubscription: Subscription | null = null;
   private dictationPrefix = '';
   private finalDictation = '';
 
@@ -59,6 +62,7 @@ export class ChatInput {
     });
     this.destroyRef.onDestroy(() => {
       this.visionSubscription?.unsubscribe();
+      this.documentSubscription?.unsubscribe();
       this.speechService.stop();
       if (this.imagePreviewUrl) URL.revokeObjectURL(this.imagePreviewUrl);
     });
@@ -69,8 +73,18 @@ export class ChatInput {
     const file = input.files?.[0] ?? null;
     input.value = '';
     if (!file) return;
-    this.attachImage(file);
+    if (file.type.startsWith('image/')) this.attachImage(file);
+    else this.attachDocument(file);
   }
+
+  private attachDocument(file: File): void {
+    const supported = ['.pdf', '.docx', '.txt', '.csv', '.xlsx'].some(extension => file.name.toLowerCase().endsWith(extension));
+    if (!supported) { this.imageError = 'Upload an image, PDF, DOCX, TXT, CSV, or XLSX file.'; return; }
+    if (file.size > 15 * 1024 * 1024) { this.imageError = 'Document is too large. Maximum size is 15 MB.'; return; }
+    this.removeImage(); this.selectedDocument = file; this.imageError = null;
+  }
+
+  removeDocument(): void { this.selectedDocument = null; }
 
   get speechError(): string | null {
     const error = this.speechService.error();
@@ -139,7 +153,8 @@ export class ChatInput {
       this.imageError = 'Drop one image at a time.';
       return;
     }
-    this.attachImage(files[0]);
+    if (files[0].type.startsWith('image/')) this.attachImage(files[0]);
+    else this.attachDocument(files[0]);
   }
 
   private hasDraggedFiles(event: DragEvent): boolean {
@@ -183,7 +198,7 @@ export class ChatInput {
 
     const userMessage = this.message.trim();
 
-    if (!userMessage && !this.selectedImage) {
+    if (!userMessage && !this.selectedImage && !this.selectedDocument) {
       return;
     }
 
@@ -198,11 +213,13 @@ export class ChatInput {
     if (!conversationId) return;
 
     const image = this.selectedImage;
+    const documentFile = this.selectedDocument;
     const previewUrl = this.imagePreviewUrl;
     if (!isEditing) {
       this.chatService.addMessage({ sender: 'user', text: userMessage || '[Image]', imageUrl: previewUrl ?? undefined }, conversationId);
     }
     this.selectedImage = null;
+    this.selectedDocument = null;
     this.imagePreviewUrl = null;
     this.imageError = null;
     this.message = '';
@@ -218,7 +235,21 @@ export class ChatInput {
     };
     this.chatService.startResponse(conversationId, request);
     if (image) this.requestVisionResponse(conversationId, image, userMessage || null);
+    else if (documentFile) this.requestDocumentResponse(conversationId, documentFile, userMessage || null);
     else this.requestResponse(conversationId, request);
+  }
+
+  createDocument(): void {
+    const sessionId = this.chatService.getActiveSessionId();
+    if (sessionId === null || this.isSending()) { this.imageError = 'Send or upload something first, then create a document.'; return; }
+    const instruction = window.prompt('What document should I create?', 'Nutrition summary for my doctor');
+    const conversationId = this.chatService.getActiveConversationId();
+    if (!instruction?.trim() || !conversationId) return;
+    this.chatService.addMessage({ sender: 'user', text: instruction.trim() }, conversationId);
+    this.documentSubscription = this.chatService.generateDocument(sessionId, instruction.trim(), 'pdf', conversationId).subscribe({
+      error: () => { this.imageError = 'The document could not be generated. Please try again.'; },
+      complete: () => { this.documentSubscription = null; }
+    });
   }
 
   stopResponse(): void {
@@ -277,14 +308,19 @@ export class ChatInput {
         this.router.navigate(['/login']);
         return;
       }
-      if (!this.message.trim()) this.message = request.message;
-      this.chatService.addMessage({
-        sender: 'bot',
-        text: 'The response could not be streamed. Your message is restored below; please try again.'
-      }, this.chatService.getActiveConversationId() ?? conversationId);
+      if (this.chatService.getActiveConversationId() === conversationId && !this.message.trim()) {
+        this.message = request.message;
+      }
+      if (!(error instanceof ChatStreamError && error.displayed)) {
+        this.chatService.addMessage({
+          sender: 'bot',
+          text: error instanceof ChatStreamError
+            ? `Response interrupted: ${error.message}`
+            : 'The response could not be streamed. Please try again.'
+        }, conversationId);
+      }
     } finally {
-      const pending = this.chatService.getPendingResponse();
-      if (pending) this.chatService.finishResponse(pending.conversationId);
+      this.chatService.finishResponse(conversationId);
       queueMicrotask(() => this.messageInput()?.nativeElement.focus());
     }
   }
@@ -292,6 +328,16 @@ export class ChatInput {
   private resizeTextarea(textarea: HTMLTextAreaElement): void {
     textarea.style.height = 'auto';
     textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
+  }
+
+  private requestDocumentResponse(conversationId: string, file: File, message: string | null): void {
+    this.documentSubscription = this.chatService.uploadDocument(file, message, conversationId).subscribe({
+      error: (error: HttpErrorResponse) => {
+        this.imageError = typeof error.error?.detail === 'string' ? error.error.detail : 'The document could not be processed.';
+        this.chatService.finishResponse(conversationId);
+      },
+      complete: () => { this.documentSubscription = null; this.chatService.finishResponse(conversationId); }
+    });
   }
 
   private updateDictatedMessage(dictatedText: string): void {

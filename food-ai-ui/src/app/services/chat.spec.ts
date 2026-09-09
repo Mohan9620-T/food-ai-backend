@@ -5,7 +5,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { Observable, of } from 'rxjs';
 import { vi } from 'vitest';
 
-import { ChatService } from './chat';
+import { ChatService, ChatStreamError } from './chat';
 import { AuthService, TokenResponse } from './auth';
 import { ChatConversation } from '../models/chat';
 
@@ -48,7 +48,10 @@ describe('ChatService session continuity', () => {
     http.expectOne((request) => request.url.endsWith('/chat/sessions')).flush([]);
   });
 
-  afterEach(() => http.verify());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    http.verify();
+  });
 
   it('uses the session_id returned by the first non-streaming response on the second message', () => {
     const conversationId = service.getActiveConversationId()!;
@@ -92,6 +95,116 @@ describe('ChatService session continuity', () => {
     }
   });
 
+  it.each(['\n', ''])('surfaces a stream error with trailing separator %j and keeps partial text', async (separator) => {
+    const detail = 'The response reached its output limit before it finished. Please retry with a shorter request.';
+    const body = [
+      JSON.stringify({ type: 'session', session_id: 91 }),
+      JSON.stringify({ type: 'token', content: 'Here is the first part.' }),
+      JSON.stringify({ type: 'error', message: detail })
+    ].join('\n') + separator;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body)));
+    const conversationId = service.getActiveConversationId()!;
+
+    await expect(service.streamMessage({ message: 'Explain', history: [], referenceHistory: [] }, conversationId))
+      .rejects.toThrow(new ChatStreamError(detail, true));
+
+    expect(service.messages().at(-1)?.text).toBe(`Here is the first part.\n\n> Response interrupted: ${detail}`);
+    expect(service.messages()).toHaveLength(1);
+  });
+
+  it('accepts a final done event without a trailing newline across arbitrary network chunks', async () => {
+    const body = [
+      JSON.stringify({ type: 'session', session_id: 91 }),
+      JSON.stringify({ type: 'token', content: 'Hello 😊' }),
+      JSON.stringify({ type: 'done' })
+    ].join('\n');
+    const bytes = new TextEncoder().encode(body);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new ReadableStream({
+      start(controller) {
+        // Single-byte chunks also split the emoji's UTF-8 sequence.
+        for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
+        controller.close();
+      }
+    }))));
+
+    await service.streamMessage(
+      { message: 'Hi', history: [], referenceHistory: [] }, service.getActiveConversationId()!
+    );
+
+    expect(service.messages().at(-1)?.text).toBe('Hello 😊');
+  });
+
+  it('replaces an empty assistant placeholder with an interruption notice', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      '{"type":"session","session_id":91}\n{"type":"error","message":"The model is unavailable. Please retry."}\n'
+    )));
+
+    await expect(service.streamMessage(
+      { message: 'Hi', history: [], referenceHistory: [] }, service.getActiveConversationId()!
+    )).rejects.toThrow(new ChatStreamError('The model is unavailable. Please retry.', true));
+
+    expect(service.messages().at(-1)?.text).toBe('Response interrupted: The model is unavailable. Please retry.');
+    expect(service.messages()).toHaveLength(1);
+  });
+
+  it('reports an interrupted stream instead of accepting EOF as a completed response', async () => {
+    const body = [
+      JSON.stringify({ type: 'session', session_id: 91 }),
+      JSON.stringify({ type: 'token', content: 'Unfinished answer' })
+    ].join('\n');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body)));
+
+    await expect(service.streamMessage(
+      { message: 'Explain', history: [], referenceHistory: [] }, service.getActiveConversationId()!
+    )).rejects.toThrow('The connection ended before the response finished. Please retry.');
+
+    expect(service.messages().at(-1)?.text).toBe(
+      'Unfinished answer\n\n> Response interrupted: The connection ended before the response finished. Please retry.'
+    );
+  });
+
+  it('finishes on done without waiting for the network connection to close', async () => {
+    const cancel = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          '{"type":"session","session_id":91}\n{"type":"token","content":"Done."}\n{"type":"done"}\n'
+        ));
+      },
+      cancel
+    }))));
+
+    await service.streamMessage(
+      { message: 'Hi', history: [], referenceHistory: [] }, service.getActiveConversationId()!
+    );
+
+    expect(service.messages().at(-1)?.text).toBe('Done.');
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it('cancels an idle stream as AbortError while keeping received text', async () => {
+    const cancel = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          '{"type":"session","session_id":91}\n{"type":"token","content":"Partial text"}\n'
+        ));
+      },
+      cancel
+    }))));
+    const stream = service.streamMessage(
+      { message: 'Explain', history: [], referenceHistory: [] }, service.getActiveConversationId()!
+    );
+    const rejected = expect(stream).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(service.messages().at(-1)?.text).toBe('Partial text'));
+
+    service.stopStreaming();
+
+    await rejected;
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(service.messages().at(-1)?.text).toBe('Partial text');
+  });
+
   it('attaches an image and sends it to the current backend session', () => {
     const conversationId = service.getActiveConversationId()!;
     const textRequest = { message: 'Start', history: [], referenceHistory: [] };
@@ -130,6 +243,32 @@ describe('ChatService session continuity', () => {
 
     request.flush({ response: 'A landscape.', session_id: 64 });
     expect(service.analyzingImage()).toBe(false);
+  });
+
+  it('uploads a document with the current session and restores attachment metadata', () => {
+    const conversationId = service.getActiveConversationId()!;
+    service.sendMessage({ message: 'Start', history: [], referenceHistory: [] }, conversationId).subscribe();
+    http.expectOne((candidate) => candidate.urlWithParams.endsWith('/chat/')).flush({ response: 'Ready', session_id: 64 });
+    const file = new File(['Calories: 1800'], 'notes.txt', { type: 'text/plain' });
+    service.addMessage({ sender: 'user', text: 'Read this' }, conversationId);
+    service.uploadDocument(file, 'Read this', conversationId).subscribe();
+    expect(service.processingDocument()).toBe(true);
+    const request = http.expectOne((candidate) => candidate.url.endsWith('/chat/documents'));
+    const form = request.request.body as FormData;
+    expect((form.get('file') as File).name).toBe('notes.txt');
+    expect(form.get('session_id')).toBe('64');
+    request.flush({ response: 'Summary', session_id: 64, attachment: { id: 7, filename: 'notes.txt', content_type: 'text/plain', file_size: 14, kind: 'uploaded' } });
+    expect(service.processingDocument()).toBe(false);
+    expect(service.messages().filter(message => message.sender === 'user').at(-1)?.attachment?.filename).toBe('notes.txt');
+  });
+
+  it('requests a generated PDF document', () => {
+    const conversationId = service.getActiveConversationId()!;
+    service.generateDocument(12, 'Doctor summary', 'pdf', conversationId).subscribe();
+    const request = http.expectOne((candidate) => candidate.url.endsWith('/chat/documents/generate'));
+    expect(request.request.body).toEqual({ session_id: 12, instruction: 'Doctor summary', output_format: 'pdf' });
+    request.flush({ response: 'Report', session_id: 12, attachment: { id: 8, filename: 'nutrition-document.pdf', content_type: 'application/pdf', file_size: 100, kind: 'generated' } });
+    expect(service.messages().at(-1)?.attachment?.kind).toBe('generated');
   });
 
   it('restores a persisted image URL from backend session history', () => {

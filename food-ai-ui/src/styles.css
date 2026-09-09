@@ -65,3 +65,71 @@ dd, .numeric { font-variant-numeric: tabular-nums; }
 .entry-divider{display:flex;align-items:center;gap:var(--space-3);margin:var(--space-4) 0;color:var(--text-muted);font-size:.75rem}.entry-divider::before,.entry-divider::after{height:1px;flex:1;background:var(--border);content:""}.photo-actions{display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap}.photo-actions small{flex-basis:100%;color:var(--text-muted)}.photo-button{display:inline-flex;padding:var(--space-2) var(--space-4);border-radius:10px;background:var(--accent);color:var(--accent-contrast);font-weight:700;cursor:pointer}.photo-button.secondary{border:1px solid var(--border);background:var(--surface-subtle);color:var(--text)}.photo-button.disabled{opacity:.55;cursor:not-allowed}.photo-button input{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}.meal-meta{display:flex;align-items:center;gap:var(--space-2)}.source-badge{padding:2px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 13%,transparent);color:var(--accent);font-size:.65rem;font-weight:700;text-transform:uppercase}
 .message-image{display:block;width:min(320px,70vw);max-height:260px;margin-bottom:var(--space-2);border-radius:10px;object-fit:cover}.image-analysis{width:min(360px,90%)}.image-analysis strong{color:var(--text)}.image-analysis small{margin-bottom:var(--space-2);color:var(--text-muted)}
 .message-image-button{display:block;max-width:100%;padding:0;border:0;border-radius:12px;overflow:hidden;background:transparent;cursor:zoom-in}.message-image-button .message-image{display:block;max-width:100%}.image-lightbox{position:fixed;z-index:2000;inset:0;display:grid;padding:clamp(20px,5vw,64px);place-items:center;background:rgb(0 0 0/82%);cursor:zoom-out}.image-lightbox img{max-width:95vw;max-height:90vh;border-radius:12px;object-fit:contain;box-shadow:0 20px 60px rgb(0 0 0/45%);cursor:default}.image-lightbox-close{position:fixed;top:18px;right:24px;width:44px;height:44px;padding:0;border:1px solid rgb(255 255 255/35%);border-radius:50%;background:rgb(0 0 0/45%);color:#fff;font-size:2rem;line-height:1;cursor:pointer}
+
+/* Markdown comes from sanitized innerHTML, which has no Angular style-scoping attributes. */
+app-chat-window .markdown-body > :first-child { margin-top: 0; }
+app-chat-window .markdown-body > :last-child { margin-bottom: 0; }
+app-chat-window .markdown-body p,
+app-chat-window .markdown-body ul,
+app-chat-window .markdown-body ol,
+app-chat-window .markdown-body table,
+app-chat-window .markdown-body pre { margin: .85em 0; }
+app-chat-window .markdown-body :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.25em 0 .55em;
+  font-family: var(--font-ui);
+  font-size: 1.08em;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: normal;
+}
+app-chat-window .markdown-body :is(ul, ol) { padding-left: 1.5em; }
+app-chat-window .markdown-body li + li { margin-top: .4em; }
+app-chat-window .markdown-body li > p { margin: .35em 0; }
+app-chat-window .markdown-body strong { font-weight: 700; }
+app-chat-window .markdown-body a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .2em;
+  overflow-wrap: anywhere;
+}
+app-chat-window .markdown-body a:hover { text-decoration-thickness: 2px; }
+app-chat-window .markdown-body pre {
+  max-width: 100%;
+  padding: var(--space-4);
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+  white-space: pre;
+}
+app-chat-window .markdown-body code {
+  padding: .12em .35em;
+  border-radius: 5px;
+  background: var(--surface-subtle);
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: .9em;
+}
+app-chat-window .markdown-body pre code { padding: 0; background: transparent; }
+app-chat-window .markdown-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: .95em;
+}
+app-chat-window .markdown-body :is(th, td) {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+app-chat-window .markdown-body th { background: var(--surface-subtle); font-weight: 650; }
+app-chat-window .markdown-body blockquote {
+  margin: 1em 0;
+  padding-left: var(--space-4);
+  border-left: 3px solid var(--herb);
+  color: var(--text);
+}
+app-chat-window .markdown-body hr { margin: var(--space-5) 0; border: 0; border-top: 1px solid var(--border); }
+app-chat-window .markdown-body img { max-width: 100%; height: auto; }

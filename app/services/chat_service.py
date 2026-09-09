@@ -8,6 +8,7 @@ import requests
 
 from app.config import settings
 from app.schemas.chat import ChatHistoryMessage
+from app.services.conversation_guidance import CONVERSATION_GUIDANCE
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class _NvidiaFallbackError(RuntimeError):
 
 
 class ChatService:
-    HISTORY_MESSAGE_LIMIT = 8
+    HISTORY_MESSAGE_LIMIT = 24
     REFERENCE_MESSAGE_LIMIT = 4
     CONTEXT_MESSAGE_CHAR_LIMIT = 2000
     STANDING_PREFERENCE_PATTERN = re.compile(
@@ -135,7 +136,7 @@ Response presentation:
 - End ordinary conversational answers with one short, relevant next-step suggestion or
   question that helps the user continue (for example, offer more detail, steps, or a
   different format). Do not use the same generic suggestion every time. Omit this closing
-  suggestion when the user requests code, JSON, plain text, a specific format, or asks for
+  suggestion when it would be repetitive, intrusive, or insensitive, or when the user requests code, JSON, plain text, a specific format, or asks for
   only the answer with no additional commentary.
 
 Content-versus-format rules:
@@ -168,8 +169,8 @@ Content-versus-format rules:
   format instructions, explanations, or a closing offer unless explicitly requested.
 - Put Markdown bold markers around headings, including the issue title, "Repro Steps:",
   and "Expected Result:". Return only the formatted result without introductory or
-explanatory commentary.
-"""
+  explanatory commentary for this bug-report formatting task only.
+""" + "\n" + CONVERSATION_GUIDANCE
 
     TANGLISH_STYLE_PROMPT = """The user explicitly selected Tanglish for this chat.
 Reply in natural conversational Tamil written with Latin letters, mixing ordinary English
@@ -396,12 +397,19 @@ maadhiri Thanglish-la explain panren."""
                     settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
                     settings.NVIDIA_CHAT_TIMEOUT_SECONDS,
                 ),
+                proxies={"http": "", "https": ""},
             )
             if response.status_code >= 400:
                 if response.status_code in {401, 403, 408, 429, 500, 502, 503, 504}:
                     raise _NvidiaFallbackError("NVIDIA provider request failed")
                 response.raise_for_status()
-            answer = response.json()["choices"][0]["message"]["content"]
+            choice = response.json()["choices"][0]
+            if choice.get("finish_reason") == "length":
+                raise ChatModelUnavailableError(
+                    "The response reached its output limit before it finished. "
+                    "Please retry with a shorter request."
+                )
+            answer = choice["message"]["content"]
             if not isinstance(answer, str) or not answer.strip():
                 raise _NvidiaFallbackError("missing NVIDIA response content")
             return answer
@@ -420,13 +428,31 @@ maadhiri Thanglish-la explain panren."""
 
     @staticmethod
     def _nvidia_body(body: dict, *, stream: bool) -> dict:
-        return {
+        request_body = {
             "model": settings.NVIDIA_CHAT_MODEL,
             "messages": body["messages"],
             "stream": stream,
             "temperature": body["options"]["temperature"],
-            "max_tokens": body["options"]["num_predict"],
+            "max_tokens": settings.NVIDIA_CHAT_MAX_TOKENS,
         }
+        if settings.NVIDIA_CHAT_MODEL == "google/gemma-4-31b-it":
+            request_body.update(
+                {
+                    "chat_template_kwargs": {"enable_thinking": False},
+                    "temperature": 1.0,
+                    "top_p": 0.95,
+                    "top_k": 64,
+                }
+            )
+        elif settings.NVIDIA_CHAT_MODEL.startswith("nvidia/nemotron-3-"):
+            request_body.update(
+                {
+                    "chat_template_kwargs": {"enable_thinking": False},
+                    "temperature": 1.0,
+                    "top_p": 0.95,
+                }
+            )
+        return request_body
 
     async def _stream_nvidia(self, body: dict) -> AsyncIterator[str]:
         if not settings.NVIDIA_API_KEY:
@@ -438,28 +464,48 @@ maadhiri Thanglish-la explain panren."""
             pool=settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
         )
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 async with client.stream(
                     "POST",
                     f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
                     headers={
                         "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
                         "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
                     },
                     json=self._nvidia_body(body, stream=True),
                 ) as response:
                     if response.status_code >= 400:
                         response.raise_for_status()
+                    finished = False
                     async for line in response.aiter_lines():
                         if not line or not line.startswith("data:"):
                             continue
                         data = line[5:].strip()
                         if data == "[DONE]":
+                            finished = True
                             break
                         event = json.loads(data)
-                        content = event["choices"][0]["delta"].get("content", "")
+                        # Usage-only events have no choices; reasoning is deliberately
+                        # excluded from the visible answer and saved history.
+                        choices = event.get("choices")
+                        if choices == []:
+                            continue
+                        choice = choices[0]
+                        content = choice["delta"].get("content")
+                        if content is not None and not isinstance(content, str):
+                            raise ValueError("Invalid NVIDIA content")
                         if content:
                             yield content
+                        if choice.get("finish_reason") == "length":
+                            raise ChatModelUnavailableError(
+                                "The response reached its output limit before it finished. "
+                                "Please retry with a shorter request."
+                            )
+                        if choice.get("finish_reason") == "stop":
+                            finished = True
+                    if not finished:
+                        raise _NvidiaFallbackError("NVIDIA stream ended before completion")
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
             logger.warning("chat.text_stream_model_unavailable", extra={"provider": "nvidia"})
             raise _NvidiaFallbackError("NVIDIA stream unavailable") from error
@@ -534,20 +580,17 @@ maadhiri Thanglish-la explain panren."""
 
         # Keep the latest request separate so its language rule is adjacent to it and
         # cannot be overridden by the style of an earlier assistant response.
-        previous_history = history[-self.HISTORY_MESSAGE_LIMIT :]
+        previous_history = history
         if (
             previous_history
             and previous_history[-1].role == "user"
             and previous_history[-1].content == message
         ):
             previous_history = previous_history[:-1]
-        messages.extend(
-            self._context_message(item)
-            for item in previous_history
-            if item.role == "user"
-            or not self.response_uses_wrong_language(item.content, response_language)
-        )
+        previous_history = previous_history[-self.HISTORY_MESSAGE_LIMIT :]
 
+        # Recalled preferences precede recent turns so a newer correction always
+        # wins (for example, "don't call me master anymore").
         recent_contents = {item.content for item in previous_history}
         standing_preferences = [
             item
@@ -561,27 +604,38 @@ maadhiri Thanglish-la explain panren."""
                 {
                     "role": "system",
                     "content": (
-                        "Standing preferences explicitly stated by this user are listed next. "
-                        "Honor the latest applicable preference naturally in the answer."
+                        "Earlier preferences explicitly stated by this user follow. "
+                        "More recent corrections override them. Omit playful titles in distress."
                     ),
                 }
             )
             messages.extend(self._context_message(item) for item in standing_preferences)
-
-        messages.append(
-            {
-                "role": "system",
-                "content": (
-                    f"MANDATORY FOR THE NEXT ANSWER: respond only in {response_language}. "
-                    "Do not mix in another language, apart from unavoidable names or technical terms. "
-                    "The language of older messages must not affect this choice. Never imitate the "
-                    "language of an older assistant response. "
-                    "Use no timestamp, category, priority, issue number, or other metadata unless "
-                    "the current source content explicitly contains that exact value. Never copy "
-                    "metadata or facts from an example or an older issue. Do not invent missing fields."
-                ),
-            }
+        messages.extend(
+            self._context_message(item)
+            for item in previous_history
+            if item.role == "user"
+            or not self.response_uses_wrong_language(item.content, response_language)
         )
+
+        next_answer_instruction = (
+            f"MANDATORY FOR THE NEXT ANSWER: respond only in {response_language}. "
+            "Do not mix in another language, apart from unavoidable names or technical terms. "
+            "The language of older messages must not affect this choice. Never imitate the "
+            "language of an older assistant response. "
+            "Respond to what changed in this turn, including a correction or declined suggestion. "
+            "If someone is distressed, acknowledge their specific concern before advice. "
+            "If danger remains unresolved, pair a focused safety question with one practical "
+            "immediate action; when a helpline was declined, offer a manageable alternative "
+            "such as asking someone nearby to sit with them. Do not replace listening with a script."
+        )
+        if re.search(r"\b(?:format|formatting|bug|issue|template|repro)\b", message, re.IGNORECASE):
+            next_answer_instruction += (
+                " For formatting tasks: Use no timestamp, category, priority, issue number, or other "
+                "metadata unless the current source content explicitly contains that exact value. "
+                "Never copy metadata or facts from an example or an older issue. "
+                "Do not invent missing fields."
+            )
+        messages.append({"role": "system", "content": next_answer_instruction})
         messages.append({"role": "user", "content": message})
 
         body = {

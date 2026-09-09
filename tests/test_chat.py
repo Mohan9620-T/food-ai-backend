@@ -376,7 +376,8 @@ def test_chat_stream_timeout_returns_error_chunk_and_closes_cleanly(client, monk
         headers={"Authorization": f"Bearer {token}"},
     )
     assert [message["content"] for message in session_response.json()["messages"]] == [
-        "Explain this"
+        "Explain this",
+        f"Response interrupted: {events[-1]['message']}",
     ]
 
 
@@ -1234,3 +1235,27 @@ def test_stream_does_not_fallback_after_nvidia_content_is_exposed(monkeypatch):
     with pytest.raises(ChatModelUnavailableError, match="interrupted"):
         asyncio.run(collect())
     assert ollama_calls == 0
+
+
+def test_interrupted_answer_is_saved_with_notice_and_never_emits_done(client, monkeypatch):
+    token = _register_and_login(client, email="incomplete-answer@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    failure = "The response reached its output limit before it finished. Please retry with a shorter request."
+
+    async def truncated_stream(self, message, history, reference_history):
+        yield "A partial answer"
+        raise ChatModelUnavailableError(failure)
+
+    monkeypatch.setattr(ChatService, "stream_chat", truncated_stream)
+    response = client.post(
+        "/chat/stream", json={"message": "Explain this"}, headers=headers
+    )
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    assert events[-1] == {"type": "error", "message": failure}
+    assert not any(event["type"] == "done" for event in events)
+
+    detail = client.get(f"/chat/sessions/{events[0]['session_id']}", headers=headers).json()
+    assert [item["content"] for item in detail["messages"]] == [
+        "Explain this",
+        f"A partial answer\n\n> Response interrupted: {failure}",
+    ]

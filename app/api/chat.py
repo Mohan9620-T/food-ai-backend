@@ -13,7 +13,11 @@ from app.database.database import get_db
 from app.models.chat import ChatMessageRecord
 from app.rate_limit import limiter
 from app.repositories.chat_repository import ChatRepository
-from app.schemas.chat import ChatHistoryMessage, ChatRequest, ChatResponse
+from app.schemas.chat import (
+    ChatHistoryMessage,
+    ChatRequest,
+    ChatResponse,
+)
 from app.schemas.chat_session import (
     ChatSessionCreate,
     ChatSessionDetailOut,
@@ -98,7 +102,9 @@ def _get_persisted_history(db: Session, session_id: int) -> list[ChatHistoryMess
             role="assistant" if message.sender == "bot" else "user",
             content=cast(str, message.content),
         )
-        for message in repository.get_message_history(db, session_id)
+        for message in repository.get_message_history(
+            db, session_id, limit=ChatService.HISTORY_MESSAGE_LIMIT
+        )
     ]
 
 
@@ -449,7 +455,8 @@ async def chat_vision(
     summary="Stream a chat response",
     description=(
         "Stream newline-delimited JSON events for a text chat turn. Events contain the session ID, "
-        "generated tokens, completion, or a model-unavailable error; completed turns are persisted."
+        "generated tokens, completion, or an error. Completed turns are persisted; interrupted "
+        "answers are saved with an explicit interruption notice."
     ),
     responses={
         401: {"description": "Missing, invalid, or expired access token."},
@@ -484,11 +491,30 @@ async def stream_chat(
         if referenced_turn is not None
         else []
     )
+    # The selected image is evidence, but the current conversation supplies intent
+    # and emotional context even if the latest message is very short.
+    vision_history.extend(item for item in history if item not in vision_history)
     repository.add_message(db, session.id, "user", payload.message)
     logger.info("chat.stream_started", extra={"user_id": user_id, "session_id": session.id})
 
     events: asyncio.Queue[dict] = asyncio.Queue()
     database_bind = db.get_bind()
+
+    async def report_interruption(chunks: list[str], message: str):
+        partial = "".join(chunks)
+        notice = f"Response interrupted: {message}"
+        saved_answer = f"{partial}\n\n> {notice}" if partial else notice
+        worker_db = Session(bind=database_bind)
+        try:
+            repository.add_message(worker_db, session.id, "bot", saved_answer)
+        except Exception:
+            logger.exception(
+                "chat.interrupted_response_save_failed",
+                extra={"user_id": user_id, "session_id": session.id},
+            )
+        finally:
+            worker_db.close()
+        await events.put({"type": "error", "message": message})
 
     async def produce_response():
         chunks: list[str] = []
@@ -507,7 +533,7 @@ async def stream_chat(
                     "chat.follow_up_vision_unavailable",
                     extra={"user_id": user_id, "session_id": session.id},
                 )
-                await events.put({"type": "error", "message": str(error)})
+                await report_interruption(chunks, str(error))
                 return
         else:
             if not await _produce_text_stream(chunks):
@@ -538,18 +564,15 @@ async def stream_chat(
                 "chat.stream_model_unavailable",
                 extra={"user_id": user_id, "session_id": session.id},
             )
-            await events.put({"type": "error", "message": str(error)})
+            await report_interruption(chunks, str(error))
             return False
         except Exception:
             logger.exception(
                 "chat.stream_generation_failed",
                 extra={"user_id": user_id, "session_id": session.id},
             )
-            await events.put(
-                {
-                    "type": "error",
-                    "message": "The response could not be generated. Please try again.",
-                }
+            await report_interruption(
+                chunks, "The response could not be generated. Please try again."
             )
             return False
         finally:

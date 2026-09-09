@@ -4,12 +4,24 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class ChatDocumentAttachmentOut(BaseModel):
+    id: int
+    filename: str
+    content_type: str
+    file_size: int
+    kind: Literal["uploaded", "generated"]
+
+    class Config:
+        from_attributes = True
+
+
 class ChatMessageOut(BaseModel):
     id: int
     sender: str
     content: str
     created_at: datetime
     image_url: str | None = None
+    document_attachment: ChatDocumentAttachmentOut | None = None
 
     class Config:
         from_attributes = True
