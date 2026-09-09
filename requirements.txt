@@ -1,4 +1,4 @@
-﻿annotated-doc==0.0.4
+annotated-doc==0.0.4
 annotated-types==0.7.0
 alembic==1.16.5
 anyio==4.14.2
@@ -21,7 +21,7 @@ idna==3.18
 iniconfig==2.3.0
 ollama==0.6.2
 packaging==26.3
-Pillow==11.3.0
+Pillow==12.3.0
 pluggy==1.6.0
 pypdf==6.1.1
 pypdfium2==4.30.0
