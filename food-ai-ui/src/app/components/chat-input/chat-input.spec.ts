@@ -94,6 +94,20 @@ describe('ChatInput image drag and drop', () => {
   it('renders the message composer and attachment control', () => {
     expect(fixture.nativeElement.querySelector('textarea[aria-label="Message"]')).toBeTruthy();
     expect(fixture.nativeElement.querySelector('button[aria-label="Attach image or document"]')).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('button[aria-label="Create document"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('textarea[aria-label="Message"]').placeholder)
+      .toContain('paste content');
+  });
+
+  it('sends pasted multi-line content through normal chat', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    component.message = 'First pasted line\n\nSecond pasted line';
+
+    component.sendMessage();
+
+    expect(chatService.streamMessage).toHaveBeenCalledOnce();
+    expect(chatService.generateDocument).not.toHaveBeenCalled();
+    expect(component.message).toBe('');
   });
 
   it('renders the mic only when speech recognition is supported', () => {
@@ -302,26 +316,7 @@ describe('ChatInput image drag and drop', () => {
     expect(component.imageError).toBeNull();
   });
 
-  it('opens a focused creation form in a new chat and submits the selected DOCX format', () => {
-    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
-    const createButton = fixture.nativeElement.querySelector('button[aria-label="Create document"]') as HTMLButtonElement;
-    createButton.click();
-    fixture.detectChanges();
-    const instruction = fixture.nativeElement.querySelector('#document-instruction') as HTMLTextAreaElement;
-    expect(document.activeElement).toBe(instruction);
-    expect(component.imageError).toBeNull();
-    instruction.value = 'Create a weekly meal planner';
-    instruction.dispatchEvent(new Event('input'));
-    const format = fixture.nativeElement.querySelector('#document-format') as HTMLSelectElement;
-    format.value = 'docx';
-    format.dispatchEvent(new Event('change'));
-    const form = fixture.nativeElement.querySelector('#document-creator') as HTMLFormElement;
-    form.dispatchEvent(new Event('submit', { cancelable: true }));
-    expect(chatService.generateDocument).toHaveBeenCalledExactlyOnceWith(null, 'Create a weekly meal planner', 'docx', 'conversation-1', 'ai');
-    expect(component.showDocumentCreator).toBe(false);
-    expect(component.isSending()).toBe(false);
-  });
-
+  /* The separate document creator was removed from the chat composer.
   it('imports the staged file before creating a PDF with its resulting session', () => {
     const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
     const upload = new Subject<ChatResponse>();
@@ -365,6 +360,7 @@ describe('ChatInput image drag and drop', () => {
     expect(chatService.generateDocument).toHaveBeenCalledOnce();
   });
 
+  */
   it('cancels a document request and leaves the attachment available for retry', () => {
     const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
     const upload = new Subject<ChatResponse>();
@@ -380,6 +376,7 @@ describe('ChatInput image drag and drop', () => {
     expect(chatService.stopStreaming).not.toHaveBeenCalled();
   });
 
+  /* The separate document creator was removed from the chat composer.
   it('preserves instructions and format after generation fails and retries without duplicating the request message', () => {
     const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
     const generation = new Subject<ChatResponse>();
@@ -623,6 +620,7 @@ describe('ChatInput image drag and drop', () => {
     expect(chatService.generateDocument).toHaveBeenCalledTimes(1);
   });
 
+  */
   it('keeps upload failures and drafts in their original conversation', () => {
     const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
     const upload = new Subject<ChatResponse>();
@@ -643,13 +641,4 @@ describe('ChatInput image drag and drop', () => {
     expect(component.message).toBe('Read these notes');
   });
 
-  it('cancels the creation form without sending a request and restores focus', () => {
-    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
-    component.createDocument();
-    component.closeDocumentCreator();
-    fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('#document-creator')).toBeNull();
-    expect(document.activeElement?.getAttribute('aria-label')).toBe('Create document');
-    expect(chatService.generateDocument).not.toHaveBeenCalled();
-  });
 });

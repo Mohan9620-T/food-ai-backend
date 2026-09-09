@@ -294,32 +294,24 @@ npm start
 
 App available at \`http://localhost:4200\`.
 
-## Chat document import and creation
+## Chat document import
 
-- Use the paperclip (**Import image or document**) or drag one file into the chat,
-  then press **Send**. Supported documents are PDF, DOCX, TXT, CSV, and XLSX, up to
-  15 MB. Images remain supported up to 8 MB.
-- Use **Create document**, enter instructions, and select PDF or Word (.docx).
-  This works in a new chat without first sending a message. If a document is
-  attached, it is imported before generation so it can supply the source content.
-- If you already have the finished content, select **Export text without AI**,
-  paste it into the text box, and choose PDF or Word. This exports only that text:
-  it does not summarize, rewrite, read conversation history, or call NVIDIA/Ollama.
-  Remove any attached file before using this mode. Text-box instructions/content
-  accept up to 2,000 characters.
-- To convert a file instead, choose **Export attached file without AI** or
-  **Export saved file without AI** in the document creator. Check the displayed
-  source filename, then choose PDF or Word. This exports the **full extracted text**,
-  not the shortened chat preview, and does not require AI or document instructions.
-  The original file's layout/images are not reproduced. Attached files are imported
-  without AI first; saved files in the current chat do not need to be uploaded again.
+- Paste text directly into the normal **Ask anything or paste content** composer.
+  There is no separate document-creator control in the chat UI.
+- Use the paperclip (**Attach image or document**) or drag one file into the same
+  composer, add the question/instruction, then press **Send**. Supported documents
+  are PDF, DOCX, TXT, CSV, and XLSX, up to 15 MB. Images remain supported up to 8 MB.
+  Uploaded files and responses are kept in normal conversation history.
+- PDF/Word generation and direct source export remain backend API capabilities for
+  API clients, but they are no longer exposed as a separate chat-composer workflow.
+  A source export uses the **full extracted text**, not the shortened chat preview,
+  and does not require AI. The original file's layout/images are not reproduced.
   The current PDF font supports Windows-1252 text. If the text contains unsupported
   characters (for example Tamil, Chinese, or emoji), export as Word (.docx) instead;
   PDF creation reports a clear error rather than silently replacing text with boxes.
-- **Write with AI** remains the default. Each AI operation has a total 45-second
+- Backend AI document operations have a total 45-second
   deadline (`DOCUMENT_AI_TIMEOUT_SECONDS`), including provider fallback. A timeout
-  cancels the upstream connection and preserves the form for retry or explicit
-  export; an incomplete AI answer is never saved as a finished document. File
+  cancels the upstream connection; an incomplete AI answer is never saved as a finished document. File
   extraction and rendering are separate from this AI deadline. Import-then-create
   can use two AI operations; if import analysis fails, creation stops immediately
   with the imported file saved, rather than starting a second failing AI request.

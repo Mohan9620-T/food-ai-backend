@@ -29,7 +29,7 @@
   @if (selectedDocument) {
     <div class="image-preview document-preview">
       <span aria-hidden="true">&#128196;</span>
-      <div><strong>{{ selectedDocument.name }}</strong><small>{{ processingDocument() ? 'Processing document…' : 'Send to import, or create a document using this file' }}</small></div>
+      <div><strong>{{ selectedDocument.name }}</strong><small>{{ processingDocument() ? 'Processing document…' : 'Ready to send with your message' }}</small></div>
       <button type="button" class="remove-image" (click)="removeDocument()" [disabled]="isSending()" aria-label="Remove attached document">&times;</button>
     </div>
   }
@@ -41,41 +41,6 @@
   }
   @if (speechError) {
     <div class="image-error speech-error" role="alert">{{ speechError }}</div>
-  }
-  @if (showDocumentCreator) {
-    <form id="document-creator" class="document-creator" [formGroup]="documentForm" (ngSubmit)="submitDocument()" aria-labelledby="document-creator-title">
-      <h2 id="document-creator-title">Create a document</h2>
-      <label for="document-mode">Creation mode</label>
-      <select #documentModeInput id="document-mode" formControlName="mode" aria-describedby="document-source-help">
-        <option value="ai">Write with AI</option>
-        <option value="export">Export text without AI</option>
-        <option value="export-file">{{ !selectedDocument && exportSourceDocument ? 'Export saved file without AI' : 'Export attached file without AI' }}</option>
-      </select>
-      <p id="document-source-help" aria-live="polite">
-        @switch (documentForm.controls.mode.value) {
-          @case ('export-file') {
-            Exports extracted text from <strong>{{ selectedDocument?.name ?? exportSourceDocument?.filename ?? 'a file you attach or import in this conversation' }}</strong> without AI. It does not summarize, rewrite, or use the draft below. The original layout may change. Your draft text is kept for later.
-          }
-          @case ('export') {
-            Copies the text below as-is into a file without AI. It does not summarize, rewrite, or use conversation history or attached files.
-          }
-          @default {
-            Describe what you need. AI uses this conversation and imports any attached document first. To avoid waiting for AI, choose a text or file export mode.
-          }
-        }
-      </p>
-      <label for="document-instruction">{{ documentForm.controls.mode.value === 'export-file' ? 'Draft text (not used for file export)' : documentForm.controls.mode.value === 'export' ? 'Text to export' : 'Document instructions' }}</label>
-      <textarea #documentInstructionInput id="document-instruction" formControlName="instruction" rows="3" maxlength="2000" [required]="documentForm.controls.mode.value !== 'export-file'" aria-describedby="document-source-help" [placeholder]="documentForm.controls.mode.value === 'export' ? 'Paste the exact text to include in your document (up to 2,000 characters).' : 'For example: Create a nutrition summary with headings and recommendations.'" [readOnly]="isSending()"></textarea>
-      <div class="document-actions">
-        <label for="document-format">File format</label>
-        <select id="document-format" formControlName="format">
-          <option value="pdf">PDF</option>
-          <option value="docx">Word (.docx)</option>
-        </select>
-        <button type="button" class="cancel-document" (click)="closeDocumentCreator()" [disabled]="isSending()">Cancel</button>
-        <button type="submit" [disabled]="isSending()">{{ processingDocument() ? 'Creating…' : 'Create document' }}</button>
-      </div>
-    </form>
   }
   <div class="chat-input">
     <input
@@ -111,7 +76,6 @@
         <span aria-hidden="true">&#127908;</span>
       </button>
     }
-    <button #createDocumentButton type="button" class="attach-button" (click)="createDocument()" [disabled]="isSending()" [attr.aria-expanded]="showDocumentCreator" [attr.aria-controls]="showDocumentCreator ? 'document-creator' : null" aria-label="Create document" title="Create document"><span aria-hidden="true">&#128196;</span></button>
     <textarea
       #messageInput
       rows="1"
@@ -119,7 +83,7 @@
       (input)="resizeInput($event)"
       (keydown)="handleKeydown($event)"
       aria-label="Message"
-      placeholder="Ask anything..."
+      placeholder="Ask anything or paste content..."
     ></textarea>
 
     @if (isSending()) {

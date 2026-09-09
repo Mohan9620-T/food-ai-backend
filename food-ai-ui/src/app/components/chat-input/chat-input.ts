@@ -1,12 +1,11 @@
 import { afterNextRender, ChangeDetectorRef, Component, computed, DestroyRef, effect, ElementRef, inject, signal, viewChild } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { FormControl, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
+import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ChatService, ChatStreamError } from '../../services/chat';
 import { AuthService } from '../../services/auth';
-import { ChatDocumentAttachment, ChatRequest } from '../../models/chat';
-import { defer, EMPTY, finalize, Subscription, switchMap, tap } from 'rxjs';
+import { ChatRequest } from '../../models/chat';
+import { finalize, Subscription } from 'rxjs';
 import { SpeechRecognitionService } from '../../services/speech-recognition';
 
 interface ComposerDraft {
@@ -15,18 +14,16 @@ interface ComposerDraft {
   selectedDocument: File | null;
   imagePreviewUrl: string | null;
   imageError: string | null;
-  showDocumentCreator: boolean;
-  savedDocument: ChatDocumentAttachment | null;
 }
 
 const EMPTY_DRAFT: ComposerDraft = {
   message: '', selectedImage: null, selectedDocument: null,
-  imagePreviewUrl: null, imageError: null, showDocumentCreator: false, savedDocument: null
+  imagePreviewUrl: null, imageError: null
 };
 
 @Component({
   selector: 'app-chat-input',
-  imports: [FormsModule, ReactiveFormsModule],
+  imports: [FormsModule],
   templateUrl: './chat-input.html',
   styleUrls: ['./chat-input.css'],
   host: {
@@ -38,9 +35,6 @@ const EMPTY_DRAFT: ComposerDraft = {
 })
 export class ChatInput {
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
-  private readonly documentInstructionInput = viewChild<ElementRef<HTMLTextAreaElement>>('documentInstructionInput');
-  private readonly documentModeInput = viewChild<ElementRef<HTMLSelectElement>>('documentModeInput');
-  private readonly createDocumentButton = viewChild<ElementRef<HTMLButtonElement>>('createDocumentButton');
   private readonly destroyRef = inject(DestroyRef);
   private readonly changeDetectorRef = inject(ChangeDetectorRef);
   private readonly chatService = inject(ChatService);
@@ -65,27 +59,11 @@ export class ChatInput {
   set imagePreviewUrl(value: string | null) { this.updateDraft({ imagePreviewUrl: value }); }
   get imageError(): string | null { return this.draft().imageError; }
   set imageError(value: string | null) { this.updateDraft({ imageError: value }); }
-  get showDocumentCreator(): boolean { return this.draft().showDocumentCreator; }
-  get exportSourceDocument(): ChatDocumentAttachment | null {
-    return this.draft().savedDocument ?? this.chatService.messages()
-      .filter(message => message.attachment?.kind === 'uploaded').at(-1)?.attachment ?? null;
-  }
-  private readonly documentForms = new Map<string, ReturnType<ChatInput['newDocumentForm']>>();
-  get documentForm(): ReturnType<ChatInput['newDocumentForm']> {
-    const conversationId = this.chatService.getActiveConversationId() ?? '';
-    let form = this.documentForms.get(conversationId);
-    if (!form) {
-      form = this.newDocumentForm();
-      this.documentForms.set(conversationId, form);
-    }
-    return form;
-  }
   isDraggingImage = false;
   private dragDepth = 0;
   private visionSubscription: Subscription | null = null;
   private readonly documentSubscriptions = new Map<string, Subscription>();
   private readonly pendingUploads = new Map<string, { file: File; message: string }>();
-  private readonly pendingGenerations = new Map<string, string>();
   private dictationPrefix = '';
   private finalDictation = '';
 
@@ -303,122 +281,6 @@ export class ChatInput {
     else this.requestResponse(conversationId, request);
   }
 
-  createDocument(): void {
-    if (this.isSending()) return;
-    this.updateDraft({ showDocumentCreator: true, imageError: null });
-    if (!this.documentForm.controls.instruction.value.trim() && this.message.trim()) {
-      this.documentForm.controls.instruction.setValue(this.message);
-    }
-    this.changeDetectorRef.detectChanges();
-    if (this.documentForm.controls.mode.value === 'export-file') this.documentModeInput()?.nativeElement.focus();
-    else this.documentInstructionInput()?.nativeElement.focus();
-  }
-
-  closeDocumentCreator(): void {
-    if (this.isSending()) return;
-    this.updateDraft({ showDocumentCreator: false, imageError: null });
-    this.createDocumentButton()?.nativeElement.focus();
-  }
-
-  submitDocument(): void {
-    if (this.isSending()) return;
-    const form = this.documentForm;
-    const mode = form.controls.mode.value;
-    const instruction = mode === 'export' ? form.controls.instruction.value : form.controls.instruction.value.trim();
-    if (mode !== 'export-file' && (!instruction.trim() || form.invalid)) {
-      this.imageError = mode === 'export'
-        ? 'Enter the text to export (up to 2,000 characters).'
-        : 'Describe the document you want to create (up to 2,000 characters).';
-      this.documentInstructionInput()?.nativeElement.focus();
-      return;
-    }
-    const conversationId = this.chatService.getActiveConversationId();
-    if (!conversationId) return;
-    const sourceDocument = this.exportSourceDocument;
-    if (mode === 'export-file' && (this.selectedImage || (!this.selectedDocument && !sourceDocument))) {
-      this.imageError = 'Attach a PDF, DOCX, TXT, CSV, or XLSX file, or import one into this conversation before exporting it.';
-      return;
-    }
-    if (mode === 'export' && (this.selectedDocument || this.selectedImage)) {
-      this.imageError = 'Export uses only the text below. Remove the attached file, or send it first and paste the text you want to export.';
-      return;
-    }
-    if (this.selectedImage) {
-      this.imageError = 'Send the attached image first, then create a document from the conversation.';
-      return;
-    }
-    if (this.isListening()) this.speechService.stop();
-    this.imageError = null;
-    const file = this.selectedDocument;
-    const message = mode === 'export-file' ? '' : this.message.trim();
-    const format = form.controls.format.value;
-    const sessionId = this.chatService.getActiveSessionId();
-    const generationMessage = mode === 'export-file'
-      ? `Export extracted text from ${file?.name ?? sourceDocument?.filename}` : instruction;
-    this.startDocumentResponse(conversationId, generationMessage);
-    const generate = (sourceSessionId: number | null, sourceDocumentId?: number) => defer(() => {
-      if (this.pendingGenerations.get(conversationId) !== generationMessage) {
-        this.chatService.addMessage({ sender: 'user', text: generationMessage }, conversationId);
-        this.pendingGenerations.set(conversationId, generationMessage);
-      }
-      return mode === 'export-file'
-        ? this.chatService.generateDocument(sourceSessionId, '', format, conversationId, 'export', sourceDocumentId)
-        : this.chatService.generateDocument(sourceSessionId, instruction, format, conversationId, mode);
-    });
-    const request = file
-      ? defer(() => {
-          this.addUploadMessage(conversationId, file, message);
-          return mode === 'export-file'
-            ? this.chatService.uploadDocument(file, null, conversationId, false)
-            : this.chatService.uploadDocument(file, message || null, conversationId);
-        }).pipe(
-          tap(response => this.acceptDocumentUpload(conversationId, file, message, response.attachment)),
-          switchMap(response => {
-            if (mode === 'ai' && response.analysis_status === 'unavailable') {
-              this.updateDraft({ imageError: 'File saved, but AI analysis is unavailable. Choose Export saved file without AI to create a document from its extracted text, or try AI again later.' }, conversationId);
-              return EMPTY;
-            }
-            if (mode === 'export-file' && !response.attachment) {
-              this.updateDraft({ imageError: 'The upload did not return a saved file reference. Please refresh the conversation before exporting it.' }, conversationId);
-              return EMPTY;
-            }
-            return generate(response.session_id, response.attachment?.id);
-          })
-        )
-      : generate(sessionId, sourceDocument?.id);
-    const operation = new Subscription();
-    this.documentSubscriptions.set(conversationId, operation);
-    operation.add(request.pipe(finalize(() => this.finishDocumentResponse(conversationId))).subscribe({
-      next: () => {
-        this.pendingGenerations.delete(conversationId);
-        this.updateDraft({ showDocumentCreator: false, imageError: null }, conversationId);
-        form.reset({ instruction: mode === 'export-file' ? form.controls.instruction.value : '', format, mode });
-        if (mode !== 'export-file' && this.drafts().get(conversationId)?.message.trim() === instruction.trim()) {
-          this.updateDraft({ message: '' }, conversationId);
-        }
-      },
-      error: (error: HttpErrorResponse) => {
-        this.updateDraft({ imageError: this.documentError(error, 'The document could not be generated. Please try again.') }, conversationId);
-      }
-    }));
-  }
-
-  private newDocumentForm() {
-    const form = new FormGroup({
-      instruction: new FormControl('', { nonNullable: true, validators: [Validators.required, Validators.maxLength(2000)] }),
-      format: new FormControl<'pdf' | 'docx'>('pdf', { nonNullable: true }),
-      mode: new FormControl<'ai' | 'export' | 'export-file'>('ai', { nonNullable: true })
-    });
-    form.controls.mode.valueChanges.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(mode => {
-      // A generation error describes the previous mode. Keeping it visible after
-      // the user chooses a recovery mode makes a working no-AI export look broken.
-      this.imageError = null;
-      if (mode === 'export-file') form.controls.instruction.disable({ emitEvent: false });
-      else form.controls.instruction.enable({ emitEvent: false });
-    });
-    return form;
-  }
-
   stopResponse(): void {
     if (!this.isSending()) return;
     const conversationId = this.chatService.getActiveConversationId();
@@ -507,7 +369,7 @@ export class ChatInput {
     operation.add(this.chatService.uploadDocument(file, message, conversationId).pipe(
       finalize(() => this.finishDocumentResponse(conversationId))
     ).subscribe({
-      next: response => this.acceptDocumentUpload(conversationId, file, message ?? '', response.attachment),
+      next: () => this.acceptDocumentUpload(conversationId, file, message ?? ''),
       error: (error: HttpErrorResponse) => {
         this.updateDraft({ imageError: this.documentError(error, 'The document could not be processed. Your file is still attached; please try again.') }, conversationId);
       }
@@ -528,13 +390,12 @@ export class ChatInput {
     });
   }
 
-  private acceptDocumentUpload(conversationId: string, file: File, message: string, attachment?: ChatDocumentAttachment): void {
+  private acceptDocumentUpload(conversationId: string, file: File, message: string): void {
     this.pendingUploads.delete(conversationId);
     const draft = this.drafts().get(conversationId);
     this.updateDraft({
       ...(draft?.selectedDocument === file ? { selectedDocument: null } : {}),
       ...(draft?.message.trim() === message ? { message: '' } : {}),
-      ...(attachment?.kind === 'uploaded' ? { savedDocument: attachment } : {}),
       imageError: null
     }, conversationId);
   }

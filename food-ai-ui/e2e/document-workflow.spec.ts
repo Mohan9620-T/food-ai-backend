@@ -235,8 +235,19 @@ for (const [extension, mimeType] of imageTypes) {
   }
 }
 
+test('uses the normal composer for pasted content and has no document creator control', async ({ page }) => {
+  const state = await mockApiAndLogin(page);
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true });
+  await expect(page.getByRole('button', { name: 'Create document', exact: true })).toHaveCount(0);
+  await expect(composer).toHaveAttribute('placeholder', /paste content/i);
+  await composer.fill('First pasted line\n\nSecond pasted line');
+  await expect(composer).toHaveValue('First pasted line\n\nSecond pasted line');
+  expect(state.generations).toHaveLength(0);
+  expect(state.unexpected).toEqual([]);
+});
+
 for (const format of ['pdf', 'docx'] as const) {
-  test(`creates and downloads ${format.toUpperCase()} from a new chat`, async ({ page }) => {
+  test.skip(`creates and downloads ${format.toUpperCase()} from a new chat`, async ({ page }) => {
     const state = await mockApiAndLogin(page);
     await page.getByRole('button', { name: 'Create document', exact: true }).click();
     await expect(page.getByLabel('Document instructions', { exact: true })).toBeFocused();
@@ -269,7 +280,7 @@ for (const format of ['pdf', 'docx'] as const) {
     expect(state.unexpected).toEqual([]);
   });
 
-  test(`exports literal text to ${format.toUpperCase()} without AI or importing a file`, async ({ page }) => {
+  test.skip(`exports literal text to ${format.toUpperCase()} without AI or importing a file`, async ({ page }) => {
     const state = await mockApiAndLogin(page);
     await page.getByRole('button', { name: 'Create document', exact: true }).click();
     await page.getByLabel('Creation mode', { exact: true }).selectOption('export');
@@ -294,7 +305,7 @@ for (const format of ['pdf', 'docx'] as const) {
     expect(state.unexpected).toEqual([]);
   });
 
-  test(`exports an attached file to ${format.toUpperCase()} without AI or instructions`, async ({ page }) => {
+  test.skip(`exports an attached file to ${format.toUpperCase()} without AI or instructions`, async ({ page }) => {
     const state = await mockApiAndLogin(page);
     await attachFile(page, sampleFile('xlsx', documentTypes[4][1]), 'picker');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Keep this unsent draft');
@@ -315,7 +326,7 @@ for (const format of ['pdf', 'docx'] as const) {
   });
 }
 
-test('stops after an imported file reports unavailable AI and exports its saved source without reuploading', async ({ page }) => {
+test.skip('stops after an imported file reports unavailable AI and exports its saved source without reuploading', async ({ page }) => {
   const state = await mockApiAndLogin(page, { unavailableAnalysis: true });
   await attachFile(page, sampleFile('pdf', 'application/pdf'), 'drop');
   await page.getByRole('button', { name: 'Create document', exact: true }).click();
@@ -353,7 +364,7 @@ test('keeps an imported file downloadable when its AI analysis is unavailable', 
   expect(state.unexpected).toEqual([]);
 });
 
-test('keeps the draft after AI failure and lets the user explicitly export it without duplicate content', async ({ page }) => {
+test.skip('keeps the draft after AI failure and lets the user explicitly export it without duplicate content', async ({ page }) => {
   const state = await mockApiAndLogin(page, { failFirstGeneration: true });
   await page.getByRole('button', { name: 'Create document', exact: true }).click();
   const text = 'Breakfast: oats and fruit. Lunch: rice and vegetables.';
@@ -380,7 +391,7 @@ test('keeps the draft after AI failure and lets the user explicitly export it wi
   expect(state.unexpected).toEqual([]);
 });
 
-test('keeps attached files when export asks the user to remove them first', async ({ page }) => {
+test.skip('keeps attached files when export asks the user to remove them first', async ({ page }) => {
   const state = await mockApiAndLogin(page);
   await attachFile(page, sampleFile('pdf', 'application/pdf'), 'drop');
   await page.getByRole('button', { name: 'Create document', exact: true }).click();
@@ -401,7 +412,7 @@ test('keeps attached files when export asks the user to remove them first', asyn
   expect(state.unexpected).toEqual([]);
 });
 
-test('imports a staged document before generating from its returned session', async ({ page }) => {
+test.skip('imports a staged document before generating from its returned session', async ({ page }) => {
   const state = await mockApiAndLogin(page);
   await attachFile(page, sampleFile('csv', 'text/csv'), 'drop');
   await page.getByRole('button', { name: 'Create document', exact: true }).click();
@@ -458,7 +469,7 @@ for (const viewport of [
   { name: 'desktop', width: 1440, height: 900 },
   { name: 'mobile', width: 390, height: 844 },
 ]) {
-  test(`document creator is readable and keyboard accessible on ${viewport.name}`, async ({
+  test.skip(`document creator is readable and keyboard accessible on ${viewport.name}`, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
