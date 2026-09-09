@@ -2,7 +2,7 @@ import asyncio
 import logging
 from io import BytesIO
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -44,20 +44,23 @@ DOCUMENT_TYPES = {
     "",
     response_model=ChatDocumentResponse,
     summary="Upload a chat document",
-    description="Read a PDF, DOCX, TXT, CSV, or XLSX file and save it with its summary. "
-    "Scanned PDF pages require Tesseract on the backend. Maximum upload size is 15 MB.",
+    description="Read and save a PDF, DOCX, TXT, CSV, or XLSX before optional AI analysis. "
+    "An AI failure returns the saved file with analysis_status=unavailable, not an upload error. "
+    "Use analyze=false to save/extract without AI. Scanned PDF pages require Tesseract. "
+    "Maximum upload size is 15 MB.",
     responses={
         404: {"description": "Chat session not found or not owned by this user."},
         413: {"description": "File exceeds 15 MB."},
         415: {"description": "Unsupported file type."},
         422: {"description": "Empty, unreadable, or password-protected document."},
-        503: {"description": "OCR or the chat model is unavailable."},
+        503: {"description": "A required extraction dependency, such as OCR, is unavailable."},
     },
 )
 async def upload_document(
     file: UploadFile = File(...),
     message: str | None = Form(default=None),
     session_id: int | None = Form(default=None),
+    analyze: bool = Form(default=True),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -89,33 +92,69 @@ async def upload_document(
             raise HTTPException(status_code=404, detail="Chat session not found")
     try:
         raw_text = await asyncio.to_thread(service.extract, file_data, filename)
-        summary = await asyncio.to_thread(service.summarize, raw_text, message)
     except InvalidDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    except (ChatModelUnavailableError, DocumentProcessingUnavailableError) as error:
+    except DocumentProcessingUnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     user_text = (message or "").strip() or f"Uploaded {filename}"
     if resolved_session is None:
         resolved_session = repository.create_session(db, user_id, user_text[:60])
     resolved_session_id = cast(int, resolved_session.id)
-    user_record, _ = repository.add_turn(db, resolved_session_id, user_text, summary)
-    attachment = repository.add_document_attachment(
+    saved_notice = (
+        "The file and its extracted text are saved. "
+        "You can download the original or export the saved text as PDF or Word."
+    )
+    bot_record, attachment = repository.save_document_upload(
         db,
         session_id=resolved_session_id,
-        message_id=cast(int, user_record.id),
+        user_content=user_text,
+        bot_content=saved_notice,
         filename=filename,
         content_type=expected_type,
         file_data=file_data,
-        kind="uploaded",
         raw_text=raw_text,
-        structured_summary=summary,
     )
+    response_text = saved_notice
+    analysis_status: Literal["complete", "unavailable", "skipped"] = "skipped"
+    if analyze:
+        try:
+            response_text = await service.summarize(raw_text, message)
+            setattr(attachment, "structured_summary", response_text)
+            analysis_status = "complete"
+        except ChatModelUnavailableError:
+            analysis_status = "unavailable"
+            preview = "\n".join(f"    {line}" for line in raw_text[:6000].splitlines())
+            preview_label = (
+                f"Extracted text preview (first 6,000 of {len(raw_text):,} characters):"
+                if len(raw_text) > 6000
+                else "Extracted text:"
+            )
+            response_text = (
+                f"{saved_notice}\n\nAI analysis is currently unavailable. "
+                "The text below was extracted from your file; it is not an AI answer or summary. "
+                "You do not need to upload the file again.\n\n"
+                f"{preview_label}\n\n{preview}"
+            )
+            logger.warning(
+                "chat.document_analysis_unavailable",
+                extra={
+                    "user_id": user_id,
+                    "session_id": resolved_session_id,
+                    "document_id": attachment.id,
+                },
+            )
+        setattr(bot_record, "content", response_text)
+        db.commit()
+        db.refresh(attachment)
     logger.info(
         "chat.document_uploaded",
         extra={"user_id": user_id, "session_id": resolved_session_id, "document_id": attachment.id},
     )
     return ChatDocumentResponse(
-        response=summary, session_id=resolved_session_id, attachment=attachment
+        response=response_text,
+        session_id=resolved_session_id,
+        attachment=attachment,
+        analysis_status=analysis_status,
     )
 
 
@@ -124,11 +163,15 @@ async def upload_document(
     response_model=ChatDocumentResponse,
     summary="Generate a chat document",
     description="Create a PDF or Word document from an instruction and optional existing chat. "
-    "Omit session_id to create a new chat; uploading a file first is not required.",
+    "Omit session_id to create a new chat; uploading a file first is not required. "
+    "Use mode=export to save instruction text directly without calling any AI provider. "
+    "In export mode, source_document_id instead exports the full extracted text of a saved "
+    "uploaded file; instruction may be omitted and is not used as document content. "
+    "AI mode uses a total document deadline (45 seconds by default).",
     responses={
         404: {"description": "Chat session not found or not owned by this user."},
         422: {"description": "Missing instruction or unsupported output format."},
-        503: {"description": "Chat model unavailable."},
+        503: {"description": "AI generation timed out or failed. Retry or use mode=export."},
     },
 )
 async def generate_document(
@@ -138,36 +181,70 @@ async def generate_document(
 ):
     user_id = int(current_user["sub"])
     session = None
+    source_document = None
+    if payload.source_document_id is not None:
+        source_document = repository.get_document_for_user(db, payload.source_document_id, user_id)
+        if source_document is None or (
+            payload.session_id is not None and payload.session_id != source_document.session_id
+        ):
+            raise HTTPException(status_code=404, detail="Source document not found in this chat")
+        if source_document.kind != "uploaded" or not str(source_document.raw_text or "").strip():
+            raise HTTPException(
+                status_code=422, detail="This file has no extracted text to export."
+            )
+        session = repository.get_session(db, cast(int, source_document.session_id), user_id)
     if payload.session_id is not None:
         session = repository.get_session(db, payload.session_id, user_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
-    records = repository.get_message_history(db, payload.session_id) if payload.session_id else []
-    summaries = (
-        repository.get_document_summaries(db, payload.session_id) if payload.session_id else []
-    )
-    history = [
-        ChatHistoryMessage(
-            role="assistant" if row.sender == "bot" else "user", content=str(row.content)
-        )
-        for row in records
-    ]
-    profile_record = profile_service.get(db, user_id)
-    profile = profile_service.serialize(profile_record) if profile_record is not None else None
     try:
-        content = await asyncio.to_thread(
-            service.generate_content, payload.instruction, summaries, history, profile
-        )
+        if payload.mode == "export":
+            # Explicit export does not reinterpret source text, read other history,
+            # or depend on provider availability. It is not an AI-generated answer.
+            content = (
+                str(source_document.raw_text)
+                if source_document is not None
+                else payload.instruction
+            )
+        else:
+            records = (
+                repository.get_message_history(db, payload.session_id) if payload.session_id else []
+            )
+            summaries = (
+                repository.get_document_summaries(db, payload.session_id)
+                if payload.session_id
+                else []
+            )
+            history = [
+                ChatHistoryMessage(
+                    role="assistant" if row.sender == "bot" else "user", content=str(row.content)
+                )
+                for row in records
+            ]
+            profile_record = profile_service.get(db, user_id)
+            profile = (
+                profile_service.serialize(profile_record) if profile_record is not None else None
+            )
+            content = await service.generate_content(
+                payload.instruction, summaries, history, profile
+            )
         file_data, filename, content_type = await asyncio.to_thread(
-            service.render, content, payload.output_format
+            service.render, content, payload.output_format, plain_text=payload.mode == "export"
         )
     except ChatModelUnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except InvalidDocumentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     # Failed generation must not leave empty sessions behind.
     if session is None:
         session = repository.create_session(db, user_id, payload.instruction[:60])
     resolved_session_id = cast(int, session.id)
-    _, bot_record = repository.add_turn(db, resolved_session_id, payload.instruction, content)
+    user_text = (
+        f"Export extracted text from {source_document.filename} as {payload.output_format.upper()}"
+        if source_document is not None
+        else payload.instruction
+    )
+    _, bot_record = repository.add_turn(db, resolved_session_id, user_text, content)
     attachment = repository.add_document_attachment(
         db,
         session_id=resolved_session_id,

@@ -1,7 +1,9 @@
+import asyncio
 import csv
+import logging
 import re
 from codecs import BOM_UTF16_BE, BOM_UTF16_LE
-from contextlib import closing
+from contextlib import aclosing, closing
 from html import escape
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -16,8 +18,11 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
+from app.config import settings
 from app.schemas.chat import ChatHistoryMessage
-from app.services.chat_service import ChatService
+from app.services.chat_service import ChatModelUnavailableError, ChatService
+
+logger = logging.getLogger(__name__)
 
 
 class InvalidDocumentError(ValueError):
@@ -30,6 +35,7 @@ class DocumentProcessingUnavailableError(RuntimeError):
 
 class ChatDocumentService:
     OCR_PAGE_TIMEOUT_SECONDS = 30
+    MAX_DOCUMENT_CONTEXT_CHARS = 30_000
 
     def __init__(self, chat_service: ChatService | None = None):
         self.chat_service = chat_service or ChatService()
@@ -79,25 +85,26 @@ class ChatDocumentService:
             raise InvalidDocumentError("The document does not contain readable text.")
         return text.strip()
 
-    def summarize(self, raw_text: str, instruction: str | None) -> str:
+    async def summarize(self, raw_text: str, instruction: str | None) -> str:
         prompt = (
             "Read the uploaded document and respond to the user note using only its supported facts. "
             "If there is no specific request, provide a concise, structured summary. "
             "Preserve relevant headings, subheadings, names, dates, values, and table details. "
             "Summarize the actual subject of the document; do not omit information just because "
             "it is unrelated to nutrition. For health information, do not diagnose.\n\n"
-            f"User note: {instruction or 'No additional note.'}\n\nDocument:\n{raw_text[:30000]}"
+            f"User note: {instruction or 'No additional note.'}\n\n"
+            f"Document:\n{self._source_excerpt([raw_text])}"
         )
-        return self.chat_service.chat(prompt, [], [])
+        return await self._complete(prompt, [])
 
-    def generate_content(
+    async def generate_content(
         self,
         instruction: str,
         summaries: list[str],
         history: list[ChatHistoryMessage],
         profile: dict | None = None,
     ) -> str:
-        source = "\n\n".join(summaries) or "No uploaded-document summary is available."
+        source = self._source_excerpt(summaries) or "No uploaded-document summary is available."
         prompt = (
             "Create document-ready content with a clear title, headings, concise sections, and "
             "actionable lists. Use only the supplied facts; flag missing information and do not "
@@ -105,13 +112,71 @@ class ChatDocumentService:
             f"Requested document: {instruction}\n\nUploaded document summaries:\n{source}"
             f"\n\nNutrition profile:\n{profile or 'No profile available.'}"
         )
-        return self.chat_service.chat(prompt, history, [])
+        return await self._complete(prompt, history)
 
-    def render(self, content: str, output_format: str) -> tuple[bytes, str, str]:
+    @classmethod
+    def _source_excerpt(cls, sources: list[str]) -> str:
+        """Bound only AI context; saved source text and direct exports stay complete."""
+        total_chars = sum(len(source) for source in sources) + max(0, len(sources) - 1) * 2
+        remaining = cls.MAX_DOCUMENT_CONTEXT_CHARS
+        parts = []
+        for index, source in enumerate(sources):
+            if index:
+                separator = "\n\n"[:remaining]
+                parts.append(separator)
+                remaining -= len(separator)
+            if remaining == 0:
+                break
+            excerpt = source[:remaining]
+            parts.append(excerpt)
+            remaining -= len(excerpt)
+        excerpt = "".join(parts)
+        if total_chars > cls.MAX_DOCUMENT_CONTEXT_CHARS:
+            disclosure = (
+                f"[Source excerpt truncated: first {cls.MAX_DOCUMENT_CONTEXT_CHARS:,} "
+                f"of {total_chars:,} characters supplied. The remaining source content was not "
+                "provided. Tell the user this limitation; do not claim to have read the full "
+                "document or invent details from omitted content.]\n\n"
+            )
+            return disclosure + excerpt
+        return excerpt
+
+    async def _complete(self, prompt: str, history: list[ChatHistoryMessage]) -> str:
+        # One deadline covers NVIDIA, any Ollama fallback, and all response tokens.
+        # Cancelling async HTTP closes the connection instead of leaving a worker
+        # thread generating for another five minutes after the UI reports failure.
+        try:
+            async with asyncio.timeout(settings.DOCUMENT_AI_TIMEOUT_SECONDS):
+                async with aclosing(self.chat_service.stream_chat(prompt, history, [])) as stream:
+                    chunks = [chunk async for chunk in stream]
+        except TimeoutError as error:
+            logger.warning("chat.document_ai_timeout")
+            raise ChatModelUnavailableError(
+                "Document AI generation timed out. Your draft is unchanged. Retry, or select "
+                "'Export text without AI' to save your existing text as PDF or Word."
+            ) from error
+        except ChatModelUnavailableError as error:
+            raise ChatModelUnavailableError(
+                "Document AI generation could not finish. Your draft is unchanged. Retry, or "
+                "select 'Export text without AI' to save your existing text as PDF or Word."
+            ) from error
+        content = "".join(chunks)
+        if not content.strip():
+            raise ChatModelUnavailableError(
+                "The AI returned no document content. Retry, or use 'Export text without AI'."
+            )
+        return content
+
+    def render(
+        self, content: str, output_format: str, *, plain_text: bool = False
+    ) -> tuple[bytes, str, str]:
         safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "-", "nutrition-document").strip("-")
         if output_format == "docx":
             document = Document()
             for line in content.splitlines():
+                if plain_text:
+                    document.add_paragraph(line)
+                    continue
                 stripped = line.strip()
                 if not stripped:
                     continue
@@ -130,6 +195,14 @@ class ChatDocumentService:
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
         buffer = BytesIO()
+        # Built-in ReportLab fonts use WinAnsi; unsupported Unicode otherwise
+        # becomes black squares even though the API reports a successful export.
+        try:
+            content.encode("cp1252")
+        except UnicodeEncodeError as error:
+            raise InvalidDocumentError(
+                "PDF cannot represent some characters; choose Word (.docx) to preserve the text."
+            ) from error
         pdf = SimpleDocTemplate(buffer, pagesize=A4, title="Nutrition Document")
         styles = getSampleStyleSheet()
         story = []
@@ -138,8 +211,13 @@ class ChatDocumentService:
             if not stripped:
                 story.append(Spacer(1, 8))
             else:
-                style = styles["Heading2"] if stripped.startswith("#") else styles["BodyText"]
-                story.append(Paragraph(escape(stripped.lstrip("# ")), style))
+                style = (
+                    styles["Heading2"]
+                    if not plain_text and stripped.startswith("#")
+                    else styles["BodyText"]
+                )
+                text = line if plain_text else stripped.lstrip("# ")
+                story.append(Paragraph(escape(text), style))
                 story.append(Spacer(1, 5))
         pdf.build(story)
         return buffer.getvalue(), f"{safe_name}.pdf", "application/pdf"

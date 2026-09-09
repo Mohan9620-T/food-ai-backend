@@ -1,7 +1,8 @@
 import json
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 
 import httpx
 import requests
@@ -329,7 +330,7 @@ maadhiri Thanglish-la explain panren."""
         message: str,
         history: list[ChatHistoryMessage],
         reference_history: list[ChatHistoryMessage],
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         """Yield one provider stream without mixing partial answers."""
         immediate_answer = self._immediate_answer(message)
         if immediate_answer:
@@ -338,28 +339,30 @@ maadhiri Thanglish-la explain panren."""
 
         _, body = self._build_request_body(message, history, reference_history, stream=True)
         if not self._use_nvidia_primary():
-            async for chunk in self._stream_ollama(body):
-                yield chunk
+            async with aclosing(self._stream_ollama(body)) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
-        nvidia_stream = self._stream_nvidia(body)
-        try:
-            first_chunk = await anext(nvidia_stream)
-        except (StopAsyncIteration, _NvidiaFallbackError):
-            logger.warning("chat.text_stream_nvidia_fallback_to_ollama")
-            async for chunk in self._stream_ollama(body):
-                yield chunk
-            return
+        async with aclosing(self._stream_nvidia(body)) as nvidia_stream:
+            try:
+                first_chunk = await anext(nvidia_stream)
+            except (StopAsyncIteration, _NvidiaFallbackError):
+                logger.warning("chat.text_stream_nvidia_fallback_to_ollama")
+                async with aclosing(self._stream_ollama(body)) as stream:
+                    async for chunk in stream:
+                        yield chunk
+                return
 
-        # Only after the first usable chunk is buffered is NVIDIA content exposed.
-        yield first_chunk
-        try:
-            async for chunk in nvidia_stream:
-                yield chunk
-        except _NvidiaFallbackError as error:
-            raise ChatModelUnavailableError(
-                "The response stream was interrupted. Please try again."
-            ) from error
+            # Only after the first usable chunk is buffered is NVIDIA content exposed.
+            yield first_chunk
+            try:
+                async for chunk in nvidia_stream:
+                    yield chunk
+            except _NvidiaFallbackError as error:
+                raise ChatModelUnavailableError(
+                    "The response stream was interrupted. Please try again."
+                ) from error
 
     @staticmethod
     def _use_nvidia_primary() -> bool:
@@ -458,8 +461,12 @@ maadhiri Thanglish-la explain panren."""
             )
         return request_body
 
-    async def _stream_nvidia(self, body: dict) -> AsyncIterator[str]:
+    async def _stream_nvidia(self, body: dict) -> AsyncGenerator[str, None]:
         if not settings.NVIDIA_API_KEY:
+            logger.warning(
+                "chat.text_stream_model_unavailable",
+                extra={"provider": "nvidia", "reason": "missing_api_key"},
+            )
             raise _NvidiaFallbackError("NVIDIA is not configured")
         timeout = httpx.Timeout(
             connect=settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
@@ -510,11 +517,21 @@ maadhiri Thanglish-la explain panren."""
                             finished = True
                     if not finished:
                         raise _NvidiaFallbackError("NVIDIA stream ended before completion")
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
-            logger.warning("chat.text_stream_model_unavailable", extra={"provider": "nvidia"})
+        except (
+            httpx.HTTPError,
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            _NvidiaFallbackError,
+        ) as error:
+            logger.warning(
+                "chat.text_stream_model_unavailable",
+                extra=self._stream_error_details("nvidia", error),
+            )
             raise _NvidiaFallbackError("NVIDIA stream unavailable") from error
 
-    async def _stream_ollama(self, body: dict) -> AsyncIterator[str]:
+    async def _stream_ollama(self, body: dict) -> AsyncGenerator[str, None]:
         timeout = httpx.Timeout(
             connect=settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
             read=settings.OLLAMA_TIMEOUT_SECONDS,
@@ -525,20 +542,46 @@ maadhiri Thanglish-la explain panren."""
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("POST", settings.OLLAMA_URL, json=body) as response:
                     response.raise_for_status()
+                    finished = False
                     async for line in response.aiter_lines():
                         if not line:
                             continue
                         event = json.loads(line)
+                        if event.get("error"):
+                            raise ValueError("Ollama reported an error")
                         content = event.get("message", {}).get("content", "")
+                        if not isinstance(content, str):
+                            raise ValueError("Invalid Ollama content")
                         if content:
                             yield content
+                        if event.get("done_reason") == "length":
+                            raise ChatModelUnavailableError(
+                                "The response reached its output limit before it finished. "
+                                "Please retry with a shorter request."
+                            )
                         if event.get("done"):
+                            finished = True
                             break
+                    if not finished:
+                        raise ValueError("Ollama stream ended before completion")
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
-            logger.warning("chat.text_stream_model_unavailable", extra={"provider": "ollama"})
+            logger.warning(
+                "chat.text_stream_model_unavailable",
+                extra=self._stream_error_details("ollama", error),
+            )
             raise ChatModelUnavailableError(
                 "Text chat model is still loading or unavailable. Please try again shortly."
             ) from error
+
+    @staticmethod
+    def _stream_error_details(provider: str, error: Exception) -> dict:
+        # Never log headers, provider bodies, prompts, or exception text (which
+        # can include credentials or source documents). Status/type are enough
+        # to distinguish rate limits/authentication from transport timeouts.
+        details: dict = {"provider": provider, "error_type": type(error).__name__}
+        if isinstance(error, httpx.HTTPStatusError):
+            details["status_code"] = error.response.status_code
+        return details
 
     def _immediate_answer(self, message: str) -> str | None:
         response_language = self.requested_language(message)

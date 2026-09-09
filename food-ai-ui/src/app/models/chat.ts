@@ -8,6 +8,7 @@ export interface ChatResponse {
   response: string;
   session_id: number;
   attachment?: ChatDocumentAttachment;
+  analysis_status?: 'complete' | 'unavailable' | 'skipped';
 }
 
 export interface ChatDocumentAttachment {

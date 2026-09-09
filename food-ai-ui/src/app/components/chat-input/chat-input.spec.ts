@@ -7,7 +7,7 @@ import { Observable, of, Subject } from 'rxjs';
 
 import { ChatInput } from './chat-input';
 import { ChatService, ChatStreamError } from '../../services/chat';
-import { ChatRequest, ChatResponse } from '../../models/chat';
+import { ChatMessage, ChatRequest, ChatResponse } from '../../models/chat';
 import { AuthService } from '../../services/auth';
 import { SpeechRecognitionService } from '../../services/speech-recognition';
 
@@ -19,6 +19,7 @@ class ChatServiceStub {
   readonly analyzingImage = signal(false);
   readonly processingDocument = signal(false);
   readonly retryMessage = signal<null>(null);
+  readonly messages = signal<ChatMessage[]>([]);
   readonly finishResponse = vi.fn((conversationId: string) => {
     if (this.pendingConversationId() === conversationId) this.pendingConversationId.set(null);
   });
@@ -316,7 +317,7 @@ describe('ChatInput image drag and drop', () => {
     format.dispatchEvent(new Event('change'));
     const form = fixture.nativeElement.querySelector('#document-creator') as HTMLFormElement;
     form.dispatchEvent(new Event('submit', { cancelable: true }));
-    expect(chatService.generateDocument).toHaveBeenCalledExactlyOnceWith(null, 'Create a weekly meal planner', 'docx', 'conversation-1');
+    expect(chatService.generateDocument).toHaveBeenCalledExactlyOnceWith(null, 'Create a weekly meal planner', 'docx', 'conversation-1', 'ai');
     expect(component.showDocumentCreator).toBe(false);
     expect(component.isSending()).toBe(false);
   });
@@ -336,7 +337,7 @@ describe('ChatInput image drag and drop', () => {
     expect(component.isSending()).toBe(true);
     upload.next({ response: 'Imported', session_id: 42 });
     upload.complete();
-    expect(chatService.generateDocument).toHaveBeenCalledExactlyOnceWith(42, 'Create a report from these notes', 'pdf', 'conversation-1');
+    expect(chatService.generateDocument).toHaveBeenCalledExactlyOnceWith(42, 'Create a report from these notes', 'pdf', 'conversation-1', 'ai');
     expect(component.selectedDocument).toBeNull();
     expect(component.isSending()).toBe(true);
     generation.next({ response: 'Created', session_id: 42 });
@@ -384,12 +385,12 @@ describe('ChatInput image drag and drop', () => {
     const generation = new Subject<ChatResponse>();
     chatService.generateDocument.mockReturnValueOnce(generation);
     component.createDocument();
-    component.documentForm.setValue({ instruction: 'Create a report', format: 'docx' });
+    component.documentForm.setValue({ instruction: 'Create a report', format: 'docx', mode: 'ai' });
     component.submitDocument();
     generation.error(new HttpErrorResponse({ status: 503, error: { detail: 'Document generation is unavailable. Please try again.' } }));
     expect(component.showDocumentCreator).toBe(true);
     expect(component.isSending()).toBe(false);
-    expect(component.documentForm.getRawValue()).toEqual({ instruction: 'Create a report', format: 'docx' });
+    expect(component.documentForm.getRawValue()).toEqual({ instruction: 'Create a report', format: 'docx', mode: 'ai' });
     expect(component.imageError).toContain('unavailable');
     component.submitDocument();
     expect(chatService.generateDocument).toHaveBeenCalledTimes(2);
@@ -412,6 +413,214 @@ describe('ChatInput image drag and drop', () => {
     expect(component.documentForm.controls.instruction.value).toBe('Create a report');
     expect(component.showDocumentCreator).toBe(true);
     expect(component.imageError).toContain('cancelled');
+  });
+
+  it('offers an explicit export mode and sends the literal textarea without an import or chat request', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    component.message = '  Header\n\nExact content.  ';
+    component.createDocument();
+    const mode = fixture.nativeElement.querySelector('#document-mode') as HTMLSelectElement;
+    expect(mode.value).toBe('ai');
+    expect(mode.labels?.[0].textContent).toBe('Creation mode');
+    mode.value = 'export';
+    mode.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('#document-source-help').textContent).toContain('does not summarize, rewrite, or use conversation history or attached files');
+    const instruction = fixture.nativeElement.querySelector('#document-instruction') as HTMLTextAreaElement;
+    expect(instruction.labels?.[0].textContent).toBe('Text to export');
+    expect(instruction.value).toBe('  Header\n\nExact content.  ');
+    component.submitDocument();
+    expect(chatService.generateDocument).toHaveBeenCalledExactlyOnceWith(null, '  Header\n\nExact content.  ', 'pdf', 'conversation-1', 'export');
+    expect(chatService.uploadDocument).not.toHaveBeenCalled();
+    expect(chatService.streamMessage).not.toHaveBeenCalled();
+    expect(component.isSending()).toBe(false);
+    expect(component.documentForm.controls.mode.value).toBe('export');
+  });
+
+  it.each(['notes.pdf', 'meal.png'])('does not import or discard %s in export mode', filename => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    const file = new File(['source bytes'], filename);
+    component.handleDrop(dropEvent([file]));
+    component.createDocument();
+    component.documentForm.patchValue({ instruction: 'Exact content', mode: 'export' });
+    component.submitDocument();
+    expect(chatService.uploadDocument).not.toHaveBeenCalled();
+    expect(chatService.generateDocument).not.toHaveBeenCalled();
+    expect(chatService.addMessage).not.toHaveBeenCalled();
+    expect((component.selectedDocument ?? component.selectedImage)?.name).toBe(filename);
+    expect(component.imageError).toContain('Remove the attached file');
+    expect(component.documentForm.controls.instruction.value).toBe('Exact content');
+    expect(component.showDocumentCreator).toBe(true);
+    expect(component.isSending()).toBe(false);
+  });
+
+  it('retains the export draft and mode after failure and allows retry without duplicate content', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    const generation = new Subject<ChatResponse>();
+    chatService.generateDocument.mockReturnValueOnce(generation);
+    component.createDocument();
+    const draft = { instruction: '  Exact content  ', format: 'docx' as const, mode: 'export' as const };
+    component.documentForm.setValue(draft);
+    component.submitDocument();
+    generation.error(new HttpErrorResponse({ status: 503, error: { detail: 'Document renderer unavailable. Please retry.' } }));
+    fixture.detectChanges();
+    expect(component.documentForm.getRawValue()).toEqual(draft);
+    expect(component.isSending()).toBe(false);
+    expect(component.showDocumentCreator).toBe(true);
+    expect((fixture.nativeElement.querySelector('#document-creator button[type="submit"]') as HTMLButtonElement).disabled).toBe(false);
+    expect((fixture.nativeElement.querySelector('#document-mode') as HTMLSelectElement).disabled).toBe(false);
+    component.submitDocument();
+    expect(chatService.generateDocument).toHaveBeenCalledTimes(2);
+    expect(chatService.generateDocument).toHaveBeenLastCalledWith(null, draft.instruction, 'docx', 'conversation-1', 'export');
+    expect(chatService.addMessage).toHaveBeenCalledExactlyOnceWith({ sender: 'user', text: draft.instruction }, 'conversation-1');
+    expect(component.imageError).toBeNull();
+  });
+
+  it('keeps document modes and failed exports scoped to their conversation', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    const generation = new Subject<ChatResponse>();
+    chatService.generateDocument.mockReturnValueOnce(generation);
+    component.createDocument();
+    component.documentForm.patchValue({ instruction: 'First conversation text', mode: 'export' });
+    component.submitDocument();
+    chatService.activeConversationId.set('conversation-2');
+    component.createDocument();
+    component.documentForm.controls.instruction.setValue('Write a different report');
+    generation.error(new HttpErrorResponse({ status: 503, error: { detail: 'Export failed.' } }));
+    expect(component.imageError).toBeNull();
+    expect(component.documentForm.controls.mode.value).toBe('ai');
+    expect(component.documentForm.controls.instruction.value).toBe('Write a different report');
+    chatService.activeConversationId.set('conversation-1');
+    expect(component.documentForm.controls.mode.value).toBe('export');
+    expect(component.documentForm.controls.instruction.value).toBe('First conversation text');
+    expect(component.imageError).toBe('Export failed.');
+    expect(component.isSending()).toBe(false);
+  });
+
+  it('rejects empty or oversized export text without sending a request', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    component.createDocument();
+    component.documentForm.patchValue({ mode: 'export', instruction: '   ' });
+    component.submitDocument();
+    expect(component.imageError).toContain('Enter the text to export');
+    component.documentForm.controls.instruction.setValue('a'.repeat(2001));
+    component.submitDocument();
+    expect(component.imageError).toContain('2,000 characters');
+    expect(chatService.generateDocument).not.toHaveBeenCalled();
+  });
+
+  it('exports an attached file through import without AI and its saved source ID, leaving unrelated drafts intact', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    const attachment = { id: 211, filename: 'notes.pdf', content_type: 'application/pdf', file_size: 20, kind: 'uploaded' as const };
+    chatService.uploadDocument.mockReturnValueOnce(of({ response: 'File saved.', session_id: 42, attachment, analysis_status: 'skipped' }));
+    const file = new File(['%PDF'], 'notes.pdf');
+    component.handleDrop(dropEvent([file]));
+    component.message = 'Keep this message draft';
+    component.createDocument();
+    component.documentForm.patchValue({ mode: 'export-file', format: 'docx', instruction: 'Keep these AI instructions too' });
+    fixture.detectChanges();
+    expect((fixture.nativeElement.querySelector('#document-instruction') as HTMLTextAreaElement).disabled).toBe(true);
+    expect(fixture.nativeElement.querySelector('#document-source-help').textContent).toContain('notes.pdf');
+    component.submitDocument();
+    expect(chatService.uploadDocument).toHaveBeenCalledExactlyOnceWith(file, null, 'conversation-1', false);
+    expect(chatService.generateDocument).toHaveBeenCalledExactlyOnceWith(42, '', 'docx', 'conversation-1', 'export', 211);
+    expect(chatService.streamMessage).not.toHaveBeenCalled();
+    expect(component.selectedDocument).toBeNull();
+    expect(component.message).toBe('Keep this message draft');
+    expect(component.documentForm.controls.instruction.value).toBe('Keep these AI instructions too');
+    expect(component.isSending()).toBe(false);
+  });
+
+  it('exports a file with no instructions and enables the retained draft when switching back to AI', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    const attachment = { id: 212, filename: 'notes.txt', content_type: 'text/plain', file_size: 20, kind: 'uploaded' as const };
+    chatService.uploadDocument.mockReturnValueOnce(of({ response: 'File saved.', session_id: 42, attachment, analysis_status: 'skipped' }));
+    component.handleDrop(dropEvent([new File(['notes'], 'notes.txt')]));
+    component.createDocument();
+    component.documentForm.controls.mode.setValue('export-file');
+    component.submitDocument();
+    expect(chatService.generateDocument).toHaveBeenCalledExactlyOnceWith(42, '', 'pdf', 'conversation-1', 'export', 212);
+    component.createDocument();
+    expect(document.activeElement?.id).toBe('document-mode');
+    component.documentForm.controls.mode.setValue('ai');
+    expect(component.documentForm.controls.instruction.enabled).toBe(true);
+    expect(component.documentForm.invalid).toBe(true);
+  });
+
+  it('clears the previous AI timeout when the user selects a no-AI recovery mode', () => {
+    component.createDocument();
+    component.imageError = 'Document AI generation timed out.';
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.image-error').textContent).toContain('timed out');
+
+    component.documentForm.controls.mode.setValue('export');
+    fixture.detectChanges();
+
+    expect(component.imageError).toBeNull();
+    expect(fixture.nativeElement.querySelector('.image-error')).toBeNull();
+  });
+
+  it('stops the AI generation chain after a saved upload reports unavailable analysis, then exports the saved file without reupload', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    const attachment = { id: 213, filename: 'notes.xlsx', content_type: 'application/octet-stream', file_size: 20, kind: 'uploaded' as const };
+    chatService.uploadDocument.mockReturnValueOnce(of({ response: 'File saved. AI unavailable.', session_id: 42, attachment, analysis_status: 'unavailable' }));
+    component.handleDrop(dropEvent([new File(['notes'], 'notes.xlsx')]));
+    component.createDocument();
+    component.documentForm.controls.instruction.setValue('Write a report from this file');
+    component.submitDocument();
+    expect(chatService.generateDocument).not.toHaveBeenCalled();
+    expect(component.isSending()).toBe(false);
+    expect(component.selectedDocument).toBeNull();
+    expect(component.exportSourceDocument).toEqual(attachment);
+    expect(component.imageError).toContain('File saved, but AI analysis is unavailable');
+    expect(component.showDocumentCreator).toBe(true);
+    expect(component.documentForm.controls.instruction.value).toBe('Write a report from this file');
+    expect(component.documentForm.controls.mode.value).toBe('ai');
+    chatService.getActiveSessionId.mockReturnValue(42);
+    component.documentForm.controls.mode.setValue('export-file');
+    component.submitDocument();
+    expect(chatService.uploadDocument).toHaveBeenCalledTimes(1);
+    expect(chatService.generateDocument).toHaveBeenCalledExactlyOnceWith(42, '', 'pdf', 'conversation-1', 'export', 213);
+    expect(component.imageError).toBeNull();
+  });
+
+  it('retries failed file exports from the saved source without duplicate uploads or generation messages', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    const attachment = { id: 214, filename: 'notes.csv', content_type: 'text/csv', file_size: 20, kind: 'uploaded' as const };
+    chatService.uploadDocument.mockReturnValueOnce(of({ response: 'File saved.', session_id: 42, attachment, analysis_status: 'skipped' }));
+    const generation = new Subject<ChatResponse>();
+    chatService.generateDocument.mockReturnValueOnce(generation);
+    component.handleDrop(dropEvent([new File(['notes'], 'notes.csv')]));
+    component.createDocument();
+    component.documentForm.controls.mode.setValue('export-file');
+    component.submitDocument();
+    generation.error(new HttpErrorResponse({ status: 503, error: { detail: 'Renderer unavailable.' } }));
+    expect(component.exportSourceDocument).toEqual(attachment);
+    expect(component.documentForm.controls.mode.value).toBe('export-file');
+    expect(component.isSending()).toBe(false);
+    component.submitDocument();
+    expect(chatService.uploadDocument).toHaveBeenCalledTimes(1);
+    expect(chatService.generateDocument).toHaveBeenCalledTimes(2);
+    expect(chatService.addMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('finds an uploaded source in current persisted history and does not use it in another chat', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    const attachment = { id: 215, filename: 'restored.pdf', content_type: 'application/pdf', file_size: 20, kind: 'uploaded' as const };
+    chatService.messages.set([{ sender: 'user', text: 'Old import', attachment }]);
+    chatService.getActiveSessionId.mockReturnValue(42);
+    component.createDocument();
+    component.documentForm.controls.mode.setValue('export-file');
+    component.submitDocument();
+    expect(chatService.uploadDocument).not.toHaveBeenCalled();
+    expect(chatService.generateDocument).toHaveBeenCalledExactlyOnceWith(42, '', 'pdf', 'conversation-1', 'export', 215);
+    chatService.activeConversationId.set('conversation-2');
+    chatService.messages.set([]);
+    component.createDocument();
+    component.documentForm.controls.mode.setValue('export-file');
+    component.submitDocument();
+    expect(component.imageError).toContain('import one into this conversation');
+    expect(chatService.generateDocument).toHaveBeenCalledTimes(1);
   });
 
   it('keeps upload failures and drafts in their original conversation', () => {

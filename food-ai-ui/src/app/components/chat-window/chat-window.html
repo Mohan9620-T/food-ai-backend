@@ -30,7 +30,7 @@
             </button>
         }
         @if (msg.attachment) {
-          <div class="document-card"><span aria-hidden="true">&#128196;</span><div><strong>{{ msg.attachment.filename }}</strong><small>{{ msg.attachment.kind }} · {{ msg.attachment.file_size }} bytes</small></div></div>
+          <div class="document-card"><span aria-hidden="true">&#128196;</span><div><strong>{{ msg.attachment.filename }}</strong><small>{{ msg.attachment.kind }} · {{ msg.attachment.file_size }} bytes</small></div><button type="button" (click)="downloadDocument(msg.attachment.id, msg.attachment.filename)" aria-label="Download {{ msg.attachment.filename }}">Download</button></div>
         }
           @if (msg.text !== '[Image]') {
             <span>{{ msg.text }}</span>

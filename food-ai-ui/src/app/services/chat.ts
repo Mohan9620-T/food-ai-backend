@@ -177,10 +177,11 @@ export class ChatService {
     );
   }
 
-  uploadDocument(file: File, message: string | null, conversationId = this.activeConversationIdState()): Observable<ChatResponse> {
+  uploadDocument(file: File, message: string | null, conversationId = this.activeConversationIdState(), analyze = true): Observable<ChatResponse> {
     return defer(() => {
       const form = new FormData();
       form.append('file', file, file.name);
+      if (!analyze) form.append('analyze', 'false');
       if (message?.trim()) form.append('message', message.trim());
       const sessionId = this.toServerSessionId(conversationId);
       if (sessionId !== null) form.append('session_id', String(sessionId));
@@ -192,11 +193,13 @@ export class ChatService {
     });
   }
 
-  generateDocument(sessionId: number | null, instruction: string, outputFormat: 'pdf' | 'docx' = 'pdf', conversationId = this.activeConversationIdState()): Observable<ChatResponse> {
+  generateDocument(sessionId: number | null, instruction: string, outputFormat: 'pdf' | 'docx' = 'pdf', conversationId = this.activeConversationIdState(), mode: 'ai' | 'export' = 'ai', sourceDocumentId?: number): Observable<ChatResponse> {
     return defer(() => {
       this.setDocumentProcessing(conversationId, true);
       return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/documents/generate`, {
-        session_id: sessionId, instruction, output_format: outputFormat
+        session_id: sessionId, output_format: outputFormat,
+        ...(mode === 'export' && sourceDocumentId !== undefined ? { source_document_id: sourceDocumentId } : { instruction }),
+        ...(mode === 'export' ? { mode } : {})
       }).pipe(
         tap(response => { if (conversationId) this.acceptResponse(conversationId, response); }),
         finalize(() => this.setDocumentProcessing(conversationId, false))

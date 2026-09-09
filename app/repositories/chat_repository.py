@@ -168,6 +168,43 @@ class ChatRepository:
         db.refresh(attachment)
         return attachment
 
+    def save_document_upload(
+        self,
+        db: Session,
+        *,
+        session_id: int,
+        user_content: str,
+        bot_content: str,
+        filename: str,
+        content_type: str,
+        file_data: bytes,
+        raw_text: str,
+    ) -> tuple[ChatMessageRecord, ChatDocumentAttachment]:
+        """Commit the turn and original file together, before any model request."""
+        user_record = ChatMessageRecord(session_id=session_id, sender="user", content=user_content)
+        bot_record = ChatMessageRecord(session_id=session_id, sender="bot", content=bot_content)
+        try:
+            db.add_all([user_record, bot_record])
+            db.flush()
+            attachment = ChatDocumentAttachment(
+                session_id=session_id,
+                message_id=user_record.id,
+                filename=filename,
+                content_type=content_type,
+                file_size=len(file_data),
+                file_data=file_data,
+                kind="uploaded",
+                raw_text=raw_text,
+            )
+            db.add(attachment)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        db.refresh(bot_record)
+        db.refresh(attachment)
+        return bot_record, attachment
+
     def get_document_for_user(
         self, db: Session, document_id: int, user_id: int
     ) -> ChatDocumentAttachment | None:
@@ -183,12 +220,17 @@ class ChatRepository:
             db.query(ChatDocumentAttachment)
             .filter(
                 ChatDocumentAttachment.session_id == session_id,
-                ChatDocumentAttachment.structured_summary.is_not(None),
             )
             .order_by(ChatDocumentAttachment.created_at.asc(), ChatDocumentAttachment.id.asc())
             .all()
         )
-        return [str(row.structured_summary) for row in rows if row.structured_summary]
+        return [
+            str(row.structured_summary)
+            if row.structured_summary
+            else f"Extracted document text (not AI analysis):\n{row.raw_text}"
+            for row in rows
+            if row.structured_summary or row.raw_text
+        ]
 
     def import_messages(
         self,

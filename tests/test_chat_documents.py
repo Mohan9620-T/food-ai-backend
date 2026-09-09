@@ -1,4 +1,5 @@
 from io import BytesIO
+from unittest.mock import AsyncMock
 
 import pytest
 from docx import Document
@@ -34,7 +35,7 @@ def test_extracts_txt_docx_csv_and_xlsx():
 def test_upload_document_persists_attachment(client, monkeypatch):
     token = _login(client, "document-upload@example.com")
     monkeypatch.setattr(
-        ChatDocumentService, "summarize", lambda self, raw, note: "Structured nutrition summary"
+        ChatDocumentService, "summarize", AsyncMock(return_value="Structured nutrition summary")
     )
     response = client.post(
         "/chat/documents",
@@ -76,9 +77,7 @@ def test_generate_and_download_enforces_ownership(client, monkeypatch):
     monkeypatch.setattr(
         ChatDocumentService,
         "generate_content",
-        lambda self, instruction, summaries, history, profile=None: (
-            "# Doctor Summary\nBalanced nutrition plan"
-        ),
+        AsyncMock(return_value="# Doctor Summary\nBalanced nutrition plan"),
     )
     generated = client.post(
         "/chat/documents/generate",
@@ -126,7 +125,7 @@ def test_all_supported_uploads_can_be_reloaded_and_downloaded(client, monkeypatc
     headers = {"Authorization": f"Bearer {token}"}
     captured = []
 
-    def summarize(self, raw, note):
+    async def summarize(self, raw, note):
         captured.append((raw, note))
         return "# Product details\nOats: 100"
 
@@ -152,7 +151,7 @@ def test_all_supported_uploads_can_be_reloaded_and_downloaded(client, monkeypatc
 @pytest.mark.parametrize("mime", ["application/vnd.ms-excel", "text/plain", "text/csv"])
 def test_csv_accepts_windows_browser_mime_types(client, monkeypatch, mime):
     token = _login(client, "csv-mime@example.com")
-    monkeypatch.setattr(ChatDocumentService, "summarize", lambda *args: "Oats 100")
+    monkeypatch.setattr(ChatDocumentService, "summarize", AsyncMock(return_value="Oats 100"))
     response = client.post(
         "/chat/documents",
         files={"file": ("data.csv", b"name,value\noats,100", mime)},
@@ -187,7 +186,7 @@ def test_generates_document_from_instruction_in_new_chat(client, monkeypatch, ou
     headers = {"Authorization": f"Bearer {token}"}
     captured = []
 
-    def generate(self, instruction, summaries, history, profile=None):
+    async def generate(self, instruction, summaries, history, profile=None):
         captured.append((instruction, summaries, history))
         return "# Project Summary\nFirst task: import a file.\nUse <label> & <value> safely."
 
@@ -226,7 +225,7 @@ def test_generate_rejects_empty_instruction_and_does_not_create_failed_sessions(
     def unavailable(*args):
         raise ChatModelUnavailableError("Model unavailable")
 
-    monkeypatch.setattr(ChatDocumentService, "generate_content", unavailable)
+    monkeypatch.setattr(ChatDocumentService, "generate_content", AsyncMock(side_effect=unavailable))
     failed = client.post(
         "/chat/documents/generate", json={"instruction": "Create a summary"}, headers=headers
     )

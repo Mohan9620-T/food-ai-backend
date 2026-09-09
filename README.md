@@ -102,6 +102,7 @@ use the documented default or disable the associated integration when empty.
 | `NVIDIA_CHAT_MODEL` | Optional | NVIDIA text model; defaults to `google/gemma-4-31b-it`. |
 | `NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA text connection timeout; default `5`. |
 | `NVIDIA_CHAT_TIMEOUT_SECONDS` | Optional | NVIDIA text response-read timeout; default `60`. |
+| `DOCUMENT_AI_TIMEOUT_SECONDS` | Optional | Total deadline for each document AI operation, including provider fallback and all tokens; default `45`. Does not affect ordinary chat or direct text export. |
 | `NVIDIA_CHAT_MAX_TOKENS` | Optional | NVIDIA text output budget; default `1024`, independent of Ollama's limit. Nemotron 3 chat disables thinking to reserve this budget for the answer. |
 | `NVIDIA_TEST_CHAT_MODEL` | Optional | NVIDIA model used only by `/nvidia-chat`; defaults to `nvidia/nemotron-3-ultra-550b-a55b`. |
 | `NVIDIA_CHAT_VISION_MODEL` | Optional | NVIDIA image-chat model; defaults to `meta/llama-3.2-90b-vision-instruct`. |
@@ -301,8 +302,43 @@ App available at \`http://localhost:4200\`.
 - Use **Create document**, enter instructions, and select PDF or Word (.docx).
   This works in a new chat without first sending a message. If a document is
   attached, it is imported before generation so it can supply the source content.
-- A failed upload keeps the selected file and note available to retry. Uploaded
-  attachments and generated documents are saved with the conversation.
+- If you already have the finished content, select **Export text without AI**,
+  paste it into the text box, and choose PDF or Word. This exports only that text:
+  it does not summarize, rewrite, read conversation history, or call NVIDIA/Ollama.
+  Remove any attached file before using this mode. Text-box instructions/content
+  accept up to 2,000 characters.
+- To convert a file instead, choose **Export attached file without AI** or
+  **Export saved file without AI** in the document creator. Check the displayed
+  source filename, then choose PDF or Word. This exports the **full extracted text**,
+  not the shortened chat preview, and does not require AI or document instructions.
+  The original file's layout/images are not reproduced. Attached files are imported
+  without AI first; saved files in the current chat do not need to be uploaded again.
+  The current PDF font supports Windows-1252 text. If the text contains unsupported
+  characters (for example Tamil, Chinese, or emoji), export as Word (.docx) instead;
+  PDF creation reports a clear error rather than silently replacing text with boxes.
+- **Write with AI** remains the default. Each AI operation has a total 45-second
+  deadline (`DOCUMENT_AI_TIMEOUT_SECONDS`), including provider fallback. A timeout
+  cancels the upstream connection and preserves the form for retry or explicit
+  export; an incomplete AI answer is never saved as a finished document. File
+  extraction and rendering are separate from this AI deadline. Import-then-create
+  can use two AI operations; if import analysis fails, creation stops immediately
+  with the imported file saved, rather than starting a second failing AI request.
+  AI source text is limited to 30,000 characters, with an explicit truncation notice
+  when necessary. Full extracted text remains stored and available for direct export;
+  an AI response based on an excerpt must not claim it read the complete document.
+- Uploads save the original file, full extracted text, and chat turn **before**
+  waiting for AI analysis. If AI fails, the upload still succeeds and shows a
+  clearly labelled extracted-text preview, not a fabricated answer. Use the file
+  card's **Download** button for the original, or export its saved text. Extraction
+  or validation failures keep the selected file and note available to retry.
+  Uploaded attachments and generated documents remain saved with the conversation.
+- Swagger: `POST /chat/documents` accepts multipart `analyze=false` for import
+  without AI. Successful uploads include `analysis_status` (`complete`,
+  `unavailable`, or `skipped`). AI failure alone no longer makes an upload return
+  503. `POST /chat/documents/generate` accepts
+  `{"mode":"export","source_document_id":123,"output_format":"pdf"}`
+  to export an owned uploaded file's full extracted text; `instruction` may be
+  omitted. The source must belong to the requested chat when `session_id` is supplied.
 - TXT and CSV files support UTF-8 (with or without a BOM) and BOM-marked UTF-16
   exports. Legacy `.doc` and `.xls`, password-protected files, corrupt files, and
   files without readable text are not supported; export a supported readable copy.
@@ -316,6 +352,14 @@ App available at \`http://localhost:4200\`.
 - AI summarization and generation still require the configured LLM provider to be
   available. Supported file formats do not imply that every encrypted or scanned
   document can be read without the required local dependencies.
+  Direct text and saved-file text export work without an LLM. A provider failure is not a PDF renderer
+  error: provider logs record the HTTP status (when available) and error type without
+  source text or credentials. For example, distinguish authentication/rate-limit
+  responses from transport timeouts before changing model settings.
+  A successful NVIDIA `/v1/models` listing alone does not verify inference access:
+  test a small chat completion with the same account/key. A 404 reporting that a
+  serving function was not found for the account needs provider/account access
+  investigation; increasing the document timeout or token limit will not fix it.
 
 ## Pre-commit checks
 

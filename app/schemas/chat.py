@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class ChatHistoryMessage(BaseModel):
@@ -35,16 +35,27 @@ class ChatDocumentAttachmentOut(BaseModel):
 
 class ChatDocumentResponse(ChatResponse):
     attachment: ChatDocumentAttachmentOut
+    analysis_status: Literal["complete", "unavailable", "skipped"] | None = None
 
 
 class ChatDocumentGenerateRequest(BaseModel):
     session_id: int | None = Field(default=None, gt=0)
-    instruction: str = Field(min_length=1, max_length=2000)
+    mode: Literal["ai", "export"] = Field(
+        default="ai",
+        description="ai writes content using the model; export saves instruction text without AI.",
+    )
+    source_document_id: int | None = Field(default=None, gt=0)
+    instruction: str = Field(default="", max_length=2000)
     output_format: Literal["pdf", "docx"] = "pdf"
 
-    @field_validator("instruction")
-    @classmethod
-    def strip_instruction(cls, value: str) -> str:
-        if not value.strip():
+    @model_validator(mode="after")
+    def validate_source(self):
+        if self.source_document_id is not None:
+            if self.mode != "export":
+                raise ValueError("source_document_id is only supported for direct file export.")
+            return self
+        if not self.instruction.strip():
             raise ValueError("Describe the document you want to create.")
-        return value.strip()
+        if self.mode == "ai":
+            self.instruction = self.instruction.strip()
+        return self

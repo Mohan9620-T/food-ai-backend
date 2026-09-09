@@ -4,15 +4,17 @@ import { vi } from 'vitest';
 
 import { ChatWindow } from './chat-window';
 import { ChatService } from '../../services/chat';
+import { ChatMessage } from '../../models/chat';
 
 class ChatServiceStub {
-  readonly messages = signal<Array<{ sender: 'user' | 'bot'; text: string; createdAt?: string; imageUrl?: string }>>([]);
+  readonly messages = signal<ChatMessage[]>([]);
   readonly isResponding = signal(false);
   readonly analyzingImage = signal(false);
   readonly activeConversationId = signal<string | null>('chat-1');
   readonly beginEditingMessage = vi.fn();
   readonly requestMessageRetry = vi.fn();
   readonly deleteMessage = vi.fn();
+  readonly downloadDocument = vi.fn();
   isMessageAwaitingResponse(index: number): boolean {
     return this.messages()[index]?.sender === 'user' && !this.messages()[index + 1];
   }
@@ -39,6 +41,21 @@ describe('ChatWindow', () => {
 
   it('renders the empty state when there are no messages', () => {
     expect(fixture.nativeElement.querySelector('h1')?.textContent).toContain('How can I help?');
+  });
+
+  it('downloads a saved original attachment even when AI analysis was unavailable', () => {
+    service.messages.set([
+      { sender: 'user', text: 'Read this file', attachment: {
+        id: 31, filename: 'notes.pdf', content_type: 'application/pdf', file_size: 200, kind: 'uploaded'
+      } },
+      { sender: 'bot', text: 'File saved. AI analysis is unavailable.' }
+    ]);
+    fixture.detectChanges();
+    const download = fixture.nativeElement.querySelector('.user-message [aria-label="Download notes.pdf"]') as HTMLButtonElement;
+    expect(download).toBeTruthy();
+    expect(download.disabled).toBe(false);
+    download.click();
+    expect(service.downloadDocument).toHaveBeenCalledExactlyOnceWith(31, 'notes.pdf');
   });
 
   it('shows icon actions and delegates retry, edit, and delete', () => {

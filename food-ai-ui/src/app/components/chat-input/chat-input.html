@@ -45,9 +45,27 @@
   @if (showDocumentCreator) {
     <form id="document-creator" class="document-creator" [formGroup]="documentForm" (ngSubmit)="submitDocument()" aria-labelledby="document-creator-title">
       <h2 id="document-creator-title">Create a document</h2>
-      <p id="document-source-help">Describe what you need. Any attached document will be imported first, and the current conversation will be used as context.</p>
-      <label for="document-instruction">Document instructions</label>
-      <textarea #documentInstructionInput id="document-instruction" formControlName="instruction" rows="3" maxlength="2000" required aria-describedby="document-source-help" placeholder="For example: Create a nutrition summary with headings and recommendations." [readOnly]="isSending()"></textarea>
+      <label for="document-mode">Creation mode</label>
+      <select #documentModeInput id="document-mode" formControlName="mode" aria-describedby="document-source-help">
+        <option value="ai">Write with AI</option>
+        <option value="export">Export text without AI</option>
+        <option value="export-file">{{ !selectedDocument && exportSourceDocument ? 'Export saved file without AI' : 'Export attached file without AI' }}</option>
+      </select>
+      <p id="document-source-help" aria-live="polite">
+        @switch (documentForm.controls.mode.value) {
+          @case ('export-file') {
+            Exports extracted text from <strong>{{ selectedDocument?.name ?? exportSourceDocument?.filename ?? 'a file you attach or import in this conversation' }}</strong> without AI. It does not summarize, rewrite, or use the draft below. The original layout may change. Your draft text is kept for later.
+          }
+          @case ('export') {
+            Copies the text below as-is into a file without AI. It does not summarize, rewrite, or use conversation history or attached files.
+          }
+          @default {
+            Describe what you need. AI uses this conversation and imports any attached document first. To avoid waiting for AI, choose a text or file export mode.
+          }
+        }
+      </p>
+      <label for="document-instruction">{{ documentForm.controls.mode.value === 'export-file' ? 'Draft text (not used for file export)' : documentForm.controls.mode.value === 'export' ? 'Text to export' : 'Document instructions' }}</label>
+      <textarea #documentInstructionInput id="document-instruction" formControlName="instruction" rows="3" maxlength="2000" [required]="documentForm.controls.mode.value !== 'export-file'" aria-describedby="document-source-help" [placeholder]="documentForm.controls.mode.value === 'export' ? 'Paste the exact text to include in your document (up to 2,000 characters).' : 'For example: Create a nutrition summary with headings and recommendations.'" [readOnly]="isSending()"></textarea>
       <div class="document-actions">
         <label for="document-format">File format</label>
         <select id="document-format" formControlName="format">
