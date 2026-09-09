@@ -45,6 +45,7 @@ DOCUMENT_TYPES = {
     response_model=ChatDocumentResponse,
     summary="Upload a chat document",
     description="Read and save a PDF, DOCX, TXT, CSV, or XLSX before optional AI analysis. "
+    "For XLSX formatting instructions, a revised workbook is returned without requiring AI. "
     "An AI failure returns the saved file with analysis_status=unavailable, not an upload error. "
     "Use analyze=false to save/extract without AI. Scanned PDF pages require Tesseract. "
     "Maximum upload size is 15 MB.",
@@ -92,6 +93,11 @@ async def upload_document(
             raise HTTPException(status_code=404, detail="Chat session not found")
     try:
         raw_text = await asyncio.to_thread(service.extract, file_data, filename)
+        spreadsheet_output = (
+            await asyncio.to_thread(service.format_spreadsheet, file_data, filename, message or "")
+            if extension == ".xlsx" and service.is_spreadsheet_update_request(message)
+            else None
+        )
     except InvalidDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except DocumentProcessingUnavailableError as error:
@@ -116,7 +122,29 @@ async def upload_document(
     )
     response_text = saved_notice
     analysis_status: Literal["complete", "unavailable", "skipped"] = "skipped"
-    if analyze:
+    response_attachment = attachment
+    if spreadsheet_output is not None:
+        updated_data, updated_filename, actions = spreadsheet_output
+        response_text = (
+            f"I updated all worksheets in {filename} and preserved the workbook data.\n\n"
+            f"Applied: {', '.join(actions)}.\n\n"
+            "Use Download to get the revised Excel workbook."
+        )
+        setattr(bot_record, "content", response_text)
+        response_attachment = repository.add_document_attachment(
+            db,
+            session_id=resolved_session_id,
+            message_id=cast(int, bot_record.id),
+            filename=updated_filename,
+            content_type=DOCUMENT_TYPES[".xlsx"],
+            file_data=updated_data,
+            kind="generated",
+            raw_text=raw_text,
+            structured_summary=response_text,
+        )
+        db.commit()
+        db.refresh(response_attachment)
+    elif analyze:
         try:
             response_text = await service.summarize(raw_text, message)
             setattr(attachment, "structured_summary", response_text)
@@ -153,7 +181,7 @@ async def upload_document(
     return ChatDocumentResponse(
         response=response_text,
         session_id=resolved_session_id,
-        attachment=attachment,
+        attachment=response_attachment,
         analysis_status=analysis_status,
     )
 

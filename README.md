@@ -302,6 +302,12 @@ App available at \`http://localhost:4200\`.
   composer, add the question/instruction, then press **Send**. Supported documents
   are PDF, DOCX, TXT, CSV, and XLSX, up to 15 MB. Images remain supported up to 8 MB.
   Uploaded files and responses are kept in normal conversation history.
+- XLSX workbooks can also be reformatted through the same Send flow without an AI
+  provider. Ask for center/left/right alignment, smart professional formatting,
+  header styling, auto-fit column widths, wrapped text, borders, or frozen headers.
+  Every worksheet and populated cell is retained, formulas remain formulas, and the
+  bot returns an `-updated.xlsx` attachment for download. To target one column, use
+  wording such as `Center align column B`.
 - PDF/Word generation and direct source export remain backend API capabilities for
   API clients, but they are no longer exposed as a separate chat-composer workflow.
   A source export uses the **full extracted text**, not the shortened chat preview,

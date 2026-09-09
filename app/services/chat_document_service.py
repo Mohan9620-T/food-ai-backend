@@ -4,6 +4,7 @@ import logging
 import re
 from codecs import BOM_UTF16_BE, BOM_UTF16_LE
 from contextlib import aclosing, closing
+from copy import copy
 from html import escape
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -11,6 +12,8 @@ from pathlib import Path
 import pytesseract
 from docx import Document
 from openpyxl import load_workbook
+from openpyxl.styles import Border, Font, PatternFill, Side
+from openpyxl.utils import column_index_from_string, get_column_letter
 from pypdf import PdfReader
 from pypdf.errors import DependencyError
 from pypdfium2 import PdfDocument
@@ -84,6 +87,188 @@ class ChatDocumentService:
         if not text.strip():
             raise InvalidDocumentError("The document does not contain readable text.")
         return text.strip()
+
+    @staticmethod
+    def is_spreadsheet_update_request(instruction: str | None) -> bool:
+        """Return true only for an explicit workbook formatting request."""
+        if not instruction:
+            return False
+        normalized = instruction.casefold()
+        formatting_terms = (
+            "align",
+            "alignment",
+            "center",
+            "centre",
+            "left align",
+            "right align",
+            "format",
+            "style",
+            "design",
+            "professional",
+            "auto fit",
+            "autofit",
+            "column width",
+            "wrap text",
+            "header",
+            "bold",
+            "border",
+            "freeze",
+            "arrange",
+            "organize",
+            "organise",
+            "clean up",
+        )
+        return any(term in normalized for term in formatting_terms)
+
+    def format_spreadsheet(
+        self, file_data: bytes, filename: str, instruction: str
+    ) -> tuple[bytes, str, list[str]]:
+        """Apply safe presentation changes while preserving every workbook cell."""
+        normalized = instruction.casefold()
+        professional = any(
+            term in normalized
+            for term in (
+                "professional",
+                "format",
+                "style",
+                "design",
+                "arrange",
+                "organize",
+                "organise",
+            )
+        )
+        horizontal = None
+        if "center" in normalized or "centre" in normalized:
+            horizontal = "center"
+        elif "right align" in normalized or "align right" in normalized:
+            horizontal = "right"
+        elif "left align" in normalized or "align left" in normalized:
+            horizontal = "left"
+
+        requested_columns = {
+            column_index_from_string(match)
+            for match in re.findall(r"\b(?:column|col)\s+([a-z]{1,3})\b", normalized)
+        }
+        style_headers = professional or "header" in normalized or "bold" in normalized
+        auto_fit = professional or any(
+            term in normalized for term in ("auto fit", "autofit", "column width")
+        )
+        wrap_text = professional or "wrap text" in normalized
+        add_borders = professional or "border" in normalized
+        freeze_header = professional or "freeze" in normalized
+        smart_alignment = horizontal is None and (
+            professional or "align" in normalized or "alignment" in normalized
+        )
+
+        try:
+            workbook = load_workbook(BytesIO(file_data), data_only=False)
+            try:
+                thin_border = Border(
+                    left=Side(style="thin", color="D9E2F3"),
+                    right=Side(style="thin", color="D9E2F3"),
+                    top=Side(style="thin", color="D9E2F3"),
+                    bottom=Side(style="thin", color="D9E2F3"),
+                )
+                for sheet in workbook.worksheets:
+                    populated_rows = [
+                        row
+                        for row in sheet.iter_rows()
+                        if any(cell.value is not None for cell in row)
+                    ]
+                    if not populated_rows:
+                        continue
+                    header_row = populated_rows[0]
+                    header_number = header_row[0].row
+                    for row in populated_rows:
+                        for cell in row:
+                            if cell.value is None:
+                                continue
+                            if requested_columns and cell.column not in requested_columns:
+                                continue
+                            alignment = copy(cell.alignment)
+                            if horizontal is not None:
+                                alignment.horizontal = horizontal
+                            elif smart_alignment:
+                                alignment.horizontal = (
+                                    "center"
+                                    if cell.row == header_number
+                                    else "right"
+                                    if isinstance(cell.value, (int, float))
+                                    and not isinstance(cell.value, bool)
+                                    else "left"
+                                )
+                            alignment.vertical = "center"
+                            if wrap_text:
+                                alignment.wrap_text = True
+                            cell.alignment = alignment
+                            if add_borders:
+                                cell.border = thin_border
+                    if style_headers:
+                        for cell in header_row:
+                            if cell.value is None:
+                                continue
+                            cell.font = Font(
+                                name=cell.font.name or "Calibri",
+                                size=cell.font.sz or 11,
+                                bold=True,
+                                color="FFFFFF",
+                            )
+                            cell.fill = PatternFill("solid", fgColor="1F4E78")
+                            alignment = copy(cell.alignment)
+                            alignment.horizontal = horizontal or "center"
+                            alignment.vertical = "center"
+                            alignment.wrap_text = True
+                            cell.alignment = alignment
+                    if auto_fit:
+                        for column in range(1, sheet.max_column + 1):
+                            maximum = max(
+                                (
+                                    len(str(sheet.cell(row=row, column=column).value))
+                                    for row in range(1, sheet.max_row + 1)
+                                    if sheet.cell(row=row, column=column).value is not None
+                                ),
+                                default=0,
+                            )
+                            sheet.column_dimensions[get_column_letter(column)].width = min(
+                                max(maximum + 2, 10), 60
+                            )
+                    if freeze_header:
+                        sheet.freeze_panes = f"A{header_number + 1}"
+                output = BytesIO()
+                workbook.save(output)
+            finally:
+                workbook.close()
+        except Exception as error:
+            raise InvalidDocumentError(
+                "The spreadsheet could not be updated. Check that it is a valid XLSX file."
+            ) from error
+
+        actions = []
+        if horizontal:
+            scope = (
+                "columns "
+                + ", ".join(get_column_letter(column) for column in sorted(requested_columns))
+                if requested_columns
+                else "all populated cells"
+            )
+            actions.append(f"{horizontal} alignment for {scope}")
+        elif smart_alignment:
+            actions.append("smart text and number alignment")
+        if style_headers:
+            actions.append("formatted header rows")
+        if auto_fit:
+            actions.append("auto-fitted column widths")
+        if wrap_text:
+            actions.append("wrapped long text")
+        if add_borders:
+            actions.append("added table borders")
+        if freeze_header:
+            actions.append("froze header rows")
+        if not actions:
+            actions.append("preserved the workbook without dropping any populated cells")
+
+        safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "-", Path(filename).stem).strip("-")
+        return output.getvalue(), f"{safe_stem or 'spreadsheet'}-updated.xlsx", actions
 
     async def summarize(self, raw_text: str, instruction: str | None) -> str:
         prompt = (

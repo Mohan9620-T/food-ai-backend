@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from docx import Document
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from pypdf import PdfReader
 from reportlab.pdfgen.canvas import Canvas
 
@@ -158,6 +158,71 @@ def test_csv_accepts_windows_browser_mime_types(client, monkeypatch, mime):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200
+
+
+def test_xlsx_formatting_instruction_returns_downloadable_updated_workbook_without_ai(
+    client, monkeypatch
+):
+    token = _login(client, "spreadsheet-format@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    workbook = Workbook()
+    first = workbook.active
+    first.title = "Sales"
+    first.append(["Item", "Amount"])
+    first.append(["Oats", 100])
+    first.append(["Rice", 250])
+    first["B4"] = "=SUM(B2:B3)"
+    second = workbook.create_sheet("Notes")
+    second.append(["Status", "Comment"])
+    second.append(["Ready", "This is a long note that should be wrapped"])
+    source = BytesIO()
+    workbook.save(source)
+    workbook.close()
+
+    monkeypatch.setattr(
+        ChatDocumentService,
+        "summarize",
+        AsyncMock(side_effect=AssertionError("Spreadsheet formatting must not call AI")),
+    )
+    response = client.post(
+        "/chat/documents",
+        files={
+            "file": (
+                "sales.xlsx",
+                source.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={
+            "message": "Center align all cells, style the headers, auto fit columns, and wrap text"
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["analysis_status"] == "skipped"
+    assert body["attachment"]["kind"] == "generated"
+    assert body["attachment"]["filename"] == "sales-updated.xlsx"
+    assert "preserved the workbook data" in body["response"]
+    download = client.get(f"/chat/documents/{body['attachment']['id']}/download", headers=headers)
+    revised = load_workbook(BytesIO(download.content), data_only=False)
+    try:
+        assert revised.sheetnames == ["Sales", "Notes"]
+        assert revised["Sales"]["A2"].value == "Oats"
+        assert revised["Sales"]["B3"].value == 250
+        assert revised["Sales"]["B4"].value == "=SUM(B2:B3)"
+        assert revised["Sales"]["A2"].alignment.horizontal == "center"
+        assert revised["Notes"]["B2"].alignment.wrap_text is True
+        assert revised["Sales"]["A1"].font.bold is True
+        assert revised["Sales"]["A1"].fill.fgColor.rgb == "001F4E78"
+        assert revised["Sales"].column_dimensions["A"].width >= 10
+    finally:
+        revised.close()
+
+    history = client.get(f"/chat/sessions/{body['session_id']}", headers=headers).json()
+    assert history["messages"][0]["document_attachment"]["kind"] == "uploaded"
+    assert history["messages"][1]["document_attachment"]["kind"] == "generated"
 
 
 def test_missing_ocr_is_not_reported_as_corrupt_document(client, monkeypatch):
