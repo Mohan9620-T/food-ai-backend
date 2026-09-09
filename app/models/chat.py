@@ -41,7 +41,10 @@ class ChatMessageRecord(Base):
 
     session = relationship("ChatSession", back_populates="messages")
     document_attachment = relationship(
-        "ChatDocumentAttachment", back_populates="message", uselist=False, cascade="all, delete-orphan"
+        "ChatDocumentAttachment",
+        back_populates="message",
+        uselist=False,
+        cascade="all, delete-orphan",
     )
 
     @property
@@ -56,8 +59,16 @@ class ChatDocumentAttachment(Base):
     __tablename__ = "chat_document_attachments"
 
     id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(Integer, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
-    message_id = Column(Integer, ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    session_id = Column(
+        Integer, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    message_id = Column(
+        Integer,
+        ForeignKey("chat_messages.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
     filename = Column(String(255), nullable=False)
     content_type = Column(String(100), nullable=False)
     file_size = Column(Integer, nullable=False)

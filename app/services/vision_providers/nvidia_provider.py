@@ -28,9 +28,7 @@ class NvidiaVisionProvider(VisionProvider):
 
     def infer(self, system_prompt: str, user_prompt: str, encoded_image: str) -> VisionResult:
         if not settings.NVIDIA_API_KEY:
-            raise NvidiaConfigurationError(
-                "NVIDIA_API_KEY is not configured."
-            )
+            raise NvidiaConfigurationError("NVIDIA_API_KEY is not configured.")
 
         schema_instructions = (
             "\n\nRespond with ONLY a single JSON object (no markdown, no "

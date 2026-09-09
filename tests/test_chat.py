@@ -751,9 +751,7 @@ def test_chat_service_bounds_old_context_for_faster_local_inference():
 def test_delete_user_turn_removes_its_following_bot_response(client):
     token = _register_and_login(client, "delete-turn@example.com")
     headers = {"Authorization": f"Bearer {token}"}
-    session = client.post(
-        "/chat/sessions", headers=headers, json={"title": "Delete turn"}
-    ).json()
+    session = client.post("/chat/sessions", headers=headers, json={"title": "Delete turn"}).json()
     imported = client.post(
         f"/chat/sessions/{session['id']}/import",
         headers=headers,
@@ -1032,9 +1030,7 @@ def test_system_prompt_requires_natural_tanglish_without_inventing_content():
 
 
 def test_english_request_does_not_receive_tanglish_examples():
-    _, body = ChatService()._build_request_body(
-        "Give me some motivation", [], [], stream=True
-    )
+    _, body = ChatService()._build_request_body("Give me some motivation", [], [], stream=True)
 
     prompt_text = "\n".join(item["content"] for item in body["messages"])
     assert "respond only in English" in prompt_text
@@ -1043,9 +1039,7 @@ def test_english_request_does_not_receive_tanglish_examples():
 
 
 def test_explicit_tanglish_request_receives_tanglish_style_prompt():
-    _, body = ChatService()._build_request_body(
-        "Please reply in Tanglish", [], [], stream=True
-    )
+    _, body = ChatService()._build_request_body("Please reply in Tanglish", [], [], stream=True)
 
     assert any(
         item["role"] == "system" and "content-a anuppunga" in item["content"]
@@ -1247,9 +1241,7 @@ def test_interrupted_answer_is_saved_with_notice_and_never_emits_done(client, mo
         raise ChatModelUnavailableError(failure)
 
     monkeypatch.setattr(ChatService, "stream_chat", truncated_stream)
-    response = client.post(
-        "/chat/stream", json={"message": "Explain this"}, headers=headers
-    )
+    response = client.post("/chat/stream", json={"message": "Explain this"}, headers=headers)
     events = [__import__("json").loads(line) for line in response.text.splitlines()]
     assert events[-1] == {"type": "error", "message": failure}
     assert not any(event["type"] == "done" for event in events)

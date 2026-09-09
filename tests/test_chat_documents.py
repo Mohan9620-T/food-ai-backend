@@ -15,7 +15,9 @@ from app.services.chat_service import ChatModelUnavailableError
 
 def _login(client, email: str) -> str:
     client.post("/users/", json={"fullname": "Doc User", "email": email, "password": "secret123"})
-    return client.post("/users/login", json={"email": email, "password": "secret123"}).json()["access_token"]
+    return client.post("/users/login", json={"email": email, "password": "secret123"}).json()[
+        "access_token"
+    ]
 
 
 def test_extracts_txt_docx_csv_and_xlsx():
@@ -31,7 +33,9 @@ def test_extracts_txt_docx_csv_and_xlsx():
 
 def test_upload_document_persists_attachment(client, monkeypatch):
     token = _login(client, "document-upload@example.com")
-    monkeypatch.setattr(ChatDocumentService, "summarize", lambda self, raw, note: "Structured nutrition summary")
+    monkeypatch.setattr(
+        ChatDocumentService, "summarize", lambda self, raw, note: "Structured nutrition summary"
+    )
     response = client.post(
         "/chat/documents",
         files={"file": ("notes.txt", b"Calories: 1800", "text/plain")},
@@ -42,15 +46,23 @@ def test_upload_document_persists_attachment(client, monkeypatch):
     body = response.json()
     assert body["attachment"]["filename"] == "notes.txt"
     assert body["attachment"]["kind"] == "uploaded"
-    history = client.get(f"/chat/sessions/{body['session_id']}", headers={"Authorization": f"Bearer {token}"}).json()
+    history = client.get(
+        f"/chat/sessions/{body['session_id']}", headers={"Authorization": f"Bearer {token}"}
+    ).json()
     assert history["messages"][0]["document_attachment"]["filename"] == "notes.txt"
 
 
 def test_document_upload_rejects_invalid_and_empty_files(client):
     token = _login(client, "document-validation@example.com")
     headers = {"Authorization": f"Bearer {token}"}
-    invalid = client.post("/chat/documents", files={"file": ("bad.exe", b"x", "application/octet-stream")}, headers=headers)
-    empty = client.post("/chat/documents", files={"file": ("empty.txt", b"", "text/plain")}, headers=headers)
+    invalid = client.post(
+        "/chat/documents",
+        files={"file": ("bad.exe", b"x", "application/octet-stream")},
+        headers=headers,
+    )
+    empty = client.post(
+        "/chat/documents", files={"file": ("empty.txt", b"", "text/plain")}, headers=headers
+    )
     assert invalid.status_code == 415
     assert empty.status_code == 422
 
@@ -58,8 +70,16 @@ def test_document_upload_rejects_invalid_and_empty_files(client):
 def test_generate_and_download_enforces_ownership(client, monkeypatch):
     first_token = _login(client, "document-owner@example.com")
     first_headers = {"Authorization": f"Bearer {first_token}"}
-    session_id = client.post("/chat/sessions", json={"title": "Documents"}, headers=first_headers).json()["id"]
-    monkeypatch.setattr(ChatDocumentService, "generate_content", lambda self, instruction, summaries, history, profile=None: "# Doctor Summary\nBalanced nutrition plan")
+    session_id = client.post(
+        "/chat/sessions", json={"title": "Documents"}, headers=first_headers
+    ).json()["id"]
+    monkeypatch.setattr(
+        ChatDocumentService,
+        "generate_content",
+        lambda self, instruction, summaries, history, profile=None: (
+            "# Doctor Summary\nBalanced nutrition plan"
+        ),
+    )
     generated = client.post(
         "/chat/documents/generate",
         json={"session_id": session_id, "instruction": "Doctor summary", "output_format": "pdf"},
@@ -71,7 +91,10 @@ def test_generate_and_download_enforces_ownership(client, monkeypatch):
     assert download.status_code == 200
     assert download.headers["content-type"] == "application/pdf"
     second_token = _login(client, "document-stranger@example.com")
-    denied = client.get(f"/chat/documents/{document_id}/download", headers={"Authorization": f"Bearer {second_token}"})
+    denied = client.get(
+        f"/chat/documents/{document_id}/download",
+        headers={"Authorization": f"Bearer {second_token}"},
+    )
     assert denied.status_code == 404
 
 
@@ -112,7 +135,8 @@ def test_all_supported_uploads_can_be_reloaded_and_downloaded(client, monkeypatc
     result = client.post(
         "/chat/documents",
         files={"file": (f"REPORT.{extension.upper()}", file_data, "application/octet-stream")},
-        data={"message": "Show the headings and details"}, headers=headers,
+        data={"message": "Show the headings and details"},
+        headers=headers,
     )
     assert result.status_code == 200, result.text
     body = result.json()
@@ -130,7 +154,8 @@ def test_csv_accepts_windows_browser_mime_types(client, monkeypatch, mime):
     token = _login(client, "csv-mime@example.com")
     monkeypatch.setattr(ChatDocumentService, "summarize", lambda *args: "Oats 100")
     response = client.post(
-        "/chat/documents", files={"file": ("data.csv", b"name,value\noats,100", mime)},
+        "/chat/documents",
+        files={"file": ("data.csv", b"name,value\noats,100", mime)},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200
@@ -140,12 +165,16 @@ def test_missing_ocr_is_not_reported_as_corrupt_document(client, monkeypatch):
     token = _login(client, "ocr-unavailable@example.com")
 
     def unavailable(*args):
-        raise DocumentProcessingUnavailableError("Scanned PDFs require Tesseract OCR on the backend.")
+        raise DocumentProcessingUnavailableError(
+            "Scanned PDFs require Tesseract OCR on the backend."
+        )
 
     monkeypatch.setattr(ChatDocumentService, "extract", unavailable)
     headers = {"Authorization": f"Bearer {token}"}
     response = client.post(
-        "/chat/documents", files={"file": ("scan.pdf", b"scan", "application/pdf")}, headers=headers,
+        "/chat/documents",
+        files={"file": ("scan.pdf", b"scan", "application/pdf")},
+        headers=headers,
     )
     assert response.status_code == 503
     assert "Tesseract" in response.json()["detail"]
@@ -165,7 +194,11 @@ def test_generates_document_from_instruction_in_new_chat(client, monkeypatch, ou
     monkeypatch.setattr(ChatDocumentService, "generate_content", generate)
     response = client.post(
         "/chat/documents/generate",
-        json={"session_id": None, "instruction": "  Create a project summary  ", "output_format": output_format},
+        json={
+            "session_id": None,
+            "instruction": "  Create a project summary  ",
+            "output_format": output_format,
+        },
         headers=headers,
     )
     assert response.status_code == 200, response.text
@@ -182,7 +215,9 @@ def test_generates_document_from_instruction_in_new_chat(client, monkeypatch, ou
     assert history["messages"][1]["document_attachment"]["kind"] == "generated"
 
 
-def test_generate_rejects_empty_instruction_and_does_not_create_failed_sessions(client, monkeypatch):
+def test_generate_rejects_empty_instruction_and_does_not_create_failed_sessions(
+    client, monkeypatch
+):
     token = _login(client, "failed-generation@example.com")
     headers = {"Authorization": f"Bearer {token}"}
     invalid = client.post("/chat/documents/generate", json={"instruction": "   "}, headers=headers)
@@ -192,7 +227,9 @@ def test_generate_rejects_empty_instruction_and_does_not_create_failed_sessions(
         raise ChatModelUnavailableError("Model unavailable")
 
     monkeypatch.setattr(ChatDocumentService, "generate_content", unavailable)
-    failed = client.post("/chat/documents/generate", json={"instruction": "Create a summary"}, headers=headers)
+    failed = client.post(
+        "/chat/documents/generate", json={"instruction": "Create a summary"}, headers=headers
+    )
     assert failed.status_code == 503
     assert client.get("/chat/sessions", headers=headers).json() == []
 
@@ -200,7 +237,9 @@ def test_generate_rejects_empty_instruction_and_does_not_create_failed_sessions(
 def test_document_routes_check_session_ownership_before_processing(client, monkeypatch):
     owner = _login(client, "session-owner@example.com")
     owner_headers = {"Authorization": f"Bearer {owner}"}
-    session_id = client.post("/chat/sessions", json={"title": "Private"}, headers=owner_headers).json()["id"]
+    session_id = client.post(
+        "/chat/sessions", json={"title": "Private"}, headers=owner_headers
+    ).json()["id"]
     other = _login(client, "session-other@example.com")
     headers = {"Authorization": f"Bearer {other}"}
 
@@ -210,10 +249,14 @@ def test_document_routes_check_session_ownership_before_processing(client, monke
     monkeypatch.setattr(ChatDocumentService, "extract", unexpected)
     monkeypatch.setattr(ChatDocumentService, "generate_content", unexpected)
     upload = client.post(
-        "/chat/documents", files={"file": ("note.txt", b"Note", "text/plain")},
-        data={"session_id": str(session_id)}, headers=headers,
+        "/chat/documents",
+        files={"file": ("note.txt", b"Note", "text/plain")},
+        data={"session_id": str(session_id)},
+        headers=headers,
     )
     generate = client.post(
-        "/chat/documents/generate", json={"session_id": session_id, "instruction": "Summarize"}, headers=headers,
+        "/chat/documents/generate",
+        json={"session_id": session_id, "instruction": "Summarize"},
+        headers=headers,
     )
     assert upload.status_code == generate.status_code == 404

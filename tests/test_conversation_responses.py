@@ -22,15 +22,12 @@ def _install_nvidia_stream(monkeypatch, events):
     real_async_client = httpx.AsyncClient
     captured = []
     encoded = "".join(
-        f"data: {event if isinstance(event, str) else json.dumps(event)}\n\n"
-        for event in events
+        f"data: {event if isinstance(event, str) else json.dumps(event)}\n\n" for event in events
     )
 
     def respond(request):
         captured.append(json.loads(request.content))
-        return httpx.Response(
-            200, text=encoded, headers={"Content-Type": "text/event-stream"}
-        )
+        return httpx.Response(200, text=encoded, headers={"Content-Type": "text/event-stream"})
 
     def client(**kwargs):
         return real_async_client(transport=httpx.MockTransport(respond), **kwargs)
@@ -144,9 +141,7 @@ def test_synchronous_nvidia_does_not_accept_truncated_reply(monkeypatch):
 
         def json(self):
             return {
-                "choices": [
-                    {"message": {"content": "A cut-off answer"}, "finish_reason": "length"}
-                ]
+                "choices": [{"message": {"content": "A cut-off answer"}, "finish_reason": "length"}]
             }
 
     def post(url, **kwargs):
@@ -184,7 +179,9 @@ def test_latest_correction_follows_recalled_preference_in_request():
     )
     history.append(ChatHistoryMessage(role="user", content="Don't call me Master anymore"))
 
-    _, body = ChatService()._build_request_body("I need someone to listen", history, [], stream=True)
+    _, body = ChatService()._build_request_body(
+        "I need someone to listen", history, [], stream=True
+    )
 
     contents = [item["content"] for item in body["messages"]]
     assert contents.index("Please call me Master") < contents.index("Don't call me Master anymore")
@@ -256,10 +253,14 @@ def test_shared_guidance_and_recent_context_reach_vision_provider(monkeypatch, v
     monkeypatch.setattr("app.services.chat_vision_service.get_vision_provider", Provider)
     monkeypatch.setattr(settings, "CHAT_VISION_OCR_ENABLED", False)
     history = [ChatHistoryMessage(role="user", content="My partner left and I feel overwhelmed")]
-    history.extend(ChatHistoryMessage(role="user", content=f"detail {index}") for index in range(14))
+    history.extend(
+        ChatHistoryMessage(role="user", content=f"detail {index}") for index in range(14)
+    )
 
     result = ChatVisionService().describe(valid_png_bytes, "What should I do now?", history)
-    _, text_body = ChatService()._build_request_body("What should I do now?", history, [], stream=True)
+    _, text_body = ChatService()._build_request_body(
+        "What should I do now?", history, [], stream=True
+    )
 
     assert result == "I hear you."
     assert CONVERSATION_GUIDANCE in captured[0]["system_prompt"]

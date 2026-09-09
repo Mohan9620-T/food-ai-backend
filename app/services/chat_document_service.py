@@ -48,7 +48,9 @@ class ChatDocumentService:
                     )
             elif extension == ".xlsx":
                 sheets = []
-                with closing(load_workbook(BytesIO(file_data), read_only=True, data_only=True)) as workbook:
+                with closing(
+                    load_workbook(BytesIO(file_data), read_only=True, data_only=True)
+                ) as workbook:
                     for sheet in workbook.worksheets:
                         rows = "\n".join(
                             "\t".join("" if value is None else str(value) for value in row)
@@ -114,12 +116,19 @@ class ChatDocumentService:
                 if not stripped:
                     continue
                 if stripped.startswith("#"):
-                    document.add_heading(stripped.lstrip("# "), level=min(3, len(stripped) - len(stripped.lstrip("#"))))
+                    document.add_heading(
+                        stripped.lstrip("# "),
+                        level=min(3, len(stripped) - len(stripped.lstrip("#"))),
+                    )
                 else:
                     document.add_paragraph(stripped)
             buffer = BytesIO()
             document.save(buffer)
-            return buffer.getvalue(), f"{safe_name}.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            return (
+                buffer.getvalue(),
+                f"{safe_name}.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
         buffer = BytesIO()
         pdf = SimpleDocTemplate(buffer, pagesize=A4, title="Nutrition Document")
         styles = getSampleStyleSheet()

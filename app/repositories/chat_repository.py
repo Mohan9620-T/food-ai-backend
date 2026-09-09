@@ -225,9 +225,7 @@ class ChatRepository:
         db.commit()
         return True
 
-    def delete_user_turn(
-        self, db: Session, session_id: int, message_id: int, user_id: int
-    ) -> bool:
+    def delete_user_turn(self, db: Session, session_id: int, message_id: int, user_id: int) -> bool:
         session = self.get_session(db, session_id, user_id)
         if not session:
             return False

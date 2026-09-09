@@ -68,7 +68,12 @@ def test_scanned_pdf_renders_to_pillow_without_numpy(monkeypatch):
 
 def test_mixed_pdf_keeps_page_order_and_only_runs_ocr_for_scanned_pages(monkeypatch):
     writer = PdfWriter()
-    for source in (text_pdf("First section"), scanned_pdf(), text_pdf("Third section"), scanned_pdf()):
+    for source in (
+        text_pdf("First section"),
+        scanned_pdf(),
+        text_pdf("Third section"),
+        scanned_pdf(),
+    ):
         writer.add_page(PdfReader(BytesIO(source)).pages[0])
     buffer = BytesIO()
     writer.write(buffer)
@@ -82,7 +87,10 @@ def test_mixed_pdf_keeps_page_order_and_only_runs_ocr_for_scanned_pages(monkeypa
     monkeypatch.setattr(pytesseract, "image_to_string", read_scan)
     extracted = ChatDocumentService().extract(buffer.getvalue(), "mixed.pdf")
     assert [line for line in extracted.splitlines() if line] == [
-        "First section", "Second section", "Third section", "Fourth section",
+        "First section",
+        "Second section",
+        "Third section",
+        "Fourth section",
     ]
     assert len(ocr_calls) == 2
 

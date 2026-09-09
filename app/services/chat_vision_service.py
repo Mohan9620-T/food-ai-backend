@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 class ChatVisionService:
-    SYSTEM_PROMPT = """You are a versatile visual assistant.
+    SYSTEM_PROMPT = (
+        """You are a versatile visual assistant.
 Answer the user's actual question first. Do not replace a requested analysis with a generic
 inventory of visible objects. For person, safety, PPE, or missing-item questions, inspect each
 visible person separately and state only what that person visibly wears and what requested item
@@ -39,7 +40,11 @@ possibilities in uncertain_items rather than presenting them as facts.
 Group repeated objects of the same kind into one item. Keep every name and visual_evidence concise.
 For ordinary conversational answers, end with one short, relevant next-step suggestion. Omit it
 when the user requests JSON, code, plain text, a specific format, or only the direct answer.
-""" + "\n" + CONVERSATION_GUIDANCE + "\nKeep the required JSON schema; apply conversation guidance to answer only."
+"""
+        + "\n"
+        + CONVERSATION_GUIDANCE
+        + "\nKeep the required JSON schema; apply conversation guidance to answer only."
+    )
     EMPTY_RESPONSE_MESSAGE = (
         "I couldn't produce a description for this image. Please try again with a clearer image."
     )
@@ -51,9 +56,7 @@ when the user requests JSON, code, plain text, a specific format, or only the di
         conversation_history: Sequence[ChatHistoryMessage] = (),
     ) -> str:
         started_at = perf_counter()
-        using_nvidia = (
-            settings.APP_ENVIRONMENT == "production" or settings.LLM_PROVIDER == "nvidia"
-        )
+        using_nvidia = settings.APP_ENVIRONMENT == "production" or settings.LLM_PROVIDER == "nvidia"
         inference_image = prepare_vision_image(
             image_bytes,
             max_dimension=(settings.NVIDIA_VISION_MAX_DIMENSION if using_nvidia else None),
@@ -63,8 +66,7 @@ when the user requests JSON, code, plain text, a specific format, or only the di
         prompt = (user_message or "").strip() or "Please describe this image."
         if conversation_history:
             context = "\n".join(
-                f"{item.role}: {item.content[:1000]}"
-                for item in conversation_history[-24:]
+                f"{item.role}: {item.content[:1000]}" for item in conversation_history[-24:]
             )
             prompt = (
                 "The following is recent conversation in this chat, possibly about different topics. Use it only "

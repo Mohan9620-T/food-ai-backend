@@ -61,20 +61,14 @@ NVIDIA_API_KEY = (_read_secret("NVIDIA_API_KEY", "") or "").strip()
 NVIDIA_API_BASE_URL = os.getenv(
     "NVIDIA_API_BASE_URL", "https://integrate.api.nvidia.com/v1"
 ).rstrip("/")
-NVIDIA_CHAT_MODEL = os.getenv(
-    "NVIDIA_CHAT_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"
-).strip()
-NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS = float(
-    os.getenv("NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS", "5")
-)
+NVIDIA_CHAT_MODEL = os.getenv("NVIDIA_CHAT_MODEL", "nvidia/nemotron-3-ultra-550b-a55b").strip()
+NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS", "5"))
 NVIDIA_CHAT_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_CHAT_TIMEOUT_SECONDS", "60"))
 NVIDIA_CHAT_MAX_TOKENS = int(os.getenv("NVIDIA_CHAT_MAX_TOKENS", "1024"))
 NVIDIA_TEST_CHAT_MODEL = os.getenv(
     "NVIDIA_TEST_CHAT_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"
 ).strip()
-NVIDIA_TEST_CHAT_TIMEOUT_SECONDS = float(
-    os.getenv("NVIDIA_TEST_CHAT_TIMEOUT_SECONDS", "60")
-)
+NVIDIA_TEST_CHAT_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_TEST_CHAT_TIMEOUT_SECONDS", "60"))
 NVIDIA_CHAT_VISION_MODEL = os.getenv(
     "NVIDIA_CHAT_VISION_MODEL", "meta/llama-3.2-90b-vision-instruct"
 ).strip()

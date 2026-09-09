@@ -92,7 +92,8 @@ class ChatService:
     TAMIL_SCRIPT_PATTERN = re.compile(r"[\u0b80-\u0bff]")
     DEVANAGARI_SCRIPT_PATTERN = re.compile(r"[\u0900-\u097f]")
 
-    SYSTEM_PROMPT = """You are a helpful, accurate multilingual assistant.
+    SYSTEM_PROMPT = (
+        """You are a helpful, accurate multilingual assistant.
 
 Language handling:
 - Understand the user's meaning even when they use a non-English language, mixed
@@ -170,7 +171,10 @@ Content-versus-format rules:
 - Put Markdown bold markers around headings, including the issue title, "Repro Steps:",
   and "Expected Result:". Return only the formatted result without introductory or
   explanatory commentary for this bug-report formatting task only.
-""" + "\n" + CONVERSATION_GUIDANCE
+"""
+        + "\n"
+        + CONVERSATION_GUIDANCE
+    )
 
     TANGLISH_STYLE_PROMPT = """The user explicitly selected Tanglish for this chat.
 Reply in natural conversational Tamil written with Latin letters, mixing ordinary English
@@ -655,7 +659,9 @@ maadhiri Thanglish-la explain panren."""
     @classmethod
     def is_standing_preference(cls, content: str) -> bool:
         """Return non-language preferences that may safely carry across chats."""
-        if re.search(r"\b(?:english|t(?:h)?anglish|tamil|hinglish|hindi)\b", content, re.IGNORECASE):
+        if re.search(
+            r"\b(?:english|t(?:h)?anglish|tamil|hinglish|hindi)\b", content, re.IGNORECASE
+        ):
             return False
         return cls.STANDING_PREFERENCE_PATTERN.search(content) is not None
 

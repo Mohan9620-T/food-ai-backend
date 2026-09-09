@@ -41,7 +41,9 @@ DOCUMENT_TYPES = {
 
 
 @router.post(
-    "", response_model=ChatDocumentResponse, summary="Upload a chat document",
+    "",
+    response_model=ChatDocumentResponse,
+    summary="Upload a chat document",
     description="Read a PDF, DOCX, TXT, CSV, or XLSX file and save it with its summary. "
     "Scanned PDF pages require Tesseract on the backend. Maximum upload size is 15 MB.",
     responses={
@@ -68,7 +70,9 @@ async def upload_document(
         # Windows/browser CSV associations also commonly use these MIME types.
         accepted_types.update({"application/vnd.ms-excel", "text/plain"})
     if expected_type is None or content_type not in accepted_types:
-        raise HTTPException(status_code=415, detail="Upload a PDF, DOCX, TXT, CSV, or XLSX document.")
+        raise HTTPException(
+            status_code=415, detail="Upload a PDF, DOCX, TXT, CSV, or XLSX document."
+        )
     try:
         file_data = await file.read(MAX_CHAT_DOCUMENT_BYTES + 1)
     finally:
@@ -96,16 +100,29 @@ async def upload_document(
     resolved_session_id = cast(int, resolved_session.id)
     user_record, _ = repository.add_turn(db, resolved_session_id, user_text, summary)
     attachment = repository.add_document_attachment(
-        db, session_id=resolved_session_id, message_id=cast(int, user_record.id), filename=filename,
-        content_type=expected_type, file_data=file_data, kind="uploaded",
-        raw_text=raw_text, structured_summary=summary,
+        db,
+        session_id=resolved_session_id,
+        message_id=cast(int, user_record.id),
+        filename=filename,
+        content_type=expected_type,
+        file_data=file_data,
+        kind="uploaded",
+        raw_text=raw_text,
+        structured_summary=summary,
     )
-    logger.info("chat.document_uploaded", extra={"user_id": user_id, "session_id": resolved_session_id, "document_id": attachment.id})
-    return ChatDocumentResponse(response=summary, session_id=resolved_session_id, attachment=attachment)
+    logger.info(
+        "chat.document_uploaded",
+        extra={"user_id": user_id, "session_id": resolved_session_id, "document_id": attachment.id},
+    )
+    return ChatDocumentResponse(
+        response=summary, session_id=resolved_session_id, attachment=attachment
+    )
 
 
 @router.post(
-    "/generate", response_model=ChatDocumentResponse, summary="Generate a chat document",
+    "/generate",
+    response_model=ChatDocumentResponse,
+    summary="Generate a chat document",
     description="Create a PDF or Word document from an instruction and optional existing chat. "
     "Omit session_id to create a new chat; uploading a file first is not required.",
     responses={
@@ -126,13 +143,24 @@ async def generate_document(
         if session is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
     records = repository.get_message_history(db, payload.session_id) if payload.session_id else []
-    summaries = repository.get_document_summaries(db, payload.session_id) if payload.session_id else []
-    history = [ChatHistoryMessage(role="assistant" if row.sender == "bot" else "user", content=str(row.content)) for row in records]
+    summaries = (
+        repository.get_document_summaries(db, payload.session_id) if payload.session_id else []
+    )
+    history = [
+        ChatHistoryMessage(
+            role="assistant" if row.sender == "bot" else "user", content=str(row.content)
+        )
+        for row in records
+    ]
     profile_record = profile_service.get(db, user_id)
     profile = profile_service.serialize(profile_record) if profile_record is not None else None
     try:
-        content = await asyncio.to_thread(service.generate_content, payload.instruction, summaries, history, profile)
-        file_data, filename, content_type = await asyncio.to_thread(service.render, content, payload.output_format)
+        content = await asyncio.to_thread(
+            service.generate_content, payload.instruction, summaries, history, profile
+        )
+        file_data, filename, content_type = await asyncio.to_thread(
+            service.render, content, payload.output_format
+        )
     except ChatModelUnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     # Failed generation must not leave empty sessions behind.
@@ -141,11 +169,22 @@ async def generate_document(
     resolved_session_id = cast(int, session.id)
     _, bot_record = repository.add_turn(db, resolved_session_id, payload.instruction, content)
     attachment = repository.add_document_attachment(
-        db, session_id=resolved_session_id, message_id=cast(int, bot_record.id), filename=filename,
-        content_type=content_type, file_data=file_data, kind="generated", structured_summary=content,
+        db,
+        session_id=resolved_session_id,
+        message_id=cast(int, bot_record.id),
+        filename=filename,
+        content_type=content_type,
+        file_data=file_data,
+        kind="generated",
+        structured_summary=content,
     )
-    logger.info("chat.document_generated", extra={"user_id": user_id, "session_id": resolved_session_id, "document_id": attachment.id})
-    return ChatDocumentResponse(response=content, session_id=resolved_session_id, attachment=attachment)
+    logger.info(
+        "chat.document_generated",
+        extra={"user_id": user_id, "session_id": resolved_session_id, "document_id": attachment.id},
+    )
+    return ChatDocumentResponse(
+        response=content, session_id=resolved_session_id, attachment=attachment
+    )
 
 
 @router.get("/{document_id}/download", summary="Download a chat document")
@@ -160,5 +199,7 @@ def download_document(
     return StreamingResponse(
         BytesIO(cast(bytes, attachment.file_data)),
         media_type=cast(str, attachment.content_type),
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(cast(str, attachment.filename))}"},
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(cast(str, attachment.filename))}"
+        },
     )

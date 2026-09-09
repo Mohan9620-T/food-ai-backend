@@ -118,7 +118,9 @@ def _select_referenced_image(
 
     normalized = question.lower()
     for label, index in IMAGE_REFERENCE_ORDINALS.items():
-        if re.search(rf"\b{re.escape(label)}\s+(?:uploaded\s+)?(?:image|picture|photo)\b", normalized):
+        if re.search(
+            rf"\b{re.escape(label)}\s+(?:uploaded\s+)?(?:image|picture|photo)\b", normalized
+        ):
             if index < len(image_turns):
                 return image_turns[index][0]
     if re.search(r"\b(?:previous|prior)\s+(?:image|picture|photo)\b", normalized):
@@ -304,9 +306,7 @@ def delete_user_turn(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    deleted = repository.delete_user_turn(
-        db, session_id, message_id, _get_user_id(current_user)
-    )
+    deleted = repository.delete_user_turn(db, session_id, message_id, _get_user_id(current_user))
     if not deleted:
         raise HTTPException(status_code=404, detail="Chat message not found")
     return {"detail": "Chat turn deleted"}
