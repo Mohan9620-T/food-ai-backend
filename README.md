@@ -308,6 +308,10 @@ App available at \`http://localhost:4200\`.
   Every worksheet and populated cell is retained, formulas remain formulas, and the
   bot returns an `-updated.xlsx` attachment for download. To target one column, use
   wording such as `Center align column B`.
+- To split an item list, make sure the table has a header containing `Category`,
+  then ask `Split the item list category-wise and create a separate sheet for each
+  category`. The original source sheet is retained, and category sheets include the
+  matching header and item rows.
 - PDF/Word generation and direct source export remain backend API capabilities for
   API clients, but they are no longer exposed as a separate chat-composer workflow.
   A source export uses the **full extracted text**, not the shortened chat preview,

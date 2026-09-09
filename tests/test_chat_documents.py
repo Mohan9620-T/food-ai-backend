@@ -225,6 +225,68 @@ def test_xlsx_formatting_instruction_returns_downloadable_updated_workbook_witho
     assert history["messages"][1]["document_attachment"]["kind"] == "generated"
 
 
+def test_xlsx_category_instruction_creates_one_sheet_per_category(client, monkeypatch):
+    token = _login(client, "spreadsheet-categories@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    workbook = Workbook()
+    source_sheet = workbook.active
+    source_sheet.title = "Items"
+    source_sheet.append(["Item", "Category", "Price"])
+    source_sheet.append(["Apple", "Fruit", 20])
+    source_sheet.append(["Carrot", "Vegetable", 30])
+    source_sheet.append(["Banana", "Fruit", 40])
+    source_sheet.append(["Mystery item", None, 50])
+    source = BytesIO()
+    workbook.save(source)
+    workbook.close()
+
+    monkeypatch.setattr(
+        ChatDocumentService,
+        "summarize",
+        AsyncMock(side_effect=AssertionError("Category splitting must not call AI")),
+    )
+    response = client.post(
+        "/chat/documents",
+        files={
+            "file": (
+                "inventory.xlsx",
+                source.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={
+            "message": (
+                "I have many categories. Split the item list category-wise and create a "
+                "separate sheet for each category."
+            )
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["attachment"]["filename"] == "inventory-updated.xlsx"
+    assert "3 category worksheets" in body["response"]
+    download = client.get(f"/chat/documents/{body['attachment']['id']}/download", headers=headers)
+    revised = load_workbook(BytesIO(download.content), data_only=False)
+    try:
+        assert revised.sheetnames == ["Items", "Fruit", "Vegetable", "Uncategorized"]
+        assert list(revised["Fruit"].values) == [
+            ("Item", "Category", "Price"),
+            ("Apple", "Fruit", 20),
+            ("Banana", "Fruit", 40),
+        ]
+        assert list(revised["Vegetable"].values) == [
+            ("Item", "Category", "Price"),
+            ("Carrot", "Vegetable", 30),
+        ]
+        assert revised["Uncategorized"]["A2"].value == "Mystery item"
+        assert revised["Fruit"].freeze_panes == "A2"
+        assert revised["Fruit"]["A1"].font.bold is True
+    finally:
+        revised.close()
+
+
 def test_missing_ocr_is_not_reported_as_corrupt_document(client, monkeypatch):
     token = _login(client, "ocr-unavailable@example.com")
 

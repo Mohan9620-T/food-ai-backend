@@ -94,6 +94,8 @@ class ChatDocumentService:
         if not instruction:
             return False
         normalized = instruction.casefold()
+        if ChatDocumentService._is_category_split_request(normalized):
+            return True
         formatting_terms = (
             "align",
             "alignment",
@@ -125,7 +127,8 @@ class ChatDocumentService:
     ) -> tuple[bytes, str, list[str]]:
         """Apply safe presentation changes while preserving every workbook cell."""
         normalized = instruction.casefold()
-        professional = any(
+        split_by_category = self._is_category_split_request(normalized)
+        professional = split_by_category or any(
             term in normalized
             for term in (
                 "professional",
@@ -163,6 +166,9 @@ class ChatDocumentService:
         try:
             workbook = load_workbook(BytesIO(file_data), data_only=False)
             try:
+                category_sheet_count = (
+                    self._split_sheets_by_category(workbook) if split_by_category else 0
+                )
                 thin_border = Border(
                     left=Side(style="thin", color="D9E2F3"),
                     right=Side(style="thin", color="D9E2F3"),
@@ -238,12 +244,18 @@ class ChatDocumentService:
                 workbook.save(output)
             finally:
                 workbook.close()
+        except InvalidDocumentError:
+            raise
         except Exception as error:
             raise InvalidDocumentError(
                 "The spreadsheet could not be updated. Check that it is a valid XLSX file."
             ) from error
 
         actions = []
+        if split_by_category:
+            actions.append(
+                f"split items into {category_sheet_count} category worksheets while retaining source sheets"
+            )
         if horizontal:
             scope = (
                 "columns "
@@ -269,6 +281,102 @@ class ChatDocumentService:
 
         safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "-", Path(filename).stem).strip("-")
         return output.getvalue(), f"{safe_stem or 'spreadsheet'}-updated.xlsx", actions
+
+    @staticmethod
+    def _is_category_split_request(normalized_instruction: str) -> bool:
+        has_category = "category" in normalized_instruction
+        asks_for_sheets = any(
+            term in normalized_instruction
+            for term in (
+                "separate sheet",
+                "separate worksheet",
+                "sheet for each",
+                "worksheet for each",
+                "category-wise",
+                "category wise",
+                "split",
+                "group into sheet",
+                "group into worksheet",
+            )
+        )
+        return has_category and asks_for_sheets
+
+    @classmethod
+    def _split_sheets_by_category(cls, workbook) -> int:
+        created_count = 0
+        source_sheets = list(workbook.worksheets)
+        for source in source_sheets:
+            populated_rows = [
+                row for row in source.iter_rows() if any(cell.value is not None for cell in row)
+            ]
+            if len(populated_rows) < 2:
+                continue
+            header_row = populated_rows[0]
+            category_cell = next(
+                (
+                    cell
+                    for cell in header_row
+                    if cell.value is not None and "category" in str(cell.value).casefold()
+                ),
+                None,
+            )
+            if category_cell is None:
+                continue
+
+            grouped_rows: dict[str, list[tuple]] = {}
+            for row in populated_rows[1:]:
+                category_value = row[category_cell.column - 1].value
+                category = str(category_value).strip() if category_value is not None else ""
+                grouped_rows.setdefault(category or "Uncategorized", []).append(row)
+
+            for category, rows in grouped_rows.items():
+                target = workbook.create_sheet(
+                    cls._unique_category_sheet_title(workbook, source.title, category)
+                )
+                cls._copy_spreadsheet_row(header_row, target, 1)
+                for target_row, source_row in enumerate(rows, start=2):
+                    cls._copy_spreadsheet_row(source_row, target, target_row)
+                target.auto_filter.ref = f"A1:{get_column_letter(source.max_column)}{len(rows) + 1}"
+                created_count += 1
+
+        if created_count == 0:
+            raise InvalidDocumentError(
+                "I could not find a Category column with item rows in this workbook. "
+                "Add a column header containing 'Category' and try again."
+            )
+        return created_count
+
+    @staticmethod
+    def _copy_spreadsheet_row(source_row, target_sheet, target_row: int) -> None:
+        for source_cell in source_row:
+            target_cell = target_sheet.cell(row=target_row, column=source_cell.column)
+            target_cell.value = source_cell.value
+            if source_cell.has_style:
+                target_cell.font = copy(source_cell.font)
+                target_cell.fill = copy(source_cell.fill)
+                target_cell.border = copy(source_cell.border)
+                target_cell.alignment = copy(source_cell.alignment)
+                target_cell.number_format = source_cell.number_format
+                target_cell.protection = copy(source_cell.protection)
+            if source_cell.hyperlink:
+                target_cell.hyperlink = copy(source_cell.hyperlink)
+            if source_cell.comment:
+                target_cell.comment = copy(source_cell.comment)
+
+    @staticmethod
+    def _unique_category_sheet_title(workbook, source_title: str, category: str) -> str:
+        cleaned = re.sub(r"[\\/*?:\[\]]", "-", category).strip(" '") or "Uncategorized"
+        candidate = cleaned[:31]
+        if candidate.casefold() not in {sheet.title.casefold() for sheet in workbook.worksheets}:
+            return candidate
+        base = re.sub(r"[\\/*?:\[\]]", "-", f"{source_title}-{cleaned}").strip(" '")
+        existing = {sheet.title.casefold() for sheet in workbook.worksheets}
+        for suffix in range(2, 10_000):
+            suffix_text = f"-{suffix}"
+            candidate = f"{base[: 31 - len(suffix_text)]}{suffix_text}"
+            if candidate.casefold() not in existing:
+                return candidate
+        raise InvalidDocumentError("The workbook contains too many duplicate category names.")
 
     async def summarize(self, raw_text: str, instruction: str | None) -> str:
         prompt = (

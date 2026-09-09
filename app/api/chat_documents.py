@@ -45,7 +45,8 @@ DOCUMENT_TYPES = {
     response_model=ChatDocumentResponse,
     summary="Upload a chat document",
     description="Read and save a PDF, DOCX, TXT, CSV, or XLSX before optional AI analysis. "
-    "For XLSX formatting instructions, a revised workbook is returned without requiring AI. "
+    "For XLSX formatting or category-sheet instructions, a revised workbook is returned "
+    "without requiring AI. "
     "An AI failure returns the saved file with analysis_status=unavailable, not an upload error. "
     "Use analyze=false to save/extract without AI. Scanned PDF pages require Tesseract. "
     "Maximum upload size is 15 MB.",
