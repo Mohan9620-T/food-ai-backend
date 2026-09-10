@@ -21,6 +21,7 @@ class DocumentOperation(str, Enum):
     CREATE_DOCUMENT = "create_document"
     READ_DOCUMENT = "read_document"
     SUMMARIZE_DOCUMENT = "summarize_document"
+    EXTRACT_TABLE_TO_EXCEL = "extract_table_to_excel"
     CONVERT_DOCUMENT = "convert_document"
 
 
@@ -101,6 +102,17 @@ class DocumentOperationRegistry:
                     True,
                     readable,
                     frozenset(),
+                ),
+                DocumentOperationDefinition(
+                    DocumentOperation.EXTRACT_TABLE_TO_EXCEL,
+                    (
+                        "extract table to excel",
+                        "pdf table to excel",
+                        "create excel from pdf table",
+                    ),
+                    True,
+                    frozenset({DocumentType.PDF}),
+                    frozenset({DocumentType.XLSX}),
                 ),
                 DocumentOperationDefinition(
                     DocumentOperation.CONVERT_DOCUMENT,

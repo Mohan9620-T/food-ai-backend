@@ -108,6 +108,19 @@ def _get_persisted_history(db: Session, session_id: int) -> list[ChatHistoryMess
     ]
 
 
+def _document_reference_history(db: Session, session_id: int) -> list[ChatHistoryMessage]:
+    return [
+        ChatHistoryMessage(
+            role="user",
+            content=(
+                f"{ChatService.DOCUMENT_CONTEXT_PREFIX}\n"
+                f"Filename: {filename}\nExtracted content:\n{raw_text}"
+            ),
+        )
+        for filename, raw_text in repository.get_document_contexts(db, session_id)
+    ]
+
+
 def _select_referenced_image(
     question: str,
     image_turns: list[tuple[ChatMessageRecord, str]],
@@ -339,7 +352,12 @@ def chat(
     history = _get_persisted_history(db, session.id)
 
     try:
-        answer = service.chat(request.message, history, request.reference_history)
+        document_references = _document_reference_history(db, session.id)
+        answer = service.chat(
+            request.message,
+            history,
+            [*request.reference_history, *document_references],
+        )
     except ChatModelUnavailableError as error:
         logger.warning(
             "chat.text_model_unavailable",
@@ -477,6 +495,7 @@ async def stream_chat(
     session = _get_or_create_chat_session(db, user_id, session_id, payload.message)
 
     history = _get_persisted_history(db, session.id)
+    document_references = _document_reference_history(db, session.id)
     image_turns = repository.get_image_turns(db, session.id)
     referenced_image = _select_referenced_image(payload.message, image_turns)
     referenced_turn = next(
@@ -553,7 +572,7 @@ async def stream_chat(
         iterator = service.stream_chat(
             payload.message,
             history,
-            payload.reference_history,
+            [*payload.reference_history, *document_references],
         )
         try:
             async for chunk in iterator:

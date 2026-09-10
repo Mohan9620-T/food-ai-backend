@@ -300,8 +300,15 @@ App available at \`http://localhost:4200\`.
   There is no separate document-creator control in the chat UI.
 - Use the paperclip (**Attach image or document**) or drag one file into the same
   composer, add the question/instruction, then press **Send**. Supported documents
-  are PDF, DOCX, TXT, CSV, and XLSX, up to 15 MB. Images remain supported up to 8 MB.
+  are PDF, DOCX, XLSX, CSV, PPTX, TXT, and Markdown, up to 15 MB. Images remain
+  supported up to 8 MB.
   Uploaded files and responses are kept in normal conversation history.
+- Document text and structured tables are extracted with format-specific parsers.
+  Searchable PDFs use their text layer; scanned PDF pages use the existing OCR fallback.
+  Follow-up questions in the same chat receive recent uploaded-document text as
+  untrusted evidence through the existing NVIDIA-primary, Ollama-fallback provider chain.
+  Upload a PDF with an instruction such as `Extract this PDF table to Excel` to receive
+  a validated XLSX attachment. The original PDF remains unchanged.
 - XLSX workbooks can also be reformatted through the same Send flow without an AI
   provider. Ask for center/left/right alignment, smart professional formatting,
   header styling, auto-fit column widths, wrapped text, borders, or frozen headers.

@@ -233,6 +233,30 @@ class ChatRepository:
             if row.structured_summary or row.raw_text
         ]
 
+    def get_document_contexts(
+        self, db: Session, session_id: int, limit: int = 4
+    ) -> list[tuple[str, str]]:
+        """Return recent original uploads as deterministic evidence for chat Q&A."""
+        rows = (
+            db.query(ChatDocumentAttachment)
+            .filter(
+                ChatDocumentAttachment.session_id == session_id,
+                ChatDocumentAttachment.kind == "uploaded",
+                ChatDocumentAttachment.raw_text.isnot(None),
+            )
+            .order_by(
+                ChatDocumentAttachment.created_at.desc(),
+                ChatDocumentAttachment.id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        return [
+            (str(row.filename), str(row.raw_text))
+            for row in reversed(rows)
+            if str(row.raw_text or "").strip()
+        ]
+
     def get_spreadsheet_operation_source(
         self, db: Session, session_id: int
     ) -> ChatDocumentAttachment | None:

@@ -2,7 +2,6 @@ import asyncio
 import csv
 import logging
 import re
-from codecs import BOM_UTF16_BE, BOM_UTF16_LE
 from contextlib import aclosing, closing
 from copy import copy, deepcopy
 from enum import Enum
@@ -17,23 +16,23 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 from openpyxl.worksheet.worksheet import Worksheet
 from pypdf import PdfReader
-from pypdf.errors import DependencyError
 from pypdfium2 import PdfDocument
 
 from app.config import settings
 from app.schemas.chat import ChatHistoryMessage
 from app.services.chat_service import ChatModelUnavailableError, ChatService
 from app.services.document.document_generation_service import DocumentGenerationService
+from app.services.document.document_reading_service import DocumentReadingService
+from app.services.document.exceptions import (
+    DocumentProcessingUnavailableError as DocumentProcessingUnavailableError,
+)
+from app.services.document.exceptions import InvalidDocumentError
+from app.services.document.extraction_models import ExtractedDocument
+from app.services.pdf.pdf_reader import PdfDocumentReader
+from app.services.spreadsheet.excel_reader import ExcelReader
+from app.services.word.docx_reader import DocxReader
 
 logger = logging.getLogger(__name__)
-
-
-class InvalidDocumentError(ValueError):
-    pass
-
-
-class DocumentProcessingUnavailableError(RuntimeError):
-    pass
 
 
 class SpreadsheetOperation(str, Enum):
@@ -57,51 +56,23 @@ class ChatDocumentService:
     def __init__(self, chat_service: ChatService | None = None):
         self.chat_service = chat_service or ChatService()
         self.document_generator = DocumentGenerationService()
+        # Pass the module-level factories through so existing dependency-injection
+        # and regression tests continue to exercise the extracted readers.
+        self.document_reader = DocumentReadingService(
+            pdf_reader=PdfDocumentReader(
+                pdf_reader_factory=PdfReader,
+                pdf_document_factory=PdfDocument,
+                ocr_engine=pytesseract,
+            ),
+            docx_reader=DocxReader(document_factory=Document),
+            excel_reader=ExcelReader(workbook_loader=load_workbook),
+        )
 
     def extract(self, file_data: bytes, filename: str) -> str:
-        extension = Path(filename).suffix.lower()
-        try:
-            if extension == ".pdf":
-                text = self._extract_pdf(file_data)
-            elif extension == ".docx":
-                document = Document(BytesIO(file_data))
-                text = "\n".join(paragraph.text for paragraph in document.paragraphs)
-                for table in document.tables:
-                    text += "\n" + "\n".join(
-                        "\t".join(cell.text for cell in row.cells) for row in table.rows
-                    )
-            elif extension == ".xlsx":
-                sheets = []
-                with closing(
-                    load_workbook(BytesIO(file_data), read_only=True, data_only=True)
-                ) as workbook:
-                    for sheet in workbook.worksheets:
-                        rows = "\n".join(
-                            "\t".join("" if value is None else str(value) for value in row)
-                            for row in sheet.iter_rows(values_only=True)
-                            if any(value is not None for value in row)
-                        )
-                        if rows.strip():
-                            sheets.append(f"[{sheet.title}]\n{rows}")
-                text = "\n".join(sheets)
-            elif extension == ".csv":
-                decoded = self._decode_text(file_data)
-                text = "\n".join("\t".join(row) for row in csv.reader(StringIO(decoded)))
-            elif extension == ".txt":
-                text = self._decode_text(file_data)
-            else:
-                raise InvalidDocumentError("Unsupported document type.")
-        except (InvalidDocumentError, DocumentProcessingUnavailableError):
-            raise
-        except DependencyError as error:
-            raise DocumentProcessingUnavailableError(
-                "The server cannot read this PDF's encryption. Upload an unencrypted copy."
-            ) from error
-        except Exception as error:
-            raise InvalidDocumentError("The document is corrupt or could not be read.") from error
-        if not text.strip():
-            raise InvalidDocumentError("The document does not contain readable text.")
-        return text.strip()
+        return self.extract_document(file_data, filename).text
+
+    def extract_document(self, file_data: bytes, filename: str) -> ExtractedDocument:
+        return self.document_reader.read(file_data, filename)
 
     @staticmethod
     def is_spreadsheet_update_request(instruction: str | None) -> bool:
@@ -1053,6 +1024,29 @@ class ChatDocumentService:
         )
         return await self._complete(prompt, [])
 
+    async def analyze(self, extracted: ExtractedDocument, instruction: str | None) -> str:
+        """Use the shared text-provider chain only after deterministic extraction."""
+        return await self.summarize(extracted.text, instruction)
+
+    def extract_tables_to_excel(
+        self, extracted: ExtractedDocument, source_filename: str
+    ) -> tuple[bytes, str, str]:
+        if extracted.document_type.value != "pdf":
+            raise InvalidDocumentError("Table-to-Excel extraction requires a PDF document.")
+        if not extracted.tables:
+            raise InvalidDocumentError(
+                "I couldn't find a structured table in this PDF. "
+                "Scanned or borderless tables may need OCR-aware table recognition."
+            )
+        source_stem = Path(source_filename).stem or "document"
+        try:
+            generated = self.document_generator.generate_excel_from_tables(
+                list(extracted.tables), requested_filename=f"{source_stem}-tables.xlsx"
+            )
+        except ValueError as error:
+            raise InvalidDocumentError(str(error)) from error
+        return generated.file_data, generated.filename, generated.content_type
+
     async def generate_content(
         self,
         instruction: str,
@@ -1144,60 +1138,9 @@ class ChatDocumentService:
 
     @staticmethod
     def _decode_text(file_data: bytes) -> str:
-        encoding = "utf-16" if file_data.startswith((BOM_UTF16_LE, BOM_UTF16_BE)) else "utf-8-sig"
-        try:
-            text = file_data.decode(encoding)
-        except UnicodeDecodeError as error:
-            raise InvalidDocumentError(
-                "The text file uses an unsupported encoding. Save it as UTF-8 or UTF-16 and upload it again."
-            ) from error
-        if any(ord(character) < 32 and character not in "\t\n\r\f" for character in text):
-            raise InvalidDocumentError("The file contains binary data instead of readable text.")
-        return text
+        from app.services.document.text_reader import TextDocumentReader
+
+        return TextDocumentReader.decode(file_data)
 
     def _extract_pdf(self, file_data: bytes) -> str:
-        reader = PdfReader(BytesIO(file_data))
-        if reader.is_encrypted and not reader.decrypt(""):
-            raise InvalidDocumentError(
-                "This PDF is password-protected. Remove its password and upload it again."
-            )
-        pages = []
-        ocr_indexes = []
-        for index, source_page in enumerate(reader.pages):
-            text = source_page.extract_text() or ""
-            pages.append(text)
-            # Retain searchable pages and only render pages that need OCR.
-            # A page with no content stream is physically empty, so skip it.
-            if not text.strip() and source_page.get_contents() is not None:
-                ocr_indexes.append(index)
-        if not ocr_indexes:
-            return "\n".join(pages)
-        try:
-            with closing(PdfDocument(file_data)) as pdf:
-                for index in ocr_indexes:
-                    with closing(pdf[index]) as page:
-                        with closing(page.render(scale=2)) as bitmap:
-                            # PDFium can create a Pillow image directly; to_numpy()
-                            # requires an optional dependency that we do not install.
-                            with closing(bitmap.to_pil()) as image:
-                                pages[index] = pytesseract.image_to_string(
-                                    image, timeout=self.OCR_PAGE_TIMEOUT_SECONDS
-                                )
-        except pytesseract.TesseractNotFoundError as error:
-            raise DocumentProcessingUnavailableError(
-                "This PDF contains scanned pages, but OCR is unavailable on the server. "
-                "Upload a searchable PDF or ask the administrator to enable OCR."
-            ) from error
-        except pytesseract.TesseractError as error:
-            raise DocumentProcessingUnavailableError(
-                "The server could not read the scanned PDF using OCR. "
-                "Upload a searchable PDF or contact the administrator."
-            ) from error
-        except RuntimeError as error:
-            if "timeout" in str(error).lower():
-                raise DocumentProcessingUnavailableError(
-                    "Reading the scanned PDF took too long. "
-                    "Try a smaller document or upload a searchable PDF."
-                ) from error
-            raise
-        return "\n".join(pages)
+        return self.document_reader.pdf_reader.read(file_data).text

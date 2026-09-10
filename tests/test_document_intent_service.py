@@ -103,7 +103,7 @@ def test_registry_resolves_canonical_names_and_aliases_to_one_definition():
     assert canonical is not None
     assert alias is canonical
     assert canonical.operation == DocumentOperation.EXPAND_DISH_BY_DIETARY_CATEGORY
-    assert len(registry.operations()) == 8
+    assert len(registry.operations()) == 9
 
 
 def test_filter_parameters_are_extracted_by_existing_spreadsheet_logic():

@@ -24,12 +24,14 @@ from app.services.chat_document_service import (
     SpreadsheetOperation,
 )
 from app.services.chat_service import ChatModelUnavailableError
+from app.services.document.document_intent_service import DocumentIntentService
 from app.services.profile_service import ProfileService
 from app.utils.auth_dependency import get_current_user
 
 router = APIRouter(prefix="/chat/documents", tags=["AI Chat Documents"])
 repository = ChatRepository()
 service = ChatDocumentService()
+intent_service = DocumentIntentService(document_service=service)
 profile_service = ProfileService()
 logger = logging.getLogger(__name__)
 MAX_CHAT_DOCUMENT_BYTES = 15 * 1024 * 1024
@@ -39,6 +41,9 @@ DOCUMENT_TYPES = {
     ".txt": "text/plain",
     ".csv": "text/csv",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
 }
 
 
@@ -46,7 +51,8 @@ DOCUMENT_TYPES = {
     "",
     response_model=ChatDocumentResponse,
     summary="Upload a chat document",
-    description="Read and save a PDF, DOCX, TXT, CSV, or XLSX before optional AI analysis. "
+    description="Read and save a PDF, DOCX, XLSX, CSV, PPTX, TXT, or Markdown file before "
+    "optional AI analysis. "
     "For XLSX formatting or category-sheet instructions, and XLSX/CSV column-filter instructions, "
     "a revised workbook is "
     "returned "
@@ -78,9 +84,12 @@ async def upload_document(
     if extension == ".csv":
         # Windows/browser CSV associations also commonly use these MIME types.
         accepted_types.update({"application/vnd.ms-excel", "text/plain"})
+    if extension in {".md", ".markdown"}:
+        accepted_types.add("text/plain")
     if expected_type is None or content_type not in accepted_types:
         raise HTTPException(
-            status_code=415, detail="Upload a PDF, DOCX, TXT, CSV, or XLSX document."
+            status_code=415,
+            detail="Upload a PDF, DOCX, XLSX, CSV, PPTX, TXT, or Markdown document.",
         )
     try:
         file_data = await file.read(MAX_CHAT_DOCUMENT_BYTES + 1)
@@ -98,6 +107,11 @@ async def upload_document(
             raise HTTPException(status_code=404, detail="Chat session not found")
     try:
         raw_text = await asyncio.to_thread(service.extract, file_data, filename)
+        extracted = (
+            await asyncio.to_thread(service.extract_document, file_data, filename)
+            if intent_service.is_table_to_excel_request(message)
+            else None
+        )
         operation = service.spreadsheet_operation(message)
         if (
             operation == SpreadsheetOperation.EXPAND_DISH_BY_DIETARY_CATEGORY
@@ -108,6 +122,11 @@ async def upload_document(
             await asyncio.to_thread(service.format_spreadsheet, file_data, filename, message or "")
             if (extension == ".xlsx" and operation is not None)
             or (extension == ".csv" and operation == SpreadsheetOperation.FILTER_COLUMN)
+            else None
+        )
+        table_to_excel_output = (
+            await asyncio.to_thread(service.extract_tables_to_excel, extracted, filename)
+            if extracted is not None
             else None
         )
     except InvalidDocumentError as error:
@@ -186,6 +205,39 @@ async def upload_document(
             raise HTTPException(
                 status_code=500,
                 detail="The generated Excel workbook could not be saved. Please try again.",
+            ) from error
+    elif table_to_excel_output is not None:
+        assert extracted is not None
+        updated_data, updated_filename, updated_content_type = table_to_excel_output
+        response_text = (
+            f"Done. I extracted {len(extracted.tables)} table"
+            f"{'s' if len(extracted.tables) != 1 else ''} from {filename} and created an "
+            "Excel workbook. The original PDF is unchanged. Use Download to get the workbook."
+        )
+        setattr(bot_record, "content", response_text)
+        try:
+            response_attachment = repository.add_document_attachment(
+                db,
+                session_id=resolved_session_id,
+                message_id=cast(int, bot_record.id),
+                filename=updated_filename,
+                content_type=updated_content_type,
+                file_data=updated_data,
+                kind="generated",
+                raw_text=raw_text,
+                structured_summary=response_text,
+            )
+            db.commit()
+            db.refresh(response_attachment)
+        except Exception as error:
+            db.rollback()
+            logger.exception(
+                "chat.pdf_table_storage_failed",
+                extra={"user_id": user_id, "session_id": resolved_session_id},
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="The extracted Excel workbook could not be saved. Please try again.",
             ) from error
     elif analyze:
         try:

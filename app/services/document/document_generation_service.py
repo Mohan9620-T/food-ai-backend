@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.services.document.document_operation_registry import DocumentType
 from app.services.document.document_validation_service import DocumentValidationService
+from app.services.document.extraction_models import ExtractedTable
 from app.services.pdf.pdf_generator import PdfGenerator
 from app.services.powerpoint.pptx_generator import PptxGenerator
 from app.services.spreadsheet.csv_generator import CsvGenerator
@@ -82,6 +83,24 @@ class DocumentGenerationService:
         return GeneratedDocument(
             file_data=file_data,
             filename=self.safe_filename(requested_filename, document_type),
+            content_type=self.MIME_TYPES[document_type],
+            document_type=document_type,
+        )
+
+    def generate_excel_from_tables(
+        self,
+        tables: list[ExtractedTable],
+        *,
+        requested_filename: str | None = None,
+    ) -> GeneratedDocument:
+        file_data = self.excel_generator.generate_tables(tables)
+        document_type = DocumentType.XLSX
+        self.validator.validate(file_data, document_type)
+        return GeneratedDocument(
+            file_data=file_data,
+            filename=self.safe_filename(
+                requested_filename or "extracted-tables.xlsx", document_type
+            ),
             content_type=self.MIME_TYPES[document_type],
             document_type=document_type,
         )

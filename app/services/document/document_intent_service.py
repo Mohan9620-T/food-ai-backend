@@ -71,6 +71,12 @@ class DocumentIntentService:
         r"\b(?:summari[sz]e|analy[sz]e|review|give\s+(?:me\s+)?(?:a\s+)?summary)\b",
         re.IGNORECASE,
     )
+    _TABLE_TO_EXCEL_PATTERN = re.compile(
+        r"(?:\b(?:extract|copy|export|create|make)\b.*\b(?:table|rows?|data)\b.*"
+        r"\b(?:excel|xlsx|workbook)\b|\b(?:excel|xlsx|workbook)\b.*"
+        r"\b(?:from|using)\b.*\bpdf\b.*\b(?:table|rows?|data)\b)",
+        re.IGNORECASE,
+    )
     _DOCUMENT_WORD_PATTERN = re.compile(
         r"\b(?:document|file|pdf|excel|spreadsheet|workbook|csv|word|docx|pptx|"
         r"powerpoint|presentation|slides?|txt|text|markdown)\b",
@@ -98,6 +104,18 @@ class DocumentIntentService:
         resolved_input = self._safe_input_filename(input_file or self._filename_in(instruction))
         input_type = self.registry.document_type_from_filename(resolved_input)
         mentioned_types = self.registry.document_types_in_text(instruction)
+
+        if self.is_table_to_excel_request(instruction):
+            definition = self.registry.get(DocumentOperation.EXTRACT_TABLE_TO_EXCEL)
+            if definition is None:
+                raise UnsupportedDocumentOperationError("PDF table extraction is not registered.")
+            return self._build_intent(
+                instruction,
+                definition,
+                resolved_input,
+                input_type or DocumentType.PDF,
+                DocumentType.XLSX,
+            )
 
         spreadsheet_operation = self.document_service.spreadsheet_operation(instruction)
         if spreadsheet_operation is not None:
@@ -155,6 +173,10 @@ class DocumentIntentService:
             document_type,
             output_type,
         )
+
+    @classmethod
+    def is_table_to_excel_request(cls, instruction: str | None) -> bool:
+        return bool(instruction and cls._TABLE_TO_EXCEL_PATTERN.search(instruction))
 
     def _build_intent(
         self,
