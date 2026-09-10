@@ -78,3 +78,50 @@ class ChatDocumentGenerateRequest(BaseModel):
         if self.mode == "ai":
             self.instruction = self.instruction.strip()
         return self
+
+
+class ChatDocumentPipelineRequest(BaseModel):
+    session_id: int = Field(gt=0)
+    instruction: str = Field(min_length=1, max_length=4000)
+    source_document_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def normalize_instruction(self):
+        self.instruction = self.instruction.strip()
+        if not self.instruction:
+            raise ValueError("Describe the document steps you want me to perform.")
+        return self
+
+
+class ChatDocumentPipelineStepOut(BaseModel):
+    position: int
+    operation: str
+    source_document_id: int
+    output_document_id: int
+    filename: str
+
+
+class ChatDocumentPipelineResponse(ChatDocumentResponse):
+    latest_document_id: int
+    steps: list[ChatDocumentPipelineStepOut]
+
+
+class ChatDocumentAutomationRequest(BaseModel):
+    session_id: int = Field(gt=0)
+    instruction: str = Field(min_length=1, max_length=4000)
+    source_document_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def normalize_instruction(self):
+        self.instruction = self.instruction.strip()
+        if not self.instruction:
+            raise ValueError("Describe the document result you want.")
+        return self
+
+
+class ChatDocumentAutomationResponse(BaseModel):
+    response: str
+    session_id: int
+    status: Literal["done", "clarification_required", "partial", "failed"]
+    attachments: list[ChatDocumentAttachmentOut] = Field(default_factory=list)
+    latest_document_id: int | None = None

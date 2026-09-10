@@ -67,6 +67,8 @@ NVIDIA_CHAT_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_CHAT_TIMEOUT_SECONDS", "60
 NVIDIA_CHAT_MAX_TOKENS = int(os.getenv("NVIDIA_CHAT_MAX_TOKENS", "1024"))
 # Total AI time for a document, including primary/fallback and streamed tokens.
 DOCUMENT_AI_TIMEOUT_SECONDS = float(os.getenv("DOCUMENT_AI_TIMEOUT_SECONDS", "45"))
+# Optional explicit path to soffice. When empty, common install paths and PATH are checked.
+LIBREOFFICE_BINARY = os.getenv("LIBREOFFICE_BINARY", "").strip()
 NVIDIA_TEST_CHAT_MODEL = os.getenv(
     "NVIDIA_TEST_CHAT_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"
 ).strip()

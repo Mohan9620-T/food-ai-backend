@@ -12,7 +12,12 @@ from sqlalchemy.orm import Session
 from app.database.database import get_db
 from app.repositories.chat_repository import ChatRepository
 from app.schemas.chat import (
+    ChatDocumentAutomationRequest,
+    ChatDocumentAutomationResponse,
     ChatDocumentGenerateRequest,
+    ChatDocumentPipelineRequest,
+    ChatDocumentPipelineResponse,
+    ChatDocumentPipelineStepOut,
     ChatDocumentResponse,
     ChatHistoryMessage,
     ChatSpreadsheetOperationRequest,
@@ -24,7 +29,20 @@ from app.services.chat_document_service import (
     SpreadsheetOperation,
 )
 from app.services.chat_service import ChatModelUnavailableError
-from app.services.document.document_intent_service import DocumentIntentService
+from app.services.conversion.document_conversion_service import (
+    UnsupportedDocumentConversionError,
+)
+from app.services.document.document_automation_service import (
+    AvailableDocument,
+    DocumentAutomationPlanningError,
+    DocumentAutomationService,
+)
+from app.services.document.document_intent_service import DocumentIntentError, DocumentIntentService
+from app.services.document.document_pipeline_service import (
+    DocumentPipelineService,
+    PipelineDocument,
+)
+from app.services.document.document_validation_service import GeneratedDocumentValidationError
 from app.services.profile_service import ProfileService
 from app.utils.auth_dependency import get_current_user
 
@@ -32,6 +50,13 @@ router = APIRouter(prefix="/chat/documents", tags=["AI Chat Documents"])
 repository = ChatRepository()
 service = ChatDocumentService()
 intent_service = DocumentIntentService(document_service=service)
+pipeline_service = DocumentPipelineService(
+    intent_service=intent_service,
+    document_service=service,
+)
+automation_service = DocumentAutomationService(
+    pipeline_service=pipeline_service,
+)
 profile_service = ProfileService()
 logger = logging.getLogger(__name__)
 MAX_CHAT_DOCUMENT_BYTES = 15 * 1024 * 1024
@@ -501,6 +526,329 @@ async def generate_document(
     )
     return ChatDocumentResponse(
         response=content, session_id=resolved_session_id, attachment=attachment
+    )
+
+
+@router.post(
+    "/pipeline",
+    response_model=ChatDocumentPipelineResponse,
+    summary="Run an ordered document pipeline",
+    description=(
+        "Execute explicit document operations in order. Separate steps with 'then'. Each step "
+        "uses an explicitly named file or the chat's persisted latest_document_id, and every "
+        "output is reopened and validated before it becomes the next input."
+    ),
+    responses={
+        404: {"description": "Chat session or explicitly selected document was not found."},
+        422: {"description": "Missing input, invalid step, or unsupported conversion."},
+        503: {"description": "A required converter such as LibreOffice is unavailable."},
+    },
+)
+async def run_document_pipeline(
+    payload: ChatDocumentPipelineRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = int(current_user["sub"])
+    session = repository.get_session(db, payload.session_id, user_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    source = None
+    if payload.source_document_id is not None:
+        source = repository.get_document_for_user(db, payload.source_document_id, user_id)
+        if source is None or int(source.session_id) != payload.session_id:
+            raise HTTPException(status_code=404, detail="Source document not found in this chat")
+    else:
+        named_input = intent_service.filename_in(payload.instruction)
+        if named_input is not None:
+            source = repository.get_document_by_filename_for_user(
+                db,
+                session_id=payload.session_id,
+                filename=named_input,
+                user_id=user_id,
+            )
+        if source is None:
+            source = repository.get_latest_document_for_user(db, payload.session_id, user_id)
+    if source is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Upload or select a document in this chat before running the pipeline.",
+        )
+
+    try:
+        plan = pipeline_service.plan(
+            payload.instruction,
+            input_filename=cast(str, source.filename),
+        )
+    except (DocumentIntentError, UnsupportedDocumentConversionError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    repository.add_message(db, payload.session_id, "user", payload.instruction)
+    current_source = source
+    response_steps: list[ChatDocumentPipelineStepOut] = []
+    final_attachment = None
+    try:
+        for step in plan:
+            if step.explicitly_named_input:
+                named_source = repository.get_document_by_filename_for_user(
+                    db,
+                    session_id=payload.session_id,
+                    filename=cast(str, step.intent.input_file),
+                    user_id=user_id,
+                )
+                if named_source is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Document '{step.intent.input_file}' was not found in this chat.",
+                    )
+                current_source = named_source
+            source_id = cast(int, current_source.id)
+            result = await asyncio.to_thread(
+                pipeline_service.execute_step,
+                step,
+                PipelineDocument(
+                    file_data=cast(bytes, current_source.file_data),
+                    filename=cast(str, current_source.filename),
+                ),
+            )
+            raw_text = await asyncio.to_thread(
+                service.extract,
+                result.document.file_data,
+                result.document.filename,
+            )
+            _, final_attachment = repository.save_generated_document(
+                db,
+                session_id=payload.session_id,
+                bot_content=f"Step {step.position} complete. {result.summary}",
+                filename=result.document.filename,
+                content_type=result.document.content_type,
+                file_data=result.document.file_data,
+                raw_text=raw_text,
+                structured_summary=result.summary,
+            )
+            current_source = final_attachment
+            response_steps.append(
+                ChatDocumentPipelineStepOut(
+                    position=step.position,
+                    operation=step.intent.operation.value,
+                    source_document_id=source_id,
+                    output_document_id=cast(int, final_attachment.id),
+                    filename=result.document.filename,
+                )
+            )
+    except HTTPException:
+        raise
+    except (DocumentIntentError, UnsupportedDocumentConversionError, InvalidDocumentError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except GeneratedDocumentValidationError as error:
+        raise HTTPException(
+            status_code=422,
+            detail=f"A pipeline output failed validation and was not saved: {error}",
+        ) from error
+    except DocumentProcessingUnavailableError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    assert final_attachment is not None
+    response_text = (
+        f"Done. Completed {len(response_steps)} document step"
+        f"{'s' if len(response_steps) != 1 else ''} in order. "
+        f"The final file is {final_attachment.filename}."
+    )
+    logger.info(
+        "chat.document_pipeline_completed",
+        extra={
+            "user_id": user_id,
+            "session_id": payload.session_id,
+            "step_count": len(response_steps),
+            "latest_document_id": final_attachment.id,
+        },
+    )
+    return ChatDocumentPipelineResponse(
+        response=response_text,
+        session_id=payload.session_id,
+        attachment=final_attachment,
+        latest_document_id=cast(int, final_attachment.id),
+        steps=response_steps,
+    )
+
+
+@router.post(
+    "/automate",
+    response_model=ChatDocumentAutomationResponse,
+    summary="Automate document changes from natural language",
+    description=(
+        "Build and validate an execution plan from a natural-language request, then run it "
+        "through the deterministic document pipeline. Ambiguous requests return one clarifying "
+        "question. Successful requests return only a simple completion message and the final file."
+    ),
+    responses={
+        404: {"description": "Chat session or selected source document was not found."},
+        503: {"description": "The configured text provider could not build a plan."},
+    },
+)
+async def automate_document(
+    payload: ChatDocumentAutomationRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = int(current_user["sub"])
+    session = repository.get_session(db, payload.session_id, user_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    documents = repository.get_documents_for_user(db, payload.session_id, user_id)
+    selected_source = None
+    if payload.source_document_id is not None:
+        selected_source = repository.get_document_for_user(db, payload.source_document_id, user_id)
+        if selected_source is None or int(selected_source.session_id) != payload.session_id:
+            raise HTTPException(status_code=404, detail="Source document not found in this chat")
+    else:
+        selected_source = repository.get_latest_document_for_user(db, payload.session_id, user_id)
+        if selected_source is None and documents:
+            selected_source = documents[-1]
+
+    selected_id = int(selected_source.id) if selected_source is not None else None
+    available_documents = tuple(
+        AvailableDocument(
+            document_id=int(document.id),
+            filename=str(document.filename),
+            document_type=document_type,
+            is_latest=int(document.id) == selected_id,
+        )
+        for document in documents
+        if (
+            document_type := intent_service.registry.document_type_from_filename(
+                str(document.filename)
+            )
+        )
+        is not None
+    )
+    try:
+        plan = await asyncio.to_thread(
+            automation_service.plan,
+            payload.instruction,
+            available_documents,
+            explicit_source=payload.source_document_id is not None,
+        )
+    except ChatModelUnavailableError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except (
+        DocumentAutomationPlanningError,
+        DocumentIntentError,
+        UnsupportedDocumentConversionError,
+    ) as error:
+        failure = f"I couldn't safely automate that request. {error}"
+        repository.add_turn(db, payload.session_id, payload.instruction, failure)
+        return ChatDocumentAutomationResponse(
+            response=failure,
+            session_id=payload.session_id,
+            status="failed",
+        )
+
+    if plan.status == "clarification_required":
+        question = cast(str, plan.clarifying_question)
+        repository.add_turn(db, payload.session_id, payload.instruction, question)
+        return ChatDocumentAutomationResponse(
+            response=question,
+            session_id=payload.session_id,
+            status="clarification_required",
+        )
+
+    assert selected_source is not None
+    repository.add_message(db, payload.session_id, "user", payload.instruction)
+    current_source = selected_source
+    completed_attachments = []
+    failure_reason = None
+    try:
+        for index, step in enumerate(plan.steps):
+            if step.explicitly_named_input:
+                named_source = repository.get_document_by_filename_for_user(
+                    db,
+                    session_id=payload.session_id,
+                    filename=cast(str, step.intent.input_file),
+                    user_id=user_id,
+                )
+                if named_source is None:
+                    raise InvalidDocumentError(
+                        "The selected document is no longer available in this chat."
+                    )
+                current_source = named_source
+            result = await asyncio.to_thread(
+                pipeline_service.execute_step,
+                step,
+                PipelineDocument(
+                    file_data=cast(bytes, current_source.file_data),
+                    filename=cast(str, current_source.filename),
+                ),
+            )
+            raw_text = await asyncio.to_thread(
+                service.extract,
+                result.document.file_data,
+                result.document.filename,
+            )
+            is_final = index == len(plan.steps) - 1
+            _, generated = repository.save_generated_document(
+                db,
+                session_id=payload.session_id,
+                bot_content="Done." if is_final else "Document automation intermediate output.",
+                filename=result.document.filename,
+                content_type=result.document.content_type,
+                file_data=result.document.file_data,
+                raw_text=raw_text,
+                structured_summary=result.summary,
+                is_internal=not is_final,
+            )
+            completed_attachments.append(generated)
+            current_source = generated
+    except (
+        DocumentIntentError,
+        UnsupportedDocumentConversionError,
+        InvalidDocumentError,
+        GeneratedDocumentValidationError,
+        DocumentProcessingUnavailableError,
+    ) as error:
+        failure_reason = str(error)
+    except Exception:
+        logger.exception(
+            "chat.document_automation_failed",
+            extra={"user_id": user_id, "session_id": payload.session_id},
+        )
+        failure_reason = "A document could not be generated, validated, or stored."
+
+    if failure_reason is not None:
+        status: Literal["partial", "failed"] = "partial" if completed_attachments else "failed"
+        response = (
+            f"I completed part of your request, but couldn't finish it. {failure_reason}"
+            if status == "partial"
+            else f"I couldn't complete the requested document changes. {failure_reason}"
+        )
+        repository.add_message(db, payload.session_id, "bot", response)
+        latest = completed_attachments[-1] if completed_attachments else None
+        return ChatDocumentAutomationResponse(
+            response=response,
+            session_id=payload.session_id,
+            status=status,
+            attachments=[latest] if latest is not None else [],
+            latest_document_id=int(latest.id) if latest is not None else selected_id,
+        )
+
+    final_attachment = completed_attachments[-1]
+    logger.info(
+        "chat.document_automation_completed",
+        extra={
+            "user_id": user_id,
+            "session_id": payload.session_id,
+            "document_id": final_attachment.id,
+            "step_count": len(plan.steps),
+        },
+    )
+    return ChatDocumentAutomationResponse(
+        response="Done.",
+        session_id=payload.session_id,
+        status="done",
+        attachments=[final_attachment],
+        latest_document_id=cast(int, final_attachment.id),
     )
 
 

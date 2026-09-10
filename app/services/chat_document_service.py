@@ -445,13 +445,20 @@ class ChatDocumentService:
             )
 
         sheet, header_row, code_header, label_header, category_headers = selected
+        # ``Worksheet.max_column`` scans every populated cell. Calling it once per
+        # source row turns a normal-sized dish master into an accidental O(rows *
+        # cells) operation, which kept the upload request pending for minutes.
+        # Cache the dimension once before scanning the source rows.
+        source_max_row = sheet.max_row
+        source_max_column = sheet.max_column
         source_rows = [
-            row_number
-            for row_number in range(header_row + 1, sheet.max_row + 1)
-            if any(
-                sheet.cell(row=row_number, column=column).value is not None
-                for column in range(1, sheet.max_column + 1)
+            row
+            for row in sheet.iter_rows(
+                min_row=header_row + 1,
+                max_row=source_max_row,
+                max_col=source_max_column,
             )
+            if any(cell.value is not None for cell in row)
         ]
         if not source_rows:
             raise InvalidDocumentError(
@@ -478,23 +485,21 @@ class ChatDocumentService:
         for row_number in range(1, header_row + 1):
             target_row += 1
             cls._copy_spreadsheet_row(tuple(sheet[row_number]), target, target_row)
-        for row_number in source_rows:
+        for source_row in source_rows:
+            row_number = source_row[0].row
             active_categories = [
                 key
                 for key, _, _, _ in cls.DISH_CATEGORY_DEFINITIONS
-                if cls._is_active_dish_category(
-                    sheet.cell(row=row_number, column=category_headers[key].column).value
-                )
+                if cls._is_active_dish_category(source_row[category_headers[key].column - 1].value)
             ]
             if not active_categories:
                 target_row += 1
-                cls._copy_spreadsheet_row(tuple(sheet[row_number]), target, target_row)
+                cls._copy_spreadsheet_row(source_row, target, target_row)
                 generated_row_count += 1
                 continue
 
-            source_row = tuple(sheet[row_number])
-            original_code = sheet.cell(row=row_number, column=code_header.column).value
-            original_label = sheet.cell(row=row_number, column=label_header.column).value
+            original_code = source_row[code_header.column - 1].value
+            original_label = source_row[label_header.column - 1].value
             base_code = cls._dish_code_base(original_code)
             base_label = cls._dish_label_base(original_label)
             for category_key in active_categories:
@@ -903,12 +908,15 @@ class ChatDocumentService:
             target_cell = target_sheet.cell(row=target_row, column=source_cell.column)
             target_cell.value = source_cell.value
             if source_cell.has_style:
-                target_cell.font = copy(source_cell.font)
-                target_cell.fill = copy(source_cell.fill)
-                target_cell.border = copy(source_cell.border)
-                target_cell.alignment = copy(source_cell.alignment)
-                target_cell.number_format = source_cell.number_format
-                target_cell.protection = copy(source_cell.protection)
+                if source_cell.parent.parent is target_sheet.parent:
+                    target_cell._style = source_cell._style
+                else:
+                    target_cell.font = copy(source_cell.font)
+                    target_cell.fill = copy(source_cell.fill)
+                    target_cell.border = copy(source_cell.border)
+                    target_cell.alignment = copy(source_cell.alignment)
+                    target_cell.number_format = source_cell.number_format
+                    target_cell.protection = copy(source_cell.protection)
             if source_cell.hyperlink:
                 target_cell.hyperlink = copy(source_cell.hyperlink)
             if source_cell.comment:

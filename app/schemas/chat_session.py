@@ -37,7 +37,7 @@ class ChatSessionOut(BaseModel):
 
 
 class ChatSessionDetailOut(ChatSessionOut):
-    messages: list[ChatMessageOut] = []
+    messages: list[ChatMessageOut] = Field(default_factory=list, validation_alias="public_messages")
 
 
 class ChatSessionCreate(BaseModel):

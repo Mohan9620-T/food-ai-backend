@@ -1,7 +1,7 @@
 import base64
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import relationship
 
 from app.database.database import Base
@@ -19,6 +19,12 @@ class ChatSession(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    latest_document_id = Column(
+        Integer,
+        ForeignKey("chat_document_attachments.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+        index=True,
+    )
 
     messages = relationship(
         "ChatMessageRecord",
@@ -26,6 +32,11 @@ class ChatSession(Base):
         cascade="all, delete-orphan",
         order_by="ChatMessageRecord.created_at",
     )
+
+    @property
+    def public_messages(self):
+        """Messages that are safe to expose in chat history."""
+        return [message for message in self.messages if not message.is_internal]
 
 
 class ChatMessageRecord(Base):
@@ -37,6 +48,7 @@ class ChatMessageRecord(Base):
     content = Column(Text, nullable=False)
     image_data = Column(LargeBinary, nullable=True)
     image_content_type = Column(String(50), nullable=True)
+    is_internal = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     session = relationship("ChatSession", back_populates="messages")

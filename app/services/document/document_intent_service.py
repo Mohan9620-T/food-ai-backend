@@ -178,6 +178,11 @@ class DocumentIntentService:
     def is_table_to_excel_request(cls, instruction: str | None) -> bool:
         return bool(instruction and cls._TABLE_TO_EXCEL_PATTERN.search(instruction))
 
+    @classmethod
+    def filename_in(cls, instruction: str) -> str | None:
+        """Return a safe basename explicitly named in an instruction, if present."""
+        return cls._safe_input_filename(cls._filename_in(instruction))
+
     def _build_intent(
         self,
         instruction: str,

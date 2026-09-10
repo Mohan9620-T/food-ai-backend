@@ -13,7 +13,10 @@ class ChatRepository:
     ) -> list[ChatMessageRecord]:
         messages = (
             db.query(ChatMessageRecord)
-            .filter(ChatMessageRecord.session_id == session_id)
+            .filter(
+                ChatMessageRecord.session_id == session_id,
+                ChatMessageRecord.is_internal.is_(False),
+            )
             .order_by(ChatMessageRecord.created_at.desc(), ChatMessageRecord.id.desc())
             .limit(limit)
             .all()
@@ -165,9 +168,60 @@ class ChatRepository:
             structured_summary=structured_summary,
         )
         db.add(attachment)
+        db.flush()
+        session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+        if session is not None:
+            session.latest_document_id = attachment.id
         db.commit()
         db.refresh(attachment)
         return attachment
+
+    def save_generated_document(
+        self,
+        db: Session,
+        *,
+        session_id: int,
+        bot_content: str,
+        filename: str,
+        content_type: str,
+        file_data: bytes,
+        raw_text: str | None = None,
+        structured_summary: str | None = None,
+        is_internal: bool = False,
+    ) -> tuple[ChatMessageRecord, ChatDocumentAttachment]:
+        """Commit a completion message, generated file, and latest pointer atomically."""
+        bot_record = ChatMessageRecord(
+            session_id=session_id,
+            sender="bot",
+            content=bot_content,
+            is_internal=is_internal,
+        )
+        try:
+            db.add(bot_record)
+            db.flush()
+            attachment = ChatDocumentAttachment(
+                session_id=session_id,
+                message_id=bot_record.id,
+                filename=filename,
+                content_type=content_type,
+                file_size=len(file_data),
+                file_data=file_data,
+                kind="generated",
+                raw_text=raw_text,
+                structured_summary=structured_summary,
+            )
+            db.add(attachment)
+            db.flush()
+            session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            if session is not None:
+                session.latest_document_id = attachment.id
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        db.refresh(bot_record)
+        db.refresh(attachment)
+        return bot_record, attachment
 
     def save_document_upload(
         self,
@@ -198,6 +252,10 @@ class ChatRepository:
                 raw_text=raw_text,
             )
             db.add(attachment)
+            db.flush()
+            session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            if session is not None:
+                session.latest_document_id = attachment.id
             db.commit()
         except Exception:
             db.rollback()
@@ -213,6 +271,54 @@ class ChatRepository:
             db.query(ChatDocumentAttachment)
             .join(ChatSession, ChatSession.id == ChatDocumentAttachment.session_id)
             .filter(ChatDocumentAttachment.id == document_id, ChatSession.user_id == user_id)
+            .first()
+        )
+
+    def get_documents_for_user(
+        self, db: Session, session_id: int, user_id: int
+    ) -> list[ChatDocumentAttachment]:
+        return (
+            db.query(ChatDocumentAttachment)
+            .join(ChatSession, ChatSession.id == ChatDocumentAttachment.session_id)
+            .filter(
+                ChatDocumentAttachment.session_id == session_id,
+                ChatSession.user_id == user_id,
+            )
+            .order_by(
+                ChatDocumentAttachment.created_at.asc(),
+                ChatDocumentAttachment.id.asc(),
+            )
+            .all()
+        )
+
+    def get_latest_document_for_user(
+        self, db: Session, session_id: int, user_id: int
+    ) -> ChatDocumentAttachment | None:
+        session = self.get_session(db, session_id, user_id)
+        if session is None or session.latest_document_id is None:
+            return None
+        return self.get_document_for_user(db, int(session.latest_document_id), user_id)
+
+    def get_document_by_filename_for_user(
+        self,
+        db: Session,
+        *,
+        session_id: int,
+        filename: str,
+        user_id: int,
+    ) -> ChatDocumentAttachment | None:
+        return (
+            db.query(ChatDocumentAttachment)
+            .join(ChatSession, ChatSession.id == ChatDocumentAttachment.session_id)
+            .filter(
+                ChatDocumentAttachment.session_id == session_id,
+                ChatSession.user_id == user_id,
+                ChatDocumentAttachment.filename.ilike(filename),
+            )
+            .order_by(
+                ChatDocumentAttachment.created_at.desc(),
+                ChatDocumentAttachment.id.desc(),
+            )
             .first()
         )
 
@@ -339,7 +445,9 @@ class ChatRepository:
         if message_index is None or messages[message_index].sender != "user":
             return False
         db.delete(messages[message_index])
-        if message_index + 1 < len(messages) and messages[message_index + 1].sender == "bot":
-            db.delete(messages[message_index + 1])
+        for following in messages[message_index + 1 :]:
+            if following.sender == "user":
+                break
+            db.delete(following)
         db.commit()
         return True
