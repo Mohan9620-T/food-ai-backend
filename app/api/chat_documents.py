@@ -15,11 +15,13 @@ from app.schemas.chat import (
     ChatDocumentGenerateRequest,
     ChatDocumentResponse,
     ChatHistoryMessage,
+    ChatSpreadsheetOperationRequest,
 )
 from app.services.chat_document_service import (
     ChatDocumentService,
     DocumentProcessingUnavailableError,
     InvalidDocumentError,
+    SpreadsheetOperation,
 )
 from app.services.chat_service import ChatModelUnavailableError
 from app.services.profile_service import ProfileService
@@ -45,7 +47,9 @@ DOCUMENT_TYPES = {
     response_model=ChatDocumentResponse,
     summary="Upload a chat document",
     description="Read and save a PDF, DOCX, TXT, CSV, or XLSX before optional AI analysis. "
-    "For XLSX formatting or category-sheet instructions, a revised workbook is returned "
+    "For XLSX formatting or category-sheet instructions, and XLSX/CSV column-filter instructions, "
+    "a revised workbook is "
+    "returned "
     "without requiring AI. "
     "An AI failure returns the saved file with analysis_status=unavailable, not an upload error. "
     "Use analyze=false to save/extract without AI. Scanned PDF pages require Tesseract. "
@@ -94,9 +98,16 @@ async def upload_document(
             raise HTTPException(status_code=404, detail="Chat session not found")
     try:
         raw_text = await asyncio.to_thread(service.extract, file_data, filename)
+        operation = service.spreadsheet_operation(message)
+        if (
+            operation == SpreadsheetOperation.EXPAND_DISH_BY_DIETARY_CATEGORY
+            and extension != ".xlsx"
+        ):
+            raise InvalidDocumentError("Dish category row expansion requires an XLSX workbook.")
         spreadsheet_output = (
             await asyncio.to_thread(service.format_spreadsheet, file_data, filename, message or "")
-            if extension == ".xlsx" and service.is_spreadsheet_update_request(message)
+            if (extension == ".xlsx" and operation is not None)
+            or (extension == ".csv" and operation == SpreadsheetOperation.FILTER_COLUMN)
             else None
         )
     except InvalidDocumentError as error:
@@ -127,24 +138,55 @@ async def upload_document(
     if spreadsheet_output is not None:
         updated_data, updated_filename, actions = spreadsheet_output
         response_text = (
-            f"I updated all worksheets in {filename} and preserved the workbook data.\n\n"
+            f"Done — I split the item list from {filename} category-wise and created a new "
+            "Excel workbook with a separate sheet for each category.\n\n"
+            if operation == SpreadsheetOperation.SPLIT_BY_CATEGORY
+            else (
+                f"Done. I added the requested column filter and generated the updated Excel "
+                f"workbook from {filename}.\n\n"
+                if operation == SpreadsheetOperation.FILTER_COLUMN
+                else (
+                    "Done. I transformed the dish master Excel file into category-specific "
+                    "rows for Regular, Easy to Chew, Soft & Bite, Minced & Moist, and Pureed, "
+                    "and generated a new Excel workbook.\n\n"
+                    if operation == SpreadsheetOperation.EXPAND_DISH_BY_DIETARY_CATEGORY
+                    else f"Done — I created a revised Excel workbook from {filename}.\n\n"
+                )
+            )
+        )
+        response_text += (
             f"Applied: {', '.join(actions)}.\n\n"
-            "Use Download to get the revised Excel workbook."
+            "The original upload is unchanged. Use Download to get the generated workbook."
         )
         setattr(bot_record, "content", response_text)
-        response_attachment = repository.add_document_attachment(
-            db,
-            session_id=resolved_session_id,
-            message_id=cast(int, bot_record.id),
-            filename=updated_filename,
-            content_type=DOCUMENT_TYPES[".xlsx"],
-            file_data=updated_data,
-            kind="generated",
-            raw_text=raw_text,
-            structured_summary=response_text,
-        )
-        db.commit()
-        db.refresh(response_attachment)
+        try:
+            response_attachment = repository.add_document_attachment(
+                db,
+                session_id=resolved_session_id,
+                message_id=cast(int, bot_record.id),
+                filename=updated_filename,
+                content_type=DOCUMENT_TYPES[".xlsx"],
+                file_data=updated_data,
+                kind="generated",
+                raw_text=raw_text,
+                structured_summary=response_text,
+            )
+            db.commit()
+            db.refresh(response_attachment)
+        except Exception as error:
+            db.rollback()
+            logger.exception(
+                "chat.spreadsheet_storage_failed",
+                extra={
+                    "user_id": user_id,
+                    "session_id": resolved_session_id,
+                    "generated_filename": updated_filename,
+                },
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="The generated Excel workbook could not be saved. Please try again.",
+            ) from error
     elif analyze:
         try:
             response_text = await service.summarize(raw_text, message)
@@ -188,10 +230,123 @@ async def upload_document(
 
 
 @router.post(
+    "/spreadsheet",
+    response_model=ChatDocumentResponse,
+    summary="Update the current chat spreadsheet",
+    description="Apply a deterministic spreadsheet operation to the latest generated XLSX in "
+    "the session, or to the latest uploaded spreadsheet when no generated XLSX exists.",
+    responses={
+        404: {"description": "Chat session not found or not owned by this user."},
+        422: {"description": "No source workbook, unsupported request, or invalid workbook."},
+    },
+)
+async def update_session_spreadsheet(
+    payload: ChatSpreadsheetOperationRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = int(current_user["sub"])
+    session = repository.get_session(db, payload.session_id, user_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    operation = service.spreadsheet_operation(payload.instruction)
+    if operation not in {
+        SpreadsheetOperation.FILTER_COLUMN,
+        SpreadsheetOperation.EXPAND_DISH_BY_DIETARY_CATEGORY,
+    }:
+        raise HTTPException(
+            status_code=422,
+            detail="This spreadsheet request is not supported.",
+        )
+    source = repository.get_spreadsheet_operation_source(db, payload.session_id)
+    if source is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Upload an Excel spreadsheet first, then ask me to add the filter.",
+        )
+    source_filename = cast(str, source.filename)
+    if (
+        operation == SpreadsheetOperation.EXPAND_DISH_BY_DIETARY_CATEGORY
+        and Path(source_filename).suffix.casefold() != ".xlsx"
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Dish category row expansion requires an XLSX workbook.",
+        )
+    try:
+        updated_data, updated_filename, actions = await asyncio.to_thread(
+            service.format_spreadsheet,
+            cast(bytes, source.file_data),
+            source_filename,
+            payload.instruction,
+        )
+    except InvalidDocumentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    if operation == SpreadsheetOperation.EXPAND_DISH_BY_DIETARY_CATEGORY:
+        response_text = (
+            "Done. I transformed the dish master Excel file into category-specific rows for "
+            "Regular, Easy to Chew, Soft & Bite, Minced & Moist, and Pureed, and generated a "
+            "new Excel workbook.\n\n"
+            f"Applied: {', '.join(actions)}.\n\n"
+            "The source workbook is unchanged. Use Download to get the generated workbook."
+        )
+    else:
+        response_text = (
+            "Done. I added the requested column filter and generated the updated Excel workbook.\n\n"
+            f"Applied: {', '.join(actions)}.\n\n"
+            "The source workbook is unchanged. Use Download to get the generated workbook."
+        )
+    _, bot_record = repository.add_turn(db, payload.session_id, payload.instruction, response_text)
+    try:
+        attachment = repository.add_document_attachment(
+            db,
+            session_id=payload.session_id,
+            message_id=cast(int, bot_record.id),
+            filename=updated_filename,
+            content_type=DOCUMENT_TYPES[".xlsx"],
+            file_data=updated_data,
+            kind="generated",
+            raw_text=cast(str | None, source.raw_text),
+            structured_summary=response_text,
+        )
+    except Exception as error:
+        db.rollback()
+        logger.exception(
+            "chat.spreadsheet_storage_failed",
+            extra={
+                "user_id": user_id,
+                "session_id": payload.session_id,
+                "generated_filename": updated_filename,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="The generated Excel workbook could not be saved. Please try again.",
+        ) from error
+    logger.info(
+        "chat.spreadsheet_updated",
+        extra={
+            "user_id": user_id,
+            "session_id": payload.session_id,
+            "source_document_id": source.id,
+            "document_id": attachment.id,
+        },
+    )
+    return ChatDocumentResponse(
+        response=response_text,
+        session_id=payload.session_id,
+        attachment=attachment,
+        analysis_status="skipped",
+    )
+
+
+@router.post(
     "/generate",
     response_model=ChatDocumentResponse,
     summary="Generate a chat document",
-    description="Create a PDF or Word document from an instruction and optional existing chat. "
+    description="Create a PDF, DOCX, XLSX, CSV, PPTX, TXT, or Markdown document from an "
+    "instruction and optional existing chat. "
     "Omit session_id to create a new chat; uploading a file first is not required. "
     "Use mode=export to save instruction text directly without calling any AI provider. "
     "In export mode, source_document_id instead exports the full extracted text of a saved "
@@ -258,7 +413,11 @@ async def generate_document(
                 payload.instruction, summaries, history, profile
             )
         file_data, filename, content_type = await asyncio.to_thread(
-            service.render, content, payload.output_format, plain_text=payload.mode == "export"
+            service.render,
+            content,
+            payload.output_format,
+            plain_text=payload.mode == "export",
+            requested_filename=payload.filename,
         )
     except ChatModelUnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error

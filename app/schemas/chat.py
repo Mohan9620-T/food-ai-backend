@@ -38,6 +38,18 @@ class ChatDocumentResponse(ChatResponse):
     analysis_status: Literal["complete", "unavailable", "skipped"] | None = None
 
 
+class ChatSpreadsheetOperationRequest(BaseModel):
+    session_id: int = Field(gt=0)
+    instruction: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def normalize_instruction(self):
+        self.instruction = self.instruction.strip()
+        if not self.instruction:
+            raise ValueError("Describe the spreadsheet update you want me to apply.")
+        return self
+
+
 class ChatDocumentGenerateRequest(BaseModel):
     session_id: int | None = Field(default=None, gt=0)
     mode: Literal["ai", "export"] = Field(
@@ -46,10 +58,17 @@ class ChatDocumentGenerateRequest(BaseModel):
     )
     source_document_id: int | None = Field(default=None, gt=0)
     instruction: str = Field(default="", max_length=2000)
-    output_format: Literal["pdf", "docx"] = "pdf"
+    output_format: Literal["pdf", "docx", "xlsx", "csv", "pptx", "txt", "markdown"] = "pdf"
+    filename: str | None = Field(
+        default=None,
+        max_length=255,
+        description="Optional output filename. Paths and unsafe characters are removed.",
+    )
 
     @model_validator(mode="after")
     def validate_source(self):
+        if self.filename is not None:
+            self.filename = self.filename.strip() or None
         if self.source_document_id is not None:
             if self.mode != "export":
                 raise ValueError("source_document_id is only supported for direct file export.")

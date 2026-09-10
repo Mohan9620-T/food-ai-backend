@@ -14,7 +14,9 @@ import { SpeechRecognitionService } from '../../services/speech-recognition';
 class ChatServiceStub {
   readonly activeConversationId = signal('conversation-1');
   readonly pendingConversationId = signal<string | null>(null);
-  readonly isResponding = computed(() => this.pendingConversationId() === this.activeConversationId());
+  readonly isResponding = computed(
+    () => this.pendingConversationId() === this.activeConversationId(),
+  );
   readonly editingMessage = signal<null>(null);
   readonly analyzingImage = signal(false);
   readonly processingDocument = signal(false);
@@ -23,19 +25,46 @@ class ChatServiceStub {
   readonly finishResponse = vi.fn((conversationId: string) => {
     if (this.pendingConversationId() === conversationId) this.pendingConversationId.set(null);
   });
-  readonly startResponse = vi.fn((conversationId: string) => this.pendingConversationId.set(conversationId));
+  readonly startResponse = vi.fn((conversationId: string) =>
+    this.pendingConversationId.set(conversationId),
+  );
   readonly getActiveConversationId = vi.fn(() => this.activeConversationId());
   readonly getActiveSessionId = vi.fn((): number | null => null);
   readonly getHistory = vi.fn(() => []);
   readonly getReferenceHistory = vi.fn(() => []);
-  readonly getPendingResponse = vi.fn(() => this.pendingConversationId() ? {
-    conversationId: this.pendingConversationId(), request: { message: '', history: [], referenceHistory: [] }
-  } : null);
+  readonly getPendingResponse = vi.fn(() =>
+    this.pendingConversationId()
+      ? {
+          conversationId: this.pendingConversationId(),
+          request: { message: '', history: [], referenceHistory: [] },
+        }
+      : null,
+  );
   readonly addMessage = vi.fn();
   readonly stopStreaming = vi.fn();
   readonly streamMessage = vi.fn(() => Promise.resolve());
-  readonly uploadDocument = vi.fn((): Observable<ChatResponse> => of({ response: 'Imported', session_id: 12 }));
-  readonly generateDocument = vi.fn((): Observable<ChatResponse> => of({ response: 'Created', session_id: 12 }));
+  readonly uploadDocument = vi.fn((): Observable<ChatResponse> =>
+    of({ response: 'Imported', session_id: 12 }),
+  );
+  readonly isSpreadsheetOperationRequest = vi.fn((message: string) =>
+    /\b(?:filter|expand|transform|separate rows|split each dish)\b/i.test(message),
+  );
+  readonly updateSpreadsheet = vi.fn((): Observable<ChatResponse> =>
+    of({
+      response: 'Updated workbook',
+      session_id: 12,
+      attachment: {
+        id: 9,
+        filename: 'items_filter_updated.xlsx',
+        content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        file_size: 100,
+        kind: 'generated',
+      },
+    }),
+  );
+  readonly generateDocument = vi.fn((): Observable<ChatResponse> =>
+    of({ response: 'Created', session_id: 12 }),
+  );
 }
 
 class SpeechRecognitionServiceStub {
@@ -61,11 +90,11 @@ describe('ChatInput image drag and drop', () => {
   beforeEach(async () => {
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
-      value: vi.fn(() => 'blob:test-image')
+      value: vi.fn(() => 'blob:test-image'),
     });
     Object.defineProperty(URL, 'revokeObjectURL', {
       configurable: true,
-      value: vi.fn()
+      value: vi.fn(),
     });
 
     await TestBed.configureTestingModule({
@@ -74,29 +103,34 @@ describe('ChatInput image drag and drop', () => {
         { provide: ChatService, useClass: ChatServiceStub },
         { provide: AuthService, useValue: { getToken: () => 'token' } },
         { provide: SpeechRecognitionService, useClass: SpeechRecognitionServiceStub },
-        { provide: Router, useValue: { navigate: vi.fn() } }
-      ]
+        { provide: Router, useValue: { navigate: vi.fn() } },
+      ],
     }).compileComponents();
 
     fixture = TestBed.createComponent(ChatInput);
     component = fixture.componentInstance;
-    speechService = TestBed.inject(SpeechRecognitionService) as unknown as SpeechRecognitionServiceStub;
+    speechService = TestBed.inject(
+      SpeechRecognitionService,
+    ) as unknown as SpeechRecognitionServiceStub;
     fixture.detectChanges();
   });
 
   function dropEvent(files: File[]): DragEvent {
     return {
       preventDefault: vi.fn(),
-      dataTransfer: { types: ['Files'], files, dropEffect: 'none' }
+      dataTransfer: { types: ['Files'], files, dropEffect: 'none' },
     } as unknown as DragEvent;
   }
 
   it('renders the message composer and attachment control', () => {
     expect(fixture.nativeElement.querySelector('textarea[aria-label="Message"]')).toBeTruthy();
-    expect(fixture.nativeElement.querySelector('button[aria-label="Attach image or document"]')).toBeTruthy();
+    expect(
+      fixture.nativeElement.querySelector('button[aria-label="Attach image or document"]'),
+    ).toBeTruthy();
     expect(fixture.nativeElement.querySelector('button[aria-label="Create document"]')).toBeNull();
-    expect(fixture.nativeElement.querySelector('textarea[aria-label="Message"]').placeholder)
-      .toContain('paste content');
+    expect(
+      fixture.nativeElement.querySelector('textarea[aria-label="Message"]').placeholder,
+    ).toContain('paste content');
   });
 
   it('sends pasted multi-line content through normal chat', () => {
@@ -110,8 +144,81 @@ describe('ChatInput image drag and drop', () => {
     expect(component.message).toBe('');
   });
 
+  it('routes a filter follow-up through the spreadsheet operation endpoint', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    chatService.getActiveSessionId.mockReturnValue(12);
+    component.message = 'Please add a filter only to the Category* column.';
+
+    component.sendMessage();
+
+    expect(chatService.updateSpreadsheet).toHaveBeenCalledExactlyOnceWith(
+      12,
+      'Please add a filter only to the Category* column.',
+      'conversation-1',
+    );
+    expect(chatService.streamMessage).not.toHaveBeenCalled();
+    expect(component.message).toBe('');
+    expect(component.imageError).toBeNull();
+  });
+
+  it('routes a dish category expansion follow-up through the spreadsheet endpoint', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    chatService.getActiveSessionId.mockReturnValue(12);
+    const instruction = 'Expand each dish row based on the five texture categories.';
+    component.message = instruction;
+
+    component.sendMessage();
+
+    expect(chatService.updateSpreadsheet).toHaveBeenCalledExactlyOnceWith(
+      12,
+      instruction,
+      'conversation-1',
+    );
+    expect(chatService.streamMessage).not.toHaveBeenCalled();
+    expect(component.message).toBe('');
+    expect(component.imageError).toBeNull();
+  });
+
+  it('keeps a filter request editable when no spreadsheet has been uploaded', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    component.message = 'Add a filter to the Category* column.';
+
+    component.sendMessage();
+    fixture.detectChanges();
+
+    expect(chatService.updateSpreadsheet).not.toHaveBeenCalled();
+    expect(chatService.streamMessage).not.toHaveBeenCalled();
+    expect(component.message).toBe('Add a filter to the Category* column.');
+    expect(component.imageError).toContain('Upload an Excel spreadsheet first');
+  });
+
+  it('shows a clean filter failure and restores the request for retry', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    const update = new Subject<ChatResponse>();
+    chatService.getActiveSessionId.mockReturnValue(12);
+    chatService.updateSpreadsheet.mockReturnValueOnce(update);
+    component.message = 'Add a filter to the Category* column.';
+
+    component.sendMessage();
+    update.error(
+      new HttpErrorResponse({
+        status: 422,
+        error: { detail: "I couldn't find a Category* column in the uploaded Excel file." },
+      }),
+    );
+    fixture.detectChanges();
+
+    expect(component.message).toBe('Add a filter to the Category* column.');
+    expect(component.imageError).toBe(
+      "I couldn't find a Category* column in the uploaded Excel file.",
+    );
+    expect(chatService.finishResponse).toHaveBeenCalledWith('conversation-1');
+  });
+
   it('renders the mic only when speech recognition is supported', () => {
-    expect(fixture.nativeElement.querySelector('button[aria-label="Start voice input"]')).toBeTruthy();
+    expect(
+      fixture.nativeElement.querySelector('button[aria-label="Start voice input"]'),
+    ).toBeTruthy();
 
     (component as unknown as { speechSupported: boolean }).speechSupported = false;
     fixture.detectChanges();
@@ -143,8 +250,9 @@ describe('ChatInput image drag and drop', () => {
 
     speechService.onInterim('hello');
     expect(component.message).toBe('Already typed hello');
-    expect((fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement).value)
-      .toBe('Already typed hello');
+    expect((fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement).value).toBe(
+      'Already typed hello',
+    );
 
     speechService.onFinal('hello ');
     speechService.onInterim('world');
@@ -161,30 +269,44 @@ describe('ChatInput image drag and drop', () => {
   });
 
   it('displays the stream failure in its original conversation without overwriting another composer', async () => {
-    const detail = 'The response reached its output limit before it finished. Please retry with a shorter request.';
+    const detail =
+      'The response reached its output limit before it finished. Please retry with a shorter request.';
     const chatService = TestBed.inject(ChatService);
     chatService.streamMessage = vi.fn().mockRejectedValue(new ChatStreamError(detail));
     chatService.getActiveConversationId = () => 'another-conversation';
     chatService.addMessage = vi.fn();
     const request = { message: 'Original question', history: [], referenceHistory: [] };
 
-    await (component as unknown as {
-      requestResponse: (conversationId: string, request: ChatRequest) => Promise<void>;
-    }).requestResponse('original-conversation', request);
+    await (
+      component as unknown as {
+        requestResponse: (conversationId: string, request: ChatRequest) => Promise<void>;
+      }
+    ).requestResponse('original-conversation', request);
 
-    expect(chatService.addMessage).toHaveBeenCalledWith({ sender: 'bot', text: `Response interrupted: ${detail}` }, 'original-conversation');
+    expect(chatService.addMessage).toHaveBeenCalledWith(
+      { sender: 'bot', text: `Response interrupted: ${detail}` },
+      'original-conversation',
+    );
     expect(chatService.finishResponse).toHaveBeenCalledExactlyOnceWith('original-conversation');
     expect(component.message).toBe('');
   });
 
   it('does not append a failure message when the user stops the response', async () => {
     const chatService = TestBed.inject(ChatService);
-    chatService.streamMessage = vi.fn().mockRejectedValue(new DOMException('Stopped', 'AbortError'));
+    chatService.streamMessage = vi
+      .fn()
+      .mockRejectedValue(new DOMException('Stopped', 'AbortError'));
     chatService.addMessage = vi.fn();
 
-    await (component as unknown as {
-      requestResponse: (conversationId: string, request: ChatRequest) => Promise<void>;
-    }).requestResponse('original-conversation', { message: 'Question', history: [], referenceHistory: [] });
+    await (
+      component as unknown as {
+        requestResponse: (conversationId: string, request: ChatRequest) => Promise<void>;
+      }
+    ).requestResponse('original-conversation', {
+      message: 'Question',
+      history: [],
+      referenceHistory: [],
+    });
 
     expect(chatService.addMessage).not.toHaveBeenCalled();
     expect(chatService.finishResponse).toHaveBeenCalledExactlyOnceWith('original-conversation');
@@ -192,13 +314,21 @@ describe('ChatInput image drag and drop', () => {
 
   it('does not duplicate an interruption notice already attached to the partial response', async () => {
     const chatService = TestBed.inject(ChatService);
-    chatService.streamMessage = vi.fn().mockRejectedValue(new ChatStreamError('Please retry.', true));
+    chatService.streamMessage = vi
+      .fn()
+      .mockRejectedValue(new ChatStreamError('Please retry.', true));
     chatService.getActiveConversationId = () => 'original-conversation';
     chatService.addMessage = vi.fn();
 
-    await (component as unknown as {
-      requestResponse: (conversationId: string, request: ChatRequest) => Promise<void>;
-    }).requestResponse('original-conversation', { message: 'Question', history: [], referenceHistory: [] });
+    await (
+      component as unknown as {
+        requestResponse: (conversationId: string, request: ChatRequest) => Promise<void>;
+      }
+    ).requestResponse('original-conversation', {
+      message: 'Question',
+      history: [],
+      referenceHistory: [],
+    });
 
     expect(chatService.addMessage).not.toHaveBeenCalled();
     expect(chatService.finishResponse).toHaveBeenCalledExactlyOnceWith('original-conversation');
@@ -207,7 +337,7 @@ describe('ChatInput image drag and drop', () => {
 
   it('attaches a valid image dropped from the file system', () => {
     const image = new File([new Uint8Array([1, 2, 3])], 'meal.png', {
-      type: 'image/png'
+      type: 'image/png',
     });
     const event = dropEvent([image]);
 
@@ -244,21 +374,26 @@ describe('ChatInput image drag and drop', () => {
     expect(component.imageError).toBe('Drop one image or document at a time.');
   });
 
-  it.each(['PDF', 'DOCX', 'TXT', 'CSV', 'XLSX'])('accepts a %s document without a MIME type through the picker and drop', (extension) => {
-    const file = new File(['document bytes'], `notes.${extension}`);
-    const picker = fixture.nativeElement.querySelector('input[type="file"]') as HTMLInputElement;
-    Object.defineProperty(picker, 'files', { value: [file], configurable: true });
-    picker.dispatchEvent(new Event('change'));
-    fixture.detectChanges();
-    expect(component.selectedDocument).toBe(file);
-    expect(fixture.nativeElement.querySelector('.document-preview').textContent).toContain(file.name);
-    expect(picker.value).toBe('');
+  it.each(['PDF', 'DOCX', 'TXT', 'CSV', 'XLSX'])(
+    'accepts a %s document without a MIME type through the picker and drop',
+    (extension) => {
+      const file = new File(['document bytes'], `notes.${extension}`);
+      const picker = fixture.nativeElement.querySelector('input[type="file"]') as HTMLInputElement;
+      Object.defineProperty(picker, 'files', { value: [file], configurable: true });
+      picker.dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+      expect(component.selectedDocument).toBe(file);
+      expect(fixture.nativeElement.querySelector('.document-preview').textContent).toContain(
+        file.name,
+      );
+      expect(picker.value).toBe('');
 
-    component.removeDocument();
-    component.handleDrop(dropEvent([file]));
-    expect(component.selectedDocument).toBe(file);
-    expect(component.imageError).toBeNull();
-  });
+      component.removeDocument();
+      component.handleDrop(dropEvent([file]));
+      expect(component.selectedDocument).toBe(file);
+      expect(component.imageError).toBeNull();
+    },
+  );
 
   it('keeps image and document attachments mutually exclusive', () => {
     const file = new File(['%PDF'], 'notes.pdf', { type: 'application/pdf' });
@@ -303,14 +438,19 @@ describe('ChatInput image drag and drop', () => {
     component.message = 'Read all pages';
     component.sendMessage();
     expect(component.isSending()).toBe(true);
-    upload.error(new HttpErrorResponse({ status: 422, error: { detail: 'The PDF is password protected.' } }));
+    upload.error(
+      new HttpErrorResponse({ status: 422, error: { detail: 'The PDF is password protected.' } }),
+    );
     expect(component.selectedDocument).toBe(file);
     expect(component.message).toBe('Read all pages');
     expect(component.imageError).toBe('The PDF is password protected.');
     expect(component.isSending()).toBe(false);
     component.sendMessage();
     expect(chatService.uploadDocument).toHaveBeenCalledTimes(2);
-    expect(chatService.addMessage).toHaveBeenCalledExactlyOnceWith({ sender: 'user', text: 'Read all pages' }, 'conversation-1');
+    expect(chatService.addMessage).toHaveBeenCalledExactlyOnceWith(
+      { sender: 'user', text: 'Read all pages' },
+      'conversation-1',
+    );
     expect(component.selectedDocument).toBeNull();
     expect(component.message).toBe('');
     expect(component.imageError).toBeNull();
@@ -631,7 +771,9 @@ describe('ChatInput image drag and drop', () => {
     component.sendMessage();
     chatService.activeConversationId.set('conversation-2');
     component.message = 'Another question';
-    upload.error(new HttpErrorResponse({ status: 422, error: { detail: 'Cannot read this file.' } }));
+    upload.error(
+      new HttpErrorResponse({ status: 422, error: { detail: 'Cannot read this file.' } }),
+    );
     expect(component.imageError).toBeNull();
     expect(component.selectedDocument).toBeNull();
     expect(component.message).toBe('Another question');
@@ -641,4 +783,61 @@ describe('ChatInput image drag and drop', () => {
     expect(component.message).toBe('Read these notes');
   });
 
+  it.each([
+    'The spreadsheet could not be updated. Check that it is a valid XLSX file.',
+    'The spreadsheet is empty and has no item list to split.',
+    'I could not find a Category column in the workbook.',
+    "Worksheet 'Items' has a header row but no item rows to split.",
+    'The generated category workbook failed validation. Please try again.',
+    'The generated Excel workbook could not be saved. Please try again.',
+  ])(
+    'shows a plain actionable Excel error and keeps the workbook available for retry: %s',
+    (errorMessage) => {
+      const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+      const upload = new Subject<ChatResponse>();
+      chatService.uploadDocument.mockReturnValueOnce(upload);
+      const file = new File(['xlsx bytes'], 'items.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      component.handleDrop(dropEvent([file]));
+      component.message = 'Split the item list category-wise into separate sheets';
+
+      component.sendMessage();
+      upload.error(
+        new HttpErrorResponse({
+          status: 422,
+          error: { detail: errorMessage },
+        }),
+      );
+      fixture.detectChanges();
+
+      const alert = fixture.nativeElement.querySelector('[role="alert"]') as HTMLElement;
+      expect(alert.textContent).toContain(errorMessage);
+      expect(alert.textContent).not.toMatch(/\{|"error"|"message"/i);
+      expect(component.selectedDocument).toBe(file);
+      expect(component.message).toBe('Split the item list category-wise into separate sheets');
+    },
+  );
+
+  it('never renders a structured server error object in the chat upload alert', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    const upload = new Subject<ChatResponse>();
+    chatService.uploadDocument.mockReturnValueOnce(upload);
+    component.handleDrop(dropEvent([new File(['xlsx bytes'], 'items.xlsx')]));
+    component.message = 'Split by category';
+
+    component.sendMessage();
+    upload.error(
+      new HttpErrorResponse({
+        status: 500,
+        error: { detail: { error: 'internal_error', message: 'database failed' } },
+      }),
+    );
+    fixture.detectChanges();
+
+    const alert = fixture.nativeElement.querySelector('[role="alert"]') as HTMLElement;
+    expect(alert.textContent).toContain('The document could not be processed.');
+    expect(alert.textContent).not.toContain('internal_error');
+    expect(alert.textContent).not.toContain('database failed');
+  });
 });

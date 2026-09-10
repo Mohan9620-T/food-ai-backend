@@ -308,12 +308,18 @@ App available at \`http://localhost:4200\`.
   Every worksheet and populated cell is retained, formulas remain formulas, and the
   bot returns an `-updated.xlsx` attachment for download. To target one column, use
   wording such as `Center align column B`.
-- To split an item list, make sure the table has a header containing `Category`,
-  then ask `Split the item list category-wise and create a separate sheet for each
-  category`. The original source sheet is retained, and category sheets include the
-  matching header and item rows.
-- PDF/Word generation and direct source export remain backend API capabilities for
+- To split an item list, make sure the table has a header such as `Category`,
+  `Item Category`, or `Category Name`, then ask `Split the item list category-wise
+  and create a separate sheet for each category`. The original uploaded attachment
+  remains unchanged. The generated workbook contains one formatted worksheet per
+  category, including the matching header and item rows.
+- PDF, DOCX, XLSX, CSV, PPTX, TXT, and Markdown generation and direct source export
+  remain backend API capabilities for
   API clients, but they are no longer exposed as a separate chat-composer workflow.
+  Generated output is reopened with its matching parser before it is saved, uses the
+  correct extension and MIME type, and is returned through the normal attachment and
+  download flow. An optional `filename` is sanitized and its extension is replaced with
+  the requested output type.
   A source export uses the **full extracted text**, not the shortened chat preview,
   and does not require AI. The original file's layout/images are not reproduced.
   The current PDF font supports Windows-1252 text. If the text contains unsupported
@@ -338,8 +344,10 @@ App available at \`http://localhost:4200\`.
   without AI. Successful uploads include `analysis_status` (`complete`,
   `unavailable`, or `skipped`). AI failure alone no longer makes an upload return
   503. `POST /chat/documents/generate` accepts
-  `{"mode":"export","source_document_id":123,"output_format":"pdf"}`
-  to export an owned uploaded file's full extracted text; `instruction` may be
+  `{"mode":"export","source_document_id":123,"output_format":"pdf"}`. Supported
+  `output_format` values are `pdf`, `docx`, `xlsx`, `csv`, `pptx`, `txt`, and
+  `markdown`. This request exports an owned uploaded file's full extracted text;
+  `instruction` may be
   omitted. The source must belong to the requested chat when `session_id` is supplied.
 - TXT and CSV files support UTF-8 (with or without a BOM) and BOM-marked UTF-16
   exports. Legacy `.doc` and `.xls`, password-protected files, corrupt files, and

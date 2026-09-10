@@ -1,4 +1,12 @@
-import { computed, effect, inject, Injectable, PLATFORM_ID, signal, untracked } from '@angular/core';
+import {
+  computed,
+  effect,
+  inject,
+  Injectable,
+  PLATFORM_ID,
+  signal,
+  untracked,
+} from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { isPlatformBrowser } from '@angular/common';
 import {
@@ -14,7 +22,7 @@ import {
   switchMap,
   tap,
   toArray,
-  firstValueFrom
+  firstValueFrom,
 } from 'rxjs';
 import {
   ChatConversation,
@@ -22,7 +30,7 @@ import {
   ChatMessage,
   ChatRequest,
   ChatResponse,
-  PendingChatResponse
+  PendingChatResponse,
 } from '../models/chat';
 import { environment } from '../../environments/environment';
 import { AuthService } from './auth';
@@ -52,7 +60,10 @@ interface LegacyConversation {
 }
 
 export class ChatStreamError extends Error {
-  constructor(message: string, readonly displayed = false) {
+  constructor(
+    message: string,
+    readonly displayed = false,
+  ) {
     super(message);
   }
 }
@@ -77,8 +88,14 @@ export class ChatService {
   private readonly activeConversationIdState = signal<string | null>(null);
   private readonly pendingConversationIdState = signal<string | null>(null);
   private readonly pendingResponseState = signal<PendingChatResponse | null>(null);
-  private readonly editingMessageState = signal<{ conversationId: string; index: number; text: string } | null>(null);
-  private readonly retryMessageState = signal<{ conversationId: string; text: string } | null>(null);
+  private readonly editingMessageState = signal<{
+    conversationId: string;
+    index: number;
+    text: string;
+  } | null>(null);
+  private readonly retryMessageState = signal<{ conversationId: string; text: string } | null>(
+    null,
+  );
   private readonly migrationNoticeState = signal<string | null>(null);
   private readonly loadingSessionsState = signal(false);
   private readonly analyzingImageConversationIdsState = signal<ReadonlySet<string>>(new Set());
@@ -101,11 +118,15 @@ export class ChatService {
   });
   readonly processingDocument = computed(() => {
     const conversationId = this.activeConversationIdState();
-    return conversationId !== null && this.processingDocumentConversationIdsState().has(conversationId);
+    return (
+      conversationId !== null && this.processingDocumentConversationIdsState().has(conversationId)
+    );
   });
   readonly isResponding = computed(() => {
     const pendingConversationId = this.pendingConversationIdState();
-    return pendingConversationId !== null && pendingConversationId === this.activeConversationIdState();
+    return (
+      pendingConversationId !== null && pendingConversationId === this.activeConversationIdState()
+    );
   });
 
   constructor() {
@@ -115,40 +136,51 @@ export class ChatService {
       if (!userId) return;
       this.loadingSessionsState.set(true);
 
-      const subscription = this.migrateLegacyConversations(userId).pipe(
-        switchMap(() => this.consolidateExistingSessions(userId)),
-        switchMap(() => this.fetchConversations()),
-        finalize(() => this.loadingSessionsState.set(false))
-      ).subscribe({
-        next: (conversations) => {
-          this.setLoadedConversations(conversations);
-          this.schedulePendingHistoryRefresh();
-        },
-        error: () => {
-          this.migrationNoticeState.set('Chats could not be loaded. Please check the backend connection and retry.');
-          this.ensureDraftConversation();
-        }
-      });
+      const subscription = this.migrateLegacyConversations(userId)
+        .pipe(
+          switchMap(() => this.consolidateExistingSessions(userId)),
+          switchMap(() => this.fetchConversations()),
+          finalize(() => this.loadingSessionsState.set(false)),
+        )
+        .subscribe({
+          next: (conversations) => {
+            this.setLoadedConversations(conversations);
+            this.schedulePendingHistoryRefresh();
+          },
+          error: () => {
+            this.migrationNoticeState.set(
+              'Chats could not be loaded. Please check the backend connection and retry.',
+            );
+            this.ensureDraftConversation();
+          },
+        });
       onCleanup(() => subscription.unsubscribe());
     });
   }
 
-  sendMessage(data: ChatRequest, conversationId = this.activeConversationIdState()): Observable<ChatResponse> {
+  sendMessage(
+    data: ChatRequest,
+    conversationId = this.activeConversationIdState(),
+  ): Observable<ChatResponse> {
     const sessionId = this.toServerSessionId(conversationId);
     const url = sessionId === null ? this.chatUrl : `${this.chatUrl}?session_id=${sessionId}`;
-    return this.http.post<ChatResponse>(url, {
-      message: data.message,
-      history: data.history,
-      reference_history: data.referenceHistory
-    }).pipe(tap((response) => {
-      if (conversationId) this.acceptResponse(conversationId, response);
-    }));
+    return this.http
+      .post<ChatResponse>(url, {
+        message: data.message,
+        history: data.history,
+        reference_history: data.referenceHistory,
+      })
+      .pipe(
+        tap((response) => {
+          if (conversationId) this.acceptResponse(conversationId, response);
+        }),
+      );
   }
 
   sendVisionMessage(
     image: File,
     message: string | null,
-    conversationId = this.activeConversationIdState()
+    conversationId = this.activeConversationIdState(),
   ): Observable<ChatResponse> {
     const form = new FormData();
     form.append('image', image, image.name);
@@ -158,7 +190,7 @@ export class ChatService {
     if (sessionId !== null) form.append('session_id', String(sessionId));
     if (conversationId) {
       this.analyzingImageConversationIdsState.update((conversationIds) =>
-        new Set(conversationIds).add(conversationId)
+        new Set(conversationIds).add(conversationId),
       );
     }
     return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/vision`, form).pipe(
@@ -173,11 +205,16 @@ export class ChatService {
             return updatedIds;
           });
         }
-      })
+      }),
     );
   }
 
-  uploadDocument(file: File, message: string | null, conversationId = this.activeConversationIdState(), analyze = true): Observable<ChatResponse> {
+  uploadDocument(
+    file: File,
+    message: string | null,
+    conversationId = this.activeConversationIdState(),
+    analyze = true,
+  ): Observable<ChatResponse> {
     return defer(() => {
       const form = new FormData();
       form.append('file', file, file.name);
@@ -187,43 +224,100 @@ export class ChatService {
       if (sessionId !== null) form.append('session_id', String(sessionId));
       this.setDocumentProcessing(conversationId, true);
       return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/documents`, form).pipe(
-        tap(response => { if (conversationId) this.acceptResponse(conversationId, response); }),
-        finalize(() => this.setDocumentProcessing(conversationId, false))
+        tap((response) => {
+          if (conversationId) this.acceptResponse(conversationId, response);
+        }),
+        finalize(() => this.setDocumentProcessing(conversationId, false)),
       );
     });
   }
 
-  generateDocument(sessionId: number | null, instruction: string, outputFormat: 'pdf' | 'docx' = 'pdf', conversationId = this.activeConversationIdState(), mode: 'ai' | 'export' = 'ai', sourceDocumentId?: number): Observable<ChatResponse> {
+  isSpreadsheetOperationRequest(message: string): boolean {
+    const normalized = message.trim().toLowerCase();
+    const filterRequest =
+      /\bfilter(?:s|ed|ing)?\b/.test(normalized) &&
+      (/\bcolumn\b/.test(normalized) ||
+        /\bcategory\s*\*?\b/.test(normalized) ||
+        /[`"'][^`"']+[`"']/.test(message));
+    const dishExpansionRequest =
+      /\btransform\s+(?:(?:the|this|my)\s+)?excel\b/.test(normalized) ||
+      /\b(?:expand\s+(?:each|every)?\s*dish\s+rows?|split\s+(?:each|every)\s+dish\s+into\s+rows|one\s+row\s+(?:for\s+every|per)\s+category|separate\s+rows\s+based\s+on)\b/.test(
+        normalized,
+      );
+    return filterRequest || dishExpansionRequest;
+  }
+
+  updateSpreadsheet(
+    sessionId: number,
+    instruction: string,
+    conversationId = this.activeConversationIdState(),
+  ): Observable<ChatResponse> {
     return defer(() => {
       this.setDocumentProcessing(conversationId, true);
-      return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/documents/generate`, {
-        session_id: sessionId, output_format: outputFormat,
-        ...(mode === 'export' && sourceDocumentId !== undefined ? { source_document_id: sourceDocumentId } : { instruction }),
-        ...(mode === 'export' ? { mode } : {})
-      }).pipe(
-        tap(response => { if (conversationId) this.acceptResponse(conversationId, response); }),
-        finalize(() => this.setDocumentProcessing(conversationId, false))
-      );
+      return this.http
+        .post<ChatResponse>(`${environment.apiUrl}/chat/documents/spreadsheet`, {
+          session_id: sessionId,
+          instruction,
+        })
+        .pipe(
+          tap((response) => {
+            if (conversationId) this.acceptResponse(conversationId, response);
+          }),
+          finalize(() => this.setDocumentProcessing(conversationId, false)),
+        );
+    });
+  }
+
+  generateDocument(
+    sessionId: number | null,
+    instruction: string,
+    outputFormat: 'pdf' | 'docx' = 'pdf',
+    conversationId = this.activeConversationIdState(),
+    mode: 'ai' | 'export' = 'ai',
+    sourceDocumentId?: number,
+  ): Observable<ChatResponse> {
+    return defer(() => {
+      this.setDocumentProcessing(conversationId, true);
+      return this.http
+        .post<ChatResponse>(`${environment.apiUrl}/chat/documents/generate`, {
+          session_id: sessionId,
+          output_format: outputFormat,
+          ...(mode === 'export' && sourceDocumentId !== undefined
+            ? { source_document_id: sourceDocumentId }
+            : { instruction }),
+          ...(mode === 'export' ? { mode } : {}),
+        })
+        .pipe(
+          tap((response) => {
+            if (conversationId) this.acceptResponse(conversationId, response);
+          }),
+          finalize(() => this.setDocumentProcessing(conversationId, false)),
+        );
     });
   }
 
   downloadDocument(documentId: number, filename: string): void {
-    this.http.get(`${environment.apiUrl}/chat/documents/${documentId}/download`, { responseType: 'blob' }).subscribe(blob => {
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = filename;
-      anchor.click();
-      URL.revokeObjectURL(url);
-    });
+    this.http
+      .get(`${environment.apiUrl}/chat/documents/${documentId}/download`, { responseType: 'blob' })
+      .subscribe((blob) => {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.click();
+        URL.revokeObjectURL(url);
+      });
   }
 
   private setDocumentProcessing(conversationId: string | null, processing: boolean): void {
     if (!conversationId) return;
-    const count = Math.max(0, (this.documentOperationCounts.get(conversationId) ?? 0) + (processing ? 1 : -1));
+    const count = Math.max(
+      0,
+      (this.documentOperationCounts.get(conversationId) ?? 0) + (processing ? 1 : -1),
+    );
     if (count) this.documentOperationCounts.set(conversationId, count);
     else this.documentOperationCounts.delete(conversationId);
-    this.processingDocumentConversationIdsState.update(ids => {
+    this.processingDocumentConversationIdsState.update((ids) => {
       const updated = new Set(ids);
       if (count) updated.add(conversationId);
       else updated.delete(conversationId);
@@ -256,61 +350,76 @@ export class ChatService {
   }
 
   acceptResponse(conversationId: string, response: ChatResponse): void {
-    this.conversationsState.update((conversations) => conversations.map((conversation) => {
-      if (conversation.id !== conversationId) return conversation;
-      const messages = [...conversation.messages];
-      if (response.attachment?.kind === 'uploaded') {
-        const lastUserIndex = messages.map(message => message.sender).lastIndexOf('user');
-        if (lastUserIndex >= 0) messages[lastUserIndex] = { ...messages[lastUserIndex], attachment: response.attachment };
-      }
-      messages.push({
-        sender: 'bot' as const,
-        text: response.response,
-        attachment: response.attachment?.kind === 'generated' ? response.attachment : undefined,
-        createdAt: new Date().toISOString()
-      });
-      return {
-        ...conversation,
-        sessionId: response.session_id,
-        messages,
-        updatedAt: Date.now()
-      };
-    }).sort((first, second) => second.updatedAt - first.updatedAt));
+    this.conversationsState.update((conversations) =>
+      conversations
+        .map((conversation) => {
+          if (conversation.id !== conversationId) return conversation;
+          const messages = [...conversation.messages];
+          if (response.attachment?.kind === 'uploaded') {
+            const lastUserIndex = messages.map((message) => message.sender).lastIndexOf('user');
+            if (lastUserIndex >= 0)
+              messages[lastUserIndex] = {
+                ...messages[lastUserIndex],
+                attachment: response.attachment,
+              };
+          }
+          messages.push({
+            sender: 'bot' as const,
+            text: response.response,
+            attachment: response.attachment?.kind === 'generated' ? response.attachment : undefined,
+            createdAt: new Date().toISOString(),
+          });
+          return {
+            ...conversation,
+            sessionId: response.session_id,
+            messages,
+            updatedAt: Date.now(),
+          };
+        })
+        .sort((first, second) => second.updatedAt - first.updatedAt),
+    );
     this.persistActiveConversation();
   }
 
   private acceptStreamSession(conversationId: string, sessionId: number): string {
-    this.conversationsState.update((conversations) => conversations.map((conversation) =>
-      conversation.id === conversationId
-        ? {
-            ...conversation,
-            sessionId,
-            messages: [...conversation.messages, { sender: 'bot' as const, text: '', createdAt: new Date().toISOString() }],
-            updatedAt: Date.now()
-          }
-        : conversation
-    ));
+    this.conversationsState.update((conversations) =>
+      conversations.map((conversation) =>
+        conversation.id === conversationId
+          ? {
+              ...conversation,
+              sessionId,
+              messages: [
+                ...conversation.messages,
+                { sender: 'bot' as const, text: '', createdAt: new Date().toISOString() },
+              ],
+              updatedAt: Date.now(),
+            }
+          : conversation,
+      ),
+    );
     this.persistActiveConversation();
     return conversationId;
   }
 
   private appendStreamChunk(conversationId: string, chunk: string): void {
-    this.conversationsState.update((conversations) => conversations.map((conversation) => {
-      if (conversation.id !== conversationId) return conversation;
-      const messages = [...conversation.messages];
-      const lastIndex = messages.length - 1;
-      const lastMessage = messages[lastIndex];
-      if (lastMessage?.sender === 'bot') {
-        messages[lastIndex] = { ...lastMessage, text: lastMessage.text + chunk };
-      }
-      return { ...conversation, messages, updatedAt: Date.now() };
-    }));
+    this.conversationsState.update((conversations) =>
+      conversations.map((conversation) => {
+        if (conversation.id !== conversationId) return conversation;
+        const messages = [...conversation.messages];
+        const lastIndex = messages.length - 1;
+        const lastMessage = messages[lastIndex];
+        if (lastMessage?.sender === 'bot') {
+          messages[lastIndex] = { ...lastMessage, text: lastMessage.text + chunk };
+        }
+        return { ...conversation, messages, updatedAt: Date.now() };
+      }),
+    );
   }
 
   private async openStream(
     data: ChatRequest,
     conversationId: string,
-    signal: AbortSignal
+    signal: AbortSignal,
   ): Promise<Response> {
     const sessionId = this.toServerSessionId(conversationId);
     const query = sessionId === null ? '' : `?session_id=${sessionId}`;
@@ -320,20 +429,20 @@ export class ChatService {
       signal,
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
         message: data.message,
         history: data.history,
-        reference_history: data.referenceHistory
-      })
+        reference_history: data.referenceHistory,
+      }),
     });
   }
 
   private async consumeStream(
     body: ReadableStream<Uint8Array>,
     draftConversationId: string,
-    signal: AbortSignal
+    signal: AbortSignal,
   ): Promise<void> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
@@ -341,7 +450,9 @@ export class ChatService {
     let conversationId = draftConversationId;
     let completed = false;
     let closed = false;
-    const cancelReader = () => { void reader.cancel().catch(() => undefined); };
+    const cancelReader = () => {
+      void reader.cancel().catch(() => undefined);
+    };
     const consumeLine = (line: string): void => {
       if (!line.trim() || completed) return;
       const event = JSON.parse(line) as {
@@ -356,7 +467,7 @@ export class ChatService {
         this.appendStreamChunk(conversationId, event.content);
       } else if (event.type === 'error') {
         throw new ChatStreamError(
-          event.message?.trim() || 'The response could not be generated. Please try again.'
+          event.message?.trim() || 'The response could not be generated. Please try again.',
         );
       } else if (event.type === 'done') {
         completed = true;
@@ -380,18 +491,24 @@ export class ChatService {
         }
       }
       if (!completed) {
-        throw new ChatStreamError('The connection ended before the response finished. Please retry.');
+        throw new ChatStreamError(
+          'The connection ended before the response finished. Please retry.',
+        );
       }
     } catch (error) {
       signal.throwIfAborted();
-      const message = error instanceof ChatStreamError
-        ? error.message
-        : 'The connection ended before the response finished. Please retry.';
-      const conversation = this.conversationsState().find(item => item.id === conversationId);
+      const message =
+        error instanceof ChatStreamError
+          ? error.message
+          : 'The connection ended before the response finished. Please retry.';
+      const conversation = this.conversationsState().find((item) => item.id === conversationId);
       const lastMessage = conversation?.messages.at(-1);
       const displayed = lastMessage?.sender === 'bot';
       if (displayed) {
-        this.appendStreamChunk(conversationId, `${lastMessage.text ? '\n\n> ' : ''}Response interrupted: ${message}`);
+        this.appendStreamChunk(
+          conversationId,
+          `${lastMessage.text ? '\n\n> ' : ''}Response interrupted: ${message}`,
+        );
       }
       throw new ChatStreamError(message, displayed);
     } finally {
@@ -435,17 +552,25 @@ export class ChatService {
 
   addMessage(message: ChatMessage, conversationId = this.activeConversationIdState()): void {
     if (!conversationId) return;
-    this.conversationsState.update((conversations) => conversations.map((conversation) => {
-      if (conversation.id !== conversationId) return conversation;
-      return {
-        ...conversation,
-        title: conversation.messages.length === 0 && message.sender === 'user'
-          ? this.toTitle(message.text)
-          : conversation.title,
-        messages: [...conversation.messages, { ...message, createdAt: message.createdAt ?? new Date().toISOString() }],
-        updatedAt: Date.now()
-      };
-    }).sort((first, second) => second.updatedAt - first.updatedAt));
+    this.conversationsState.update((conversations) =>
+      conversations
+        .map((conversation) => {
+          if (conversation.id !== conversationId) return conversation;
+          return {
+            ...conversation,
+            title:
+              conversation.messages.length === 0 && message.sender === 'user'
+                ? this.toTitle(message.text)
+                : conversation.title,
+            messages: [
+              ...conversation.messages,
+              { ...message, createdAt: message.createdAt ?? new Date().toISOString() },
+            ],
+            updatedAt: Date.now(),
+          };
+        })
+        .sort((first, second) => second.updatedAt - first.updatedAt),
+    );
   }
 
   beginEditingMessage(index: number): void {
@@ -464,12 +589,17 @@ export class ChatService {
       message.sender !== 'user' ||
       this.isResponding() ||
       this.isMessageAwaitingResponse(index)
-    ) return;
-    this.conversationsState.update((conversations) => conversations.map((item) =>
-      item.id === conversation.id
-        ? { ...item, messages: item.messages.slice(0, index + 1), updatedAt: Date.now() }
-        : item
-    ).sort((first, second) => second.updatedAt - first.updatedAt));
+    )
+      return;
+    this.conversationsState.update((conversations) =>
+      conversations
+        .map((item) =>
+          item.id === conversation.id
+            ? { ...item, messages: item.messages.slice(0, index + 1), updatedAt: Date.now() }
+            : item,
+        )
+        .sort((first, second) => second.updatedAt - first.updatedAt),
+    );
     this.retryMessageState.set({ conversationId: conversation.id, text: message.text });
   }
 
@@ -483,20 +613,24 @@ export class ChatService {
     const editingMessage = this.editingMessageState();
     if (!editingMessage) return null;
     let updated = false;
-    this.conversationsState.update((conversations) => conversations.map((conversation) => {
-      if (conversation.id !== editingMessage.conversationId) return conversation;
-      const originalMessage = conversation.messages[editingMessage.index];
-      if (!originalMessage || originalMessage.sender !== 'user') return conversation;
-      updated = true;
-      return {
-        ...conversation,
-        messages: [
-          ...conversation.messages.slice(0, editingMessage.index),
-          { sender: 'user' as const, text, createdAt: originalMessage.createdAt }
-        ],
-        updatedAt: Date.now()
-      };
-    }).sort((first, second) => second.updatedAt - first.updatedAt));
+    this.conversationsState.update((conversations) =>
+      conversations
+        .map((conversation) => {
+          if (conversation.id !== editingMessage.conversationId) return conversation;
+          const originalMessage = conversation.messages[editingMessage.index];
+          if (!originalMessage || originalMessage.sender !== 'user') return conversation;
+          updated = true;
+          return {
+            ...conversation,
+            messages: [
+              ...conversation.messages.slice(0, editingMessage.index),
+              { sender: 'user' as const, text, createdAt: originalMessage.createdAt },
+            ],
+            updatedAt: Date.now(),
+          };
+        })
+        .sort((first, second) => second.updatedAt - first.updatedAt),
+    );
     this.editingMessageState.set(null);
     return updated ? editingMessage.conversationId : null;
   }
@@ -509,12 +643,16 @@ export class ChatService {
     const conversation = this.conversationsState().find((item) => item.id === conversationId);
     return (conversation?.messages ?? []).map((message) => ({
       role: message.sender === 'user' ? 'user' : 'assistant',
-      content: message.text
+      content: message.text,
     }));
   }
 
   getReferenceHistory(query: string, activeConversationId: string): ChatHistoryMessage[] {
-    const keywords = query.toLowerCase().match(/[a-z0-9]+/g)?.filter((word) => word.length > 2) ?? [];
+    const keywords =
+      query
+        .toLowerCase()
+        .match(/[a-z0-9]+/g)
+        ?.filter((word) => word.length > 2) ?? [];
     const otherConversations = this.conversationsState()
       .filter((conversation) => conversation.id !== activeConversationId)
       .sort((first, second) => first.updatedAt - second.updatedAt);
@@ -531,15 +669,19 @@ export class ChatService {
         score: keywords.reduce((total, keyword) => {
           const text = `${conversation.title} ${conversation.messages.map((message) => message.text).join(' ')}`;
           return total + (text.toLowerCase().includes(keyword) ? 1 : 0);
-        }, 0)
+        }, 0),
       }))
       .filter(({ score }) => score > 0)
-      .sort((first, second) => second.score - first.score || second.conversation.updatedAt - first.conversation.updatedAt)
+      .sort(
+        (first, second) =>
+          second.score - first.score ||
+          second.conversation.updatedAt - first.conversation.updatedAt,
+      )
       .slice(0, 2)
       .flatMap(({ conversation }) => conversation.messages.slice(-8))
       .map((message) => ({
         role: message.sender === 'user' ? 'user' : 'assistant',
-        content: message.text
+        content: message.text,
       }));
 
     const seen = new Set<string>();
@@ -552,39 +694,49 @@ export class ChatService {
       })
       .slice(-8);
   }
-  getActiveSessionId(): number | null { return this.toServerSessionId(this.activeConversationIdState()); }
+  getActiveSessionId(): number | null {
+    return this.toServerSessionId(this.activeConversationIdState());
+  }
 
   deleteMessage(index: number): void {
     const conversation = this.getActiveConversation();
     const message = conversation?.messages[index];
     if (!conversation || !message || message.sender !== 'user' || this.isResponding()) return;
     const removeTurn = (): void => {
-      this.conversationsState.update((conversations) => conversations.map((item) => {
-        if (item.id !== conversation.id) return item;
-        const deleteCount = item.messages[index + 1]?.sender === 'bot' ? 2 : 1;
-        return {
-          ...item,
-          messages: [...item.messages.slice(0, index), ...item.messages.slice(index + deleteCount)],
-          updatedAt: Date.now()
-        };
-      }));
+      this.conversationsState.update((conversations) =>
+        conversations.map((item) => {
+          if (item.id !== conversation.id) return item;
+          const deleteCount = item.messages[index + 1]?.sender === 'bot' ? 2 : 1;
+          return {
+            ...item,
+            messages: [
+              ...item.messages.slice(0, index),
+              ...item.messages.slice(index + deleteCount),
+            ],
+            updatedAt: Date.now(),
+          };
+        }),
+      );
     };
     if (conversation.sessionId === undefined || message.id === undefined) {
       removeTurn();
       return;
     }
-    this.http.delete(
-      `${this.sessionsUrl}/${conversation.sessionId}/messages/${message.id}`
-    ).subscribe({
-      next: removeTurn,
-      error: () => this.migrationNoticeState.set('The message could not be deleted. Please try again.')
-    });
+    this.http
+      .delete(`${this.sessionsUrl}/${conversation.sessionId}/messages/${message.id}`)
+      .subscribe({
+        next: removeTurn,
+        error: () =>
+          this.migrationNoticeState.set('The message could not be deleted. Please try again.'),
+      });
   }
 
   private isStandingPreference(text: string): boolean {
     // Language choices are scoped to one chat and must not override another chat.
     if (/\b(?:english|t(?:h)?anglish|tamil|hinglish|hindi)\b/i.test(text)) return false;
-    return /\b(?:call|address|refer to)\s+(?:me\s+)?(?:as\s+)?[a-z0-9_-]+|\bmy name is\b|\bi (?:prefer|always (?:prefer|like|want))\b|\bremember (?:that|to)\b/i.test(text);
+    return /\b(?:call|address|refer to)\s+(?:me\s+)?(?:as\s+)?[a-z0-9_-]+|\bmy name is\b|\bi (?:prefer|always (?:prefer|like|want))\b|\bremember (?:that|to)\b/i.test(
+      text,
+    );
   }
 
   renameConversation(conversationId: string, title: string): void {
@@ -595,12 +747,15 @@ export class ChatService {
       this.updateConversationTitle(conversationId, trimmedTitle);
       return;
     }
-    this.http.put<ChatSessionSummaryApi>(`${this.sessionsUrl}/${sessionId}`, {
-      title: trimmedTitle
-    }).subscribe({
-      next: (session) => this.updateConversationTitle(String(session.id), session.title),
-      error: () => this.migrationNoticeState.set('The chat could not be renamed. Please try again.')
-    });
+    this.http
+      .put<ChatSessionSummaryApi>(`${this.sessionsUrl}/${sessionId}`, {
+        title: trimmedTitle,
+      })
+      .subscribe({
+        next: (session) => this.updateConversationTitle(String(session.id), session.title),
+        error: () =>
+          this.migrationNoticeState.set('The chat could not be renamed. Please try again.'),
+      });
   }
 
   deleteConversation(conversationId: string): void {
@@ -611,7 +766,8 @@ export class ChatService {
     }
     this.http.delete(`${this.sessionsUrl}/${sessionId}`).subscribe({
       next: () => this.removeConversation(conversationId),
-      error: () => this.migrationNoticeState.set('The chat could not be deleted. Please try again.')
+      error: () =>
+        this.migrationNoticeState.set('The chat could not be deleted. Please try again.'),
     });
   }
 
@@ -622,13 +778,16 @@ export class ChatService {
 
   private fetchConversations(): Observable<ChatConversation[]> {
     return this.http.get<ChatSessionSummaryApi[]>(this.sessionsUrl).pipe(
-      switchMap((sessions) => sessions.length === 0
-        ? of([])
-        : forkJoin(sessions.map((session) =>
-          this.http.get<ChatSessionDetailApi>(`${this.sessionsUrl}/${session.id}`)
-        ))
+      switchMap((sessions) =>
+        sessions.length === 0
+          ? of([])
+          : forkJoin(
+              sessions.map((session) =>
+                this.http.get<ChatSessionDetailApi>(`${this.sessionsUrl}/${session.id}`),
+              ),
+            ),
       ),
-      map((sessions) => sessions.map((session) => this.fromApiSession(session)))
+      map((sessions) => sessions.map((session) => this.fromApiSession(session))),
     );
   }
 
@@ -636,18 +795,15 @@ export class ChatService {
     if (!this.isBrowser) return of(undefined);
     const flagKey = `${this.consolidationFlagPrefix}:${userId}`;
     if (localStorage.getItem(flagKey)) return of(undefined);
-    return this.http.post<ChatSessionSummaryApi[]>(
-      `${this.sessionsUrl}/consolidate`,
-      {}
-    ).pipe(
+    return this.http.post<ChatSessionSummaryApi[]>(`${this.sessionsUrl}/consolidate`, {}).pipe(
       tap(() => localStorage.setItem(flagKey, 'true')),
       map(() => undefined),
       catchError(() => {
         this.migrationNoticeState.set(
-          'Old chats could not be combined. They are still saved and consolidation will retry next login.'
+          'Old chats could not be combined. They are still saved and consolidation will retry next login.',
         );
         return of(undefined);
-      })
+      }),
     );
   }
 
@@ -667,20 +823,23 @@ export class ChatService {
       if (!Array.isArray(conversations)) throw new Error('Invalid legacy chat data');
       const createdSessionIds: number[] = [];
       return from(conversations).pipe(
-        concatMap((conversation) => this.http.post<ChatSessionSummaryApi>(this.sessionsUrl, {
-          title: conversation.title || 'New chat'
-        }).pipe(
-          tap((session) => createdSessionIds.push(session.id)),
-          switchMap((session) => this.http.post<ChatSessionDetailApi>(
-            `${this.sessionsUrl}/${session.id}/import`,
-            {
-              messages: (conversation.messages ?? []).map((message) => ({
-                sender: message.sender,
-                content: message.text
-              }))
-            }
-          ))
-        )),
+        concatMap((conversation) =>
+          this.http
+            .post<ChatSessionSummaryApi>(this.sessionsUrl, {
+              title: conversation.title || 'New chat',
+            })
+            .pipe(
+              tap((session) => createdSessionIds.push(session.id)),
+              switchMap((session) =>
+                this.http.post<ChatSessionDetailApi>(`${this.sessionsUrl}/${session.id}/import`, {
+                  messages: (conversation.messages ?? []).map((message) => ({
+                    sender: message.sender,
+                    content: message.text,
+                  })),
+                }),
+              ),
+            ),
+        ),
         toArray(),
         tap(() => {
           localStorage.setItem(migrationFlagKey, 'true');
@@ -689,14 +848,16 @@ export class ChatService {
           localStorage.removeItem(`${this.legacyPendingStorageKeyPrefix}:${userId}`);
         }),
         map(() => undefined),
-        catchError(() => this.rollbackMigratedSessions(createdSessionIds).pipe(
-          tap(() => this.setMigrationFailureNotice()),
-          map(() => undefined),
-          catchError(() => {
-            this.setMigrationFailureNotice();
-            return of(undefined);
-          })
-        ))
+        catchError(() =>
+          this.rollbackMigratedSessions(createdSessionIds).pipe(
+            tap(() => this.setMigrationFailureNotice()),
+            map(() => undefined),
+            catchError(() => {
+              this.setMigrationFailureNotice();
+              return of(undefined);
+            }),
+          ),
+        ),
       );
     } catch {
       this.setMigrationFailureNotice();
@@ -706,14 +867,16 @@ export class ChatService {
 
   private rollbackMigratedSessions(sessionIds: number[]): Observable<unknown[]> {
     if (sessionIds.length === 0) return of([]);
-    return forkJoin(sessionIds.map((sessionId) =>
-      this.http.delete(`${this.sessionsUrl}/${sessionId}`).pipe(catchError(() => of(null)))
-    ));
+    return forkJoin(
+      sessionIds.map((sessionId) =>
+        this.http.delete(`${this.sessionsUrl}/${sessionId}`).pipe(catchError(() => of(null))),
+      ),
+    );
   }
 
   private setMigrationFailureNotice(): void {
     this.migrationNoticeState.set(
-      'Your old chats are still saved locally. Migration will retry the next time you log in.'
+      'Your old chats are still saved locally. Migration will retry the next time you log in.',
     );
   }
 
@@ -721,7 +884,7 @@ export class ChatService {
     this.conversationsState.set(conversations);
     const savedSessionId = this.getSavedActiveSessionId();
     const restored = savedSessionId
-      ? conversations.find(conversation => String(conversation.sessionId) === savedSessionId)
+      ? conversations.find((conversation) => String(conversation.sessionId) === savedSessionId)
       : undefined;
     this.activeConversationIdState.set(restored?.id ?? conversations[0]?.id ?? null);
     this.ensureDraftConversation();
@@ -751,7 +914,7 @@ export class ChatService {
       conversation &&
       pendingResponse?.conversationId === conversation.id &&
       conversation.messages[index]?.sender === 'user' &&
-      !conversation.messages[index + 1]
+      !conversation.messages[index + 1],
     );
   }
 
@@ -760,10 +923,10 @@ export class ChatService {
       return;
     }
     const pendingConversations = this.conversationsState().filter(
-      conversation =>
+      (conversation) =>
         conversation.sessionId !== undefined &&
         conversation.messages.at(-1)?.sender === 'user' &&
-        Date.now() - conversation.updatedAt <= this.pendingHistoryMaxAgeMs
+        Date.now() - conversation.updatedAt <= this.pendingHistoryMaxAgeMs,
     );
     if (pendingConversations.length === 0) {
       this.pendingHistoryRefreshes = 0;
@@ -773,22 +936,26 @@ export class ChatService {
     this.pendingHistoryTimer = setTimeout(() => {
       this.pendingHistoryTimer = null;
       this.pendingHistoryRefreshes += 1;
-      forkJoin(pendingConversations.map((conversation) =>
-        this.http.get<ChatSessionDetailApi>(`${this.sessionsUrl}/${conversation.sessionId}`)
-      )).pipe(
-        map((sessions) => sessions.map((session) => this.fromApiSession(session)))
-      ).subscribe({
-        next: refreshedConversations => {
-          const refreshedById = new Map(
-            refreshedConversations.map((conversation) => [conversation.id, conversation])
-          );
-          this.conversationsState.update((conversations) => conversations.map(
-            conversation => refreshedById.get(conversation.id) ?? conversation
-          ));
-          this.schedulePendingHistoryRefresh();
-        },
-        error: () => this.schedulePendingHistoryRefresh()
-      });
+      forkJoin(
+        pendingConversations.map((conversation) =>
+          this.http.get<ChatSessionDetailApi>(`${this.sessionsUrl}/${conversation.sessionId}`),
+        ),
+      )
+        .pipe(map((sessions) => sessions.map((session) => this.fromApiSession(session))))
+        .subscribe({
+          next: (refreshedConversations) => {
+            const refreshedById = new Map(
+              refreshedConversations.map((conversation) => [conversation.id, conversation]),
+            );
+            this.conversationsState.update((conversations) =>
+              conversations.map(
+                (conversation) => refreshedById.get(conversation.id) ?? conversation,
+              ),
+            );
+            this.schedulePendingHistoryRefresh();
+          },
+          error: () => this.schedulePendingHistoryRefresh(),
+        });
     }, 2000);
   }
 
@@ -804,7 +971,7 @@ export class ChatService {
       id: `draft:${crypto.randomUUID()}`,
       title: 'New chat',
       messages: [],
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
     };
   }
 
@@ -819,9 +986,9 @@ export class ChatService {
         text: message.content,
         createdAt: message.created_at,
         imageUrl: message.image_url ?? undefined,
-        attachment: message.document_attachment ?? undefined
+        attachment: message.document_attachment ?? undefined,
       })),
-      updatedAt: Date.parse(session.updated_at)
+      updatedAt: Date.parse(session.updated_at),
     };
   }
 
@@ -848,13 +1015,17 @@ export class ChatService {
   }
 
   private updateConversationTitle(conversationId: string, title: string): void {
-    this.conversationsState.update((conversations) => conversations.map((conversation) =>
-      conversation.id === conversationId ? { ...conversation, title } : conversation
-    ));
+    this.conversationsState.update((conversations) =>
+      conversations.map((conversation) =>
+        conversation.id === conversationId ? { ...conversation, title } : conversation,
+      ),
+    );
   }
 
   private removeConversation(conversationId: string): void {
-    const conversations = this.conversationsState().filter((conversation) => conversation.id !== conversationId);
+    const conversations = this.conversationsState().filter(
+      (conversation) => conversation.id !== conversationId,
+    );
     this.conversationsState.set(conversations);
     if (this.pendingResponseState()?.conversationId === conversationId) {
       this.pendingConversationIdState.set(null);

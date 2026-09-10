@@ -1,3 +1,4 @@
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.chat import ChatDocumentAttachment, ChatMessageRecord, ChatSession
@@ -231,6 +232,42 @@ class ChatRepository:
             for row in rows
             if row.structured_summary or row.raw_text
         ]
+
+    def get_spreadsheet_operation_source(
+        self, db: Session, session_id: int
+    ) -> ChatDocumentAttachment | None:
+        """Choose the latest generated XLSX, otherwise the latest uploaded table."""
+        generated = (
+            db.query(ChatDocumentAttachment)
+            .filter(
+                ChatDocumentAttachment.session_id == session_id,
+                ChatDocumentAttachment.kind == "generated",
+                ChatDocumentAttachment.filename.ilike("%.xlsx"),
+            )
+            .order_by(
+                ChatDocumentAttachment.created_at.desc(),
+                ChatDocumentAttachment.id.desc(),
+            )
+            .first()
+        )
+        if generated is not None:
+            return generated
+        return (
+            db.query(ChatDocumentAttachment)
+            .filter(
+                ChatDocumentAttachment.session_id == session_id,
+                ChatDocumentAttachment.kind == "uploaded",
+                or_(
+                    ChatDocumentAttachment.filename.ilike("%.xlsx"),
+                    ChatDocumentAttachment.filename.ilike("%.csv"),
+                ),
+            )
+            .order_by(
+                ChatDocumentAttachment.created_at.desc(),
+                ChatDocumentAttachment.id.desc(),
+            )
+            .first()
+        )
 
     def import_messages(
         self,

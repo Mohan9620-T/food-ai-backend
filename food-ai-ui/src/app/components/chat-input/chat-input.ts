@@ -1,4 +1,15 @@
-import { afterNextRender, ChangeDetectorRef, Component, computed, DestroyRef, effect, ElementRef, inject, signal, viewChild } from '@angular/core';
+import {
+  afterNextRender,
+  ChangeDetectorRef,
+  Component,
+  computed,
+  DestroyRef,
+  effect,
+  ElementRef,
+  inject,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -17,8 +28,11 @@ interface ComposerDraft {
 }
 
 const EMPTY_DRAFT: ComposerDraft = {
-  message: '', selectedImage: null, selectedDocument: null,
-  imagePreviewUrl: null, imageError: null
+  message: '',
+  selectedImage: null,
+  selectedDocument: null,
+  imagePreviewUrl: null,
+  imageError: null,
 };
 
 @Component({
@@ -30,8 +44,8 @@ const EMPTY_DRAFT: ComposerDraft = {
     '(document:dragenter)': 'handleDragEnter($event)',
     '(document:dragover)': 'handleDragOver($event)',
     '(document:dragleave)': 'handleDragLeave($event)',
-    '(document:drop)': 'handleDrop($event)'
-  }
+    '(document:drop)': 'handleDrop($event)',
+  },
 })
 export class ChatInput {
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
@@ -48,17 +62,39 @@ export class ChatInput {
   private readonly authService = inject(AuthService);
   private readonly router = inject(Router);
   private readonly drafts = signal<ReadonlyMap<string, ComposerDraft>>(new Map());
-  private readonly draft = computed(() => this.drafts().get(this.chatService.getActiveConversationId() ?? '') ?? EMPTY_DRAFT);
-  get message(): string { return this.draft().message; }
-  set message(value: string) { this.updateDraft({ message: value }); }
-  get selectedImage(): File | null { return this.draft().selectedImage; }
-  set selectedImage(value: File | null) { this.updateDraft({ selectedImage: value }); }
-  get selectedDocument(): File | null { return this.draft().selectedDocument; }
-  set selectedDocument(value: File | null) { this.updateDraft({ selectedDocument: value }); }
-  get imagePreviewUrl(): string | null { return this.draft().imagePreviewUrl; }
-  set imagePreviewUrl(value: string | null) { this.updateDraft({ imagePreviewUrl: value }); }
-  get imageError(): string | null { return this.draft().imageError; }
-  set imageError(value: string | null) { this.updateDraft({ imageError: value }); }
+  private readonly draft = computed(
+    () => this.drafts().get(this.chatService.getActiveConversationId() ?? '') ?? EMPTY_DRAFT,
+  );
+  get message(): string {
+    return this.draft().message;
+  }
+  set message(value: string) {
+    this.updateDraft({ message: value });
+  }
+  get selectedImage(): File | null {
+    return this.draft().selectedImage;
+  }
+  set selectedImage(value: File | null) {
+    this.updateDraft({ selectedImage: value });
+  }
+  get selectedDocument(): File | null {
+    return this.draft().selectedDocument;
+  }
+  set selectedDocument(value: File | null) {
+    this.updateDraft({ selectedDocument: value });
+  }
+  get imagePreviewUrl(): string | null {
+    return this.draft().imagePreviewUrl;
+  }
+  set imagePreviewUrl(value: string | null) {
+    this.updateDraft({ imagePreviewUrl: value });
+  }
+  get imageError(): string | null {
+    return this.draft().imageError;
+  }
+  set imageError(value: string | null) {
+    this.updateDraft({ imageError: value });
+  }
   isDraggingImage = false;
   private dragDepth = 0;
   private visionSubscription: Subscription | null = null;
@@ -89,9 +125,9 @@ export class ChatInput {
     });
     this.destroyRef.onDestroy(() => {
       this.visionSubscription?.unsubscribe();
-      this.documentSubscriptions.forEach(subscription => subscription.unsubscribe());
+      this.documentSubscriptions.forEach((subscription) => subscription.unsubscribe());
       this.speechService.stop();
-      this.drafts().forEach(draft => {
+      this.drafts().forEach((draft) => {
         if (draft.imagePreviewUrl) URL.revokeObjectURL(draft.imagePreviewUrl);
       });
     });
@@ -107,23 +143,42 @@ export class ChatInput {
 
   private attachFile(file: File): void {
     const imageTypes: Record<string, string> = {
-      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif'
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      webp: 'image/webp',
+      gif: 'image/gif',
     };
     const extension = file.name.split('.').at(-1)?.toLowerCase() ?? '';
-    const inferredType = (!file.type || file.type === 'application/octet-stream') ? imageTypes[extension] : undefined;
-    const attachment = inferredType ? new File([file], file.name, { type: inferredType, lastModified: file.lastModified }) : file;
+    const inferredType =
+      !file.type || file.type === 'application/octet-stream' ? imageTypes[extension] : undefined;
+    const attachment = inferredType
+      ? new File([file], file.name, { type: inferredType, lastModified: file.lastModified })
+      : file;
     if (attachment.type.startsWith('image/')) this.attachImage(attachment);
     else this.attachDocument(attachment);
   }
 
   private attachDocument(file: File): void {
-    const supported = ['.pdf', '.docx', '.txt', '.csv', '.xlsx'].some(extension => file.name.toLowerCase().endsWith(extension));
-    if (!supported) { this.imageError = 'Upload an image, PDF, DOCX, TXT, CSV, or XLSX file.'; return; }
-    if (file.size > 15 * 1024 * 1024) { this.imageError = 'Document is too large. Maximum size is 15 MB.'; return; }
-    this.removeImage(); this.selectedDocument = file; this.imageError = null;
+    const supported = ['.pdf', '.docx', '.txt', '.csv', '.xlsx'].some((extension) =>
+      file.name.toLowerCase().endsWith(extension),
+    );
+    if (!supported) {
+      this.imageError = 'Upload an image, PDF, DOCX, TXT, CSV, or XLSX file.';
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      this.imageError = 'Document is too large. Maximum size is 15 MB.';
+      return;
+    }
+    this.removeImage();
+    this.selectedDocument = file;
+    this.imageError = null;
   }
 
-  removeDocument(): void { this.selectedDocument = null; }
+  removeDocument(): void {
+    this.selectedDocument = null;
+  }
 
   get speechError(): string | null {
     const error = this.speechService.error();
@@ -148,11 +203,11 @@ export class ChatInput {
     this.finalDictation = '';
     this.speechService.clearError();
     this.speechService.start(
-      interim => this.updateDictatedMessage(this.finalDictation + interim),
-      finalText => {
+      (interim) => this.updateDictatedMessage(this.finalDictation + interim),
+      (finalText) => {
         this.finalDictation += finalText;
         this.updateDictatedMessage(this.finalDictation);
-      }
+      },
     );
   }
 
@@ -257,9 +312,21 @@ export class ChatInput {
       this.requestDocumentResponse(conversationId, documentFile, userMessage || null);
       return;
     }
+    const spreadsheetOperation =
+      !image && this.chatService.isSpreadsheetOperationRequest(userMessage);
+    const spreadsheetSessionId = spreadsheetOperation
+      ? this.chatService.getActiveSessionId()
+      : null;
+    if (spreadsheetOperation && spreadsheetSessionId === null) {
+      this.imageError = 'Upload an Excel spreadsheet first, then ask me to update it.';
+      return;
+    }
     const previewUrl = this.imagePreviewUrl;
     if (!isEditing) {
-      this.chatService.addMessage({ sender: 'user', text: userMessage || '[Image]', imageUrl: previewUrl ?? undefined }, conversationId);
+      this.chatService.addMessage(
+        { sender: 'user', text: userMessage || '[Image]', imageUrl: previewUrl ?? undefined },
+        conversationId,
+      );
     }
     this.selectedImage = null;
     this.selectedDocument = null;
@@ -274,11 +341,13 @@ export class ChatInput {
     const request: ChatRequest = {
       message: userMessage,
       history: this.chatService.getHistory(conversationId),
-      referenceHistory: this.chatService.getReferenceHistory(userMessage, conversationId)
+      referenceHistory: this.chatService.getReferenceHistory(userMessage, conversationId),
     };
     this.chatService.startResponse(conversationId, request);
     if (image) this.requestVisionResponse(conversationId, image, userMessage || null);
-    else this.requestResponse(conversationId, request);
+    else if (spreadsheetOperation && spreadsheetSessionId !== null) {
+      this.requestSpreadsheetResponse(conversationId, spreadsheetSessionId, userMessage);
+    } else this.requestResponse(conversationId, request);
   }
 
   stopResponse(): void {
@@ -295,19 +364,30 @@ export class ChatInput {
       this.chatService.stopStreaming();
     }
     const pending = this.chatService.getPendingResponse();
-    if (pending && pending.conversationId === conversationId) this.chatService.finishResponse(pending.conversationId);
+    if (pending && pending.conversationId === conversationId)
+      this.chatService.finishResponse(pending.conversationId);
     queueMicrotask(() => this.messageInput()?.nativeElement.focus());
   }
 
   private requestVisionResponse(conversationId: string, image: File, message: string | null): void {
-    this.visionSubscription = this.chatService.sendVisionMessage(image, message, conversationId).subscribe({
-      error: (error: HttpErrorResponse) => {
-        const detail = typeof error.error?.detail === 'string' ? error.error.detail : null;
-        this.updateDraft({ imageError: error.status === 503 ? detail ?? 'Vision model unavailable. Please start Ollama and try again.' : detail ?? 'The image could not be analyzed. Please try again.' }, conversationId);
-        this.finishVisionResponse(conversationId);
-      },
-      complete: () => this.finishVisionResponse(conversationId)
-    });
+    this.visionSubscription = this.chatService
+      .sendVisionMessage(image, message, conversationId)
+      .subscribe({
+        error: (error: HttpErrorResponse) => {
+          const detail = typeof error.error?.detail === 'string' ? error.error.detail : null;
+          this.updateDraft(
+            {
+              imageError:
+                error.status === 503
+                  ? (detail ?? 'Vision model unavailable. Please start Ollama and try again.')
+                  : (detail ?? 'The image could not be analyzed. Please try again.'),
+            },
+            conversationId,
+          );
+          this.finishVisionResponse(conversationId);
+        },
+        complete: () => this.finishVisionResponse(conversationId),
+      });
   }
 
   private finishVisionResponse(conversationId: string): void {
@@ -325,11 +405,16 @@ export class ChatInput {
       history: this.chatService.getHistory(retryMessage.conversationId),
       referenceHistory: this.chatService.getReferenceHistory(
         retryMessage.text,
-        retryMessage.conversationId
-      )
+        retryMessage.conversationId,
+      ),
     };
     this.chatService.startResponse(retryMessage.conversationId, request);
-    this.requestResponse(retryMessage.conversationId, request);
+    const sessionId = this.chatService.getActiveSessionId();
+    if (this.chatService.isSpreadsheetOperationRequest(retryMessage.text) && sessionId !== null) {
+      this.requestSpreadsheetResponse(retryMessage.conversationId, sessionId, retryMessage.text);
+    } else {
+      this.requestResponse(retryMessage.conversationId, request);
+    }
   }
 
   private async requestResponse(conversationId: string, request: ChatRequest): Promise<void> {
@@ -345,12 +430,16 @@ export class ChatInput {
         this.message = request.message;
       }
       if (!(error instanceof ChatStreamError && error.displayed)) {
-        this.chatService.addMessage({
-          sender: 'bot',
-          text: error instanceof ChatStreamError
-            ? `Response interrupted: ${error.message}`
-            : 'The response could not be streamed. Please try again.'
-        }, conversationId);
+        this.chatService.addMessage(
+          {
+            sender: 'bot',
+            text:
+              error instanceof ChatStreamError
+                ? `Response interrupted: ${error.message}`
+                : 'The response could not be streamed. Please try again.',
+          },
+          conversationId,
+        );
       }
     } finally {
       this.chatService.finishResponse(conversationId);
@@ -363,41 +452,92 @@ export class ChatInput {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
   }
 
-  private requestDocumentResponse(conversationId: string, file: File, message: string | null): void {
+  private requestDocumentResponse(
+    conversationId: string,
+    file: File,
+    message: string | null,
+  ): void {
     const operation = new Subscription();
     this.documentSubscriptions.set(conversationId, operation);
-    operation.add(this.chatService.uploadDocument(file, message, conversationId).pipe(
-      finalize(() => this.finishDocumentResponse(conversationId))
-    ).subscribe({
-      next: () => this.acceptDocumentUpload(conversationId, file, message ?? ''),
-      error: (error: HttpErrorResponse) => {
-        this.updateDraft({ imageError: this.documentError(error, 'The document could not be processed. Your file is still attached; please try again.') }, conversationId);
-      }
-    }));
+    operation.add(
+      this.chatService
+        .uploadDocument(file, message, conversationId)
+        .pipe(finalize(() => this.finishDocumentResponse(conversationId)))
+        .subscribe({
+          next: () => this.acceptDocumentUpload(conversationId, file, message ?? ''),
+          error: (error: HttpErrorResponse) => {
+            this.updateDraft(
+              {
+                imageError: this.documentError(
+                  error,
+                  'The document could not be processed. Your file is still attached; please try again.',
+                ),
+              },
+              conversationId,
+            );
+          },
+        }),
+    );
+  }
+
+  private requestSpreadsheetResponse(
+    conversationId: string,
+    sessionId: number,
+    message: string,
+  ): void {
+    const operation = new Subscription();
+    this.documentSubscriptions.set(conversationId, operation);
+    operation.add(
+      this.chatService
+        .updateSpreadsheet(sessionId, message, conversationId)
+        .pipe(finalize(() => this.finishDocumentResponse(conversationId)))
+        .subscribe({
+          next: () => this.updateDraft({ imageError: null }, conversationId),
+          error: (error: HttpErrorResponse) => {
+            this.updateDraft(
+              {
+                message,
+                imageError: this.documentError(
+                  error,
+                  'The Excel workbook could not be updated. Please try again.',
+                ),
+              },
+              conversationId,
+            );
+          },
+        }),
+    );
   }
 
   private addUploadMessage(conversationId: string, file: File, message: string): void {
     const pending = this.pendingUploads.get(conversationId);
     if (pending?.file === file && pending.message === message) return;
-    this.chatService.addMessage({ sender: 'user', text: message || `[Document: ${file.name}]` }, conversationId);
+    this.chatService.addMessage(
+      { sender: 'user', text: message || `[Document: ${file.name}]` },
+      conversationId,
+    );
     this.pendingUploads.set(conversationId, { file, message });
   }
 
   private startDocumentResponse(conversationId: string, message: string): void {
     this.chatService.startResponse(conversationId, {
-      message, history: this.chatService.getHistory(conversationId),
-      referenceHistory: this.chatService.getReferenceHistory(message, conversationId)
+      message,
+      history: this.chatService.getHistory(conversationId),
+      referenceHistory: this.chatService.getReferenceHistory(message, conversationId),
     });
   }
 
   private acceptDocumentUpload(conversationId: string, file: File, message: string): void {
     this.pendingUploads.delete(conversationId);
     const draft = this.drafts().get(conversationId);
-    this.updateDraft({
-      ...(draft?.selectedDocument === file ? { selectedDocument: null } : {}),
-      ...(draft?.message.trim() === message ? { message: '' } : {}),
-      imageError: null
-    }, conversationId);
+    this.updateDraft(
+      {
+        ...(draft?.selectedDocument === file ? { selectedDocument: null } : {}),
+        ...(draft?.message.trim() === message ? { message: '' } : {}),
+        imageError: null,
+      },
+      conversationId,
+    );
   }
 
   private finishDocumentResponse(conversationId: string): void {
@@ -409,11 +549,29 @@ export class ChatInput {
   }
 
   private documentError(error: HttpErrorResponse, fallback: string): string {
-    return typeof error.error?.detail === 'string' ? error.error.detail : fallback;
+    const detail = error.error?.detail;
+    if (
+      typeof detail === 'string' &&
+      detail.trim() &&
+      !/[{}]/.test(detail) &&
+      !/"(?:error|message|detail)"\s*:/i.test(detail)
+    ) {
+      return detail;
+    }
+    return fallback;
   }
 
-  private updateDraft(patch: Partial<ComposerDraft>, conversationId = this.chatService.getActiveConversationId() ?? ''): void {
-    this.drafts.update(drafts => new Map(drafts).set(conversationId, { ...EMPTY_DRAFT, ...drafts.get(conversationId), ...patch }));
+  private updateDraft(
+    patch: Partial<ComposerDraft>,
+    conversationId = this.chatService.getActiveConversationId() ?? '',
+  ): void {
+    this.drafts.update((drafts) =>
+      new Map(drafts).set(conversationId, {
+        ...EMPTY_DRAFT,
+        ...drafts.get(conversationId),
+        ...patch,
+      }),
+    );
   }
 
   private updateDictatedMessage(dictatedText: string): void {

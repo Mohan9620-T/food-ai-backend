@@ -14,6 +14,11 @@ interface GenerationRequest {
   source_document_id?: number;
 }
 
+interface SpreadsheetOperationRequest {
+  session_id: number;
+  instruction: string;
+}
+
 const documentTypes = [
   ['pdf', 'application/pdf'],
   ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
@@ -41,11 +46,19 @@ function sampleFile(extension: string, mimeType: string): UploadedFile {
   };
 }
 
-async function mockApiAndLogin(page: Page, options: { failFirstUpload?: boolean; failFirstGeneration?: boolean; unavailableAnalysis?: boolean } = {}) {
+async function mockApiAndLogin(
+  page: Page,
+  options: {
+    failFirstUpload?: boolean;
+    failFirstGeneration?: boolean;
+    unavailableAnalysis?: boolean;
+  } = {},
+) {
   const state = {
     uploads: [] as string[],
     visionUploads: [] as string[],
     generations: [] as GenerationRequest[],
+    spreadsheetOperations: [] as SpreadsheetOperationRequest[],
     downloads: 0,
     unexpected: [] as string[],
   };
@@ -96,19 +109,29 @@ async function mockApiAndLogin(page: Page, options: { failFirstUpload?: boolean;
       }
       const filename = /filename="([^"]+)"/.exec(body)?.[1] ?? 'nutrition.txt';
       const skippedAnalysis = /name="analyze"\r\n\r\nfalse/.test(body);
+      const categorySplit = filename.endsWith('.xlsx') && /category-wise/i.test(body);
       await route.fulfill(
         json({
           session_id: 101,
-          response: skippedAnalysis ? `Saved ${filename}. AI analysis was skipped.`
-            : options.unavailableAnalysis ? `Saved ${filename}. Extracted text only; AI analysis is unavailable.`
-            : `Imported ${filename}. Nutrition summary is ready.`,
-          analysis_status: skippedAnalysis ? 'skipped' : options.unavailableAnalysis ? 'unavailable' : 'complete',
+          response: categorySplit
+            ? `Done — I split the item list from ${filename} category-wise and created a new Excel workbook with a separate sheet for each category.`
+            : skippedAnalysis
+              ? `Saved ${filename}. AI analysis was skipped.`
+              : options.unavailableAnalysis
+                ? `Saved ${filename}. Extracted text only; AI analysis is unavailable.`
+                : `Imported ${filename}. Nutrition summary is ready.`,
+          analysis_status:
+            categorySplit || skippedAnalysis
+              ? 'skipped'
+              : options.unavailableAnalysis
+                ? 'unavailable'
+                : 'complete',
           attachment: {
-            id: 201,
-            filename,
-            content_type: 'application/octet-stream',
+            id: categorySplit ? 203 : 201,
+            filename: categorySplit ? 'nutrition_category_wise.xlsx' : filename,
+            content_type: categorySplit ? documentTypes[4][1] : 'application/octet-stream',
             file_size: 26,
-            kind: 'uploaded',
+            kind: categorySplit ? 'generated' : 'uploaded',
           },
         }),
       );
@@ -121,13 +144,36 @@ async function mockApiAndLogin(page: Page, options: { failFirstUpload?: boolean;
       await route.fulfill(json({ session_id: 101, response: 'Image nutrition summary is ready.' }));
       return;
     }
+    if (path === '/chat/documents/spreadsheet' && request.method() === 'POST') {
+      const body = request.postDataJSON() as SpreadsheetOperationRequest;
+      state.spreadsheetOperations.push(body);
+      await route.fulfill(
+        json({
+          session_id: 101,
+          response:
+            'Done. I added the requested column filter and generated the updated Excel workbook.',
+          analysis_status: 'skipped',
+          attachment: {
+            id: 204,
+            filename: 'nutrition_category_wise_filter_updated.xlsx',
+            content_type: documentTypes[4][1],
+            file_size: 26,
+            kind: 'generated',
+          },
+        }),
+      );
+      return;
+    }
     if (path === '/chat/documents/generate' && request.method() === 'POST') {
       const body = request.postDataJSON() as GenerationRequest;
       state.generations.push(body);
       if (options.failFirstGeneration && state.generations.length === 1) {
         await route.fulfill({
           status: 503,
-          ...json({ detail: 'AI document generation is unavailable. Try again, or use Export text without AI to save existing text.' }),
+          ...json({
+            detail:
+              'AI document generation is unavailable. Try again, or use Export text without AI to save existing text.',
+          }),
         });
         return;
       }
@@ -146,7 +192,13 @@ async function mockApiAndLogin(page: Page, options: { failFirstUpload?: boolean;
       );
       return;
     }
-    if ((path === '/chat/documents/202/download' || path === '/chat/documents/201/download') && request.method() === 'GET') {
+    if (
+      (path === '/chat/documents/204/download' ||
+        path === '/chat/documents/203/download' ||
+        path === '/chat/documents/202/download' ||
+        path === '/chat/documents/201/download') &&
+      request.method() === 'GET'
+    ) {
       state.downloads += 1;
       await route.fulfill({
         contentType: 'application/octet-stream',
@@ -235,7 +287,9 @@ for (const [extension, mimeType] of imageTypes) {
   }
 }
 
-test('uses the normal composer for pasted content and has no document creator control', async ({ page }) => {
+test('uses the normal composer for pasted content and has no document creator control', async ({
+  page,
+}) => {
   const state = await mockApiAndLogin(page);
   const composer = page.getByRole('textbox', { name: 'Message', exact: true });
   await expect(page.getByRole('button', { name: 'Create document', exact: true })).toHaveCount(0);
@@ -243,6 +297,74 @@ test('uses the normal composer for pasted content and has no document creator co
   await composer.fill('First pasted line\n\nSecond pasted line');
   await expect(composer).toHaveValue('First pasted line\n\nSecond pasted line');
   expect(state.generations).toHaveLength(0);
+  expect(state.unexpected).toEqual([]);
+});
+
+test('splits an uploaded Excel item list and downloads the generated workbook', async ({
+  page,
+}) => {
+  const state = await mockApiAndLogin(page);
+  await attachFile(page, sampleFile('xlsx', documentTypes[4][1]), 'picker');
+  await page
+    .getByRole('textbox', { name: 'Message', exact: true })
+    .fill(
+      'I have many categories. Please split the item list category-wise and create a separate sheet for each category, with the corresponding items added to each sheet.',
+    );
+
+  await page.getByRole('button', { name: 'Send message' }).click();
+
+  await expect(
+    page.getByText(/created a new Excel workbook with a separate sheet for each category/),
+  ).toBeVisible();
+  const downloadButton = page.getByRole('button', {
+    name: 'Download nutrition_category_wise.xlsx',
+    exact: true,
+  });
+  await expect(downloadButton).toBeVisible();
+  const downloadEvent = page.waitForEvent('download');
+  await downloadButton.click();
+  const download = await downloadEvent;
+  expect(download.suggestedFilename()).toBe('nutrition_category_wise.xlsx');
+  expect(await download.failure()).toBeNull();
+  expect(state.uploads).toHaveLength(1);
+  expect(state.generations).toHaveLength(0);
+  expect(state.downloads).toBe(1);
+  expect(state.unexpected).toEqual([]);
+});
+
+test('applies a filter follow-up and shows the chained generated workbook', async ({ page }) => {
+  const state = await mockApiAndLogin(page);
+  const composer = page.getByRole('textbox', { name: 'Message', exact: true });
+  await attachFile(page, sampleFile('xlsx', documentTypes[4][1]), 'picker');
+  await composer.fill(
+    'Split the item list category-wise and create a separate sheet for each category.',
+  );
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(
+    page.getByRole('button', { name: 'Download nutrition_category_wise.xlsx' }),
+  ).toBeVisible();
+
+  await composer.fill('Please add a filter only to the Category* column.');
+  await page.getByRole('button', { name: 'Send message' }).click();
+
+  await expect(page.getByText(/added the requested column filter/)).toBeVisible();
+  const downloadButton = page.getByRole('button', {
+    name: 'Download nutrition_category_wise_filter_updated.xlsx',
+    exact: true,
+  });
+  await expect(downloadButton).toBeVisible();
+  const downloadEvent = page.waitForEvent('download');
+  await downloadButton.click();
+  const download = await downloadEvent;
+  expect(download.suggestedFilename()).toBe('nutrition_category_wise_filter_updated.xlsx');
+  expect(state.spreadsheetOperations).toEqual([
+    {
+      session_id: 101,
+      instruction: 'Please add a filter only to the Category* column.',
+    },
+  ]);
+  expect(state.generations).toHaveLength(0);
+  expect(state.downloads).toBe(1);
   expect(state.unexpected).toEqual([]);
 });
 
@@ -280,21 +402,34 @@ for (const format of ['pdf', 'docx'] as const) {
     expect(state.unexpected).toEqual([]);
   });
 
-  test.skip(`exports literal text to ${format.toUpperCase()} without AI or importing a file`, async ({ page }) => {
+  test.skip(`exports literal text to ${format.toUpperCase()} without AI or importing a file`, async ({
+    page,
+  }) => {
     const state = await mockApiAndLogin(page);
     await page.getByRole('button', { name: 'Create document', exact: true }).click();
     await page.getByLabel('Creation mode', { exact: true }).selectOption('export');
-    await expect(page.locator('#document-source-help')).toContainText('does not summarize, rewrite, or use conversation history or attached files');
+    await expect(page.locator('#document-source-help')).toContainText(
+      'does not summarize, rewrite, or use conversation history or attached files',
+    );
     const text = '  Nutrition notes\n\nBreakfast: oats and fruit.  ';
     await page.getByLabel('Text to export', { exact: true }).fill(text);
     await page.getByLabel('File format', { exact: true }).selectOption(format);
-    await page.getByRole('form', { name: 'Create a document', exact: true })
-      .getByRole('button', { name: 'Create document', exact: true }).click();
+    await page
+      .getByRole('form', { name: 'Create a document', exact: true })
+      .getByRole('button', { name: 'Create document', exact: true })
+      .click();
     const filename = `nutrition-summary.${format}`;
-    await expect(page.getByRole('button', { name: `Download ${filename}`, exact: true })).toBeVisible();
-    expect(state.generations).toEqual([{
-      session_id: null, instruction: text, output_format: format, mode: 'export',
-    }]);
+    await expect(
+      page.getByRole('button', { name: `Download ${filename}`, exact: true }),
+    ).toBeVisible();
+    expect(state.generations).toEqual([
+      {
+        session_id: null,
+        instruction: text,
+        output_format: format,
+        mode: 'export',
+      },
+    ]);
     expect(state.uploads).toHaveLength(0);
     expect(state.visionUploads).toHaveLength(0);
     const downloadEvent = page.waitForEvent('download');
@@ -305,54 +440,86 @@ for (const format of ['pdf', 'docx'] as const) {
     expect(state.unexpected).toEqual([]);
   });
 
-  test.skip(`exports an attached file to ${format.toUpperCase()} without AI or instructions`, async ({ page }) => {
+  test.skip(`exports an attached file to ${format.toUpperCase()} without AI or instructions`, async ({
+    page,
+  }) => {
     const state = await mockApiAndLogin(page);
     await attachFile(page, sampleFile('xlsx', documentTypes[4][1]), 'picker');
-    await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Keep this unsent draft');
+    await page
+      .getByRole('textbox', { name: 'Message', exact: true })
+      .fill('Keep this unsent draft');
     await page.getByRole('button', { name: 'Create document', exact: true }).click();
     await page.getByLabel('Creation mode', { exact: true }).selectOption('export-file');
-    await expect(page.getByLabel('Draft text (not used for file export)', { exact: true })).toBeDisabled();
+    await expect(
+      page.getByLabel('Draft text (not used for file export)', { exact: true }),
+    ).toBeDisabled();
     await expect(page.locator('#document-source-help')).toContainText('nutrition.xlsx');
     await page.getByLabel('File format', { exact: true }).selectOption(format);
-    await page.getByRole('form', { name: 'Create a document', exact: true })
-      .getByRole('button', { name: 'Create document', exact: true }).click();
-    await expect(page.getByRole('button', { name: `Download nutrition-summary.${format}`, exact: true })).toBeVisible();
+    await page
+      .getByRole('form', { name: 'Create a document', exact: true })
+      .getByRole('button', { name: 'Create document', exact: true })
+      .click();
+    await expect(
+      page.getByRole('button', { name: `Download nutrition-summary.${format}`, exact: true }),
+    ).toBeVisible();
     expect(state.uploads).toHaveLength(1);
     expect(state.uploads[0]).toMatch(/name="analyze"\r\n\r\nfalse/);
-    expect(state.generations).toEqual([{ session_id: 101, output_format: format, mode: 'export', source_document_id: 201 }]);
-    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('Keep this unsent draft');
+    expect(state.generations).toEqual([
+      { session_id: 101, output_format: format, mode: 'export', source_document_id: 201 },
+    ]);
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue(
+      'Keep this unsent draft',
+    );
     await expect(page.locator('.document-preview')).not.toBeVisible();
     expect(state.unexpected).toEqual([]);
   });
 }
 
-test.skip('stops after an imported file reports unavailable AI and exports its saved source without reuploading', async ({ page }) => {
+test.skip('stops after an imported file reports unavailable AI and exports its saved source without reuploading', async ({
+  page,
+}) => {
   const state = await mockApiAndLogin(page, { unavailableAnalysis: true });
   await attachFile(page, sampleFile('pdf', 'application/pdf'), 'drop');
   await page.getByRole('button', { name: 'Create document', exact: true }).click();
-  await page.getByLabel('Document instructions', { exact: true }).fill('Write a report from this PDF');
+  await page
+    .getByLabel('Document instructions', { exact: true })
+    .fill('Write a report from this PDF');
   const form = page.getByRole('form', { name: 'Create a document', exact: true });
   await form.getByRole('button', { name: 'Create document', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('File saved, but AI analysis is unavailable');
-  await expect(page.getByLabel('Document instructions', { exact: true })).toHaveValue('Write a report from this PDF');
+  await expect(page.getByLabel('Document instructions', { exact: true })).toHaveValue(
+    'Write a report from this PDF',
+  );
   await expect(form.getByRole('button', { name: 'Create document', exact: true })).toBeEnabled();
   await expect(page.locator('.document-preview')).not.toBeVisible();
   await expect(page.locator('.user-message .document-card')).toContainText('nutrition.pdf');
   expect(state.generations).toHaveLength(0);
-  await page.getByLabel('Creation mode', { exact: true }).selectOption({ label: 'Export saved file without AI' });
+  await page
+    .getByLabel('Creation mode', { exact: true })
+    .selectOption({ label: 'Export saved file without AI' });
   await expect(page.locator('#document-source-help')).toContainText('nutrition.pdf');
   await form.getByRole('button', { name: 'Create document', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Download nutrition-summary.pdf', exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Download nutrition-summary.pdf', exact: true }),
+  ).toBeVisible();
   expect(state.uploads).toHaveLength(1);
-  expect(state.generations).toEqual([{ session_id: 101, output_format: 'pdf', mode: 'export', source_document_id: 201 }]);
+  expect(state.generations).toEqual([
+    { session_id: 101, output_format: 'pdf', mode: 'export', source_document_id: 201 },
+  ]);
   expect(state.unexpected).toEqual([]);
 });
 
-test('keeps an imported file downloadable when its AI analysis is unavailable', async ({ page }) => {
+test('keeps an imported file downloadable when its AI analysis is unavailable', async ({
+  page,
+}) => {
   const state = await mockApiAndLogin(page, { unavailableAnalysis: true });
   await attachFile(page, sampleFile('docx', documentTypes[1][1]), 'picker');
   await page.getByRole('button', { name: 'Send message' }).click();
-  await expect(page.getByText('Saved nutrition.docx. Extracted text only; AI analysis is unavailable.', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('Saved nutrition.docx. Extracted text only; AI analysis is unavailable.', {
+      exact: true,
+    }),
+  ).toBeVisible();
   await expect(page.locator('.document-preview')).not.toBeVisible();
   const downloadEvent = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Download nutrition.docx', exact: true }).click();
@@ -364,7 +531,9 @@ test('keeps an imported file downloadable when its AI analysis is unavailable', 
   expect(state.unexpected).toEqual([]);
 });
 
-test.skip('keeps the draft after AI failure and lets the user explicitly export it without duplicate content', async ({ page }) => {
+test.skip('keeps the draft after AI failure and lets the user explicitly export it without duplicate content', async ({
+  page,
+}) => {
   const state = await mockApiAndLogin(page, { failFirstGeneration: true });
   await page.getByRole('button', { name: 'Create document', exact: true }).click();
   const text = 'Breakfast: oats and fruit. Lunch: rice and vegetables.';
@@ -379,7 +548,9 @@ test.skip('keeps the draft after AI failure and lets the user explicitly export 
   await expect(page.getByRole('alert')).not.toBeVisible();
   await expect(page.getByLabel('Text to export', { exact: true })).toHaveValue(text);
   await form.getByRole('button', { name: 'Create document', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Download nutrition-summary.pdf', exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Download nutrition-summary.pdf', exact: true }),
+  ).toBeVisible();
   await expect(page.getByRole('alert')).not.toBeVisible();
   await expect(page.locator('.user-message')).toHaveCount(1);
   expect(state.generations).toEqual([
@@ -391,28 +562,38 @@ test.skip('keeps the draft after AI failure and lets the user explicitly export 
   expect(state.unexpected).toEqual([]);
 });
 
-test.skip('keeps attached files when export asks the user to remove them first', async ({ page }) => {
+test.skip('keeps attached files when export asks the user to remove them first', async ({
+  page,
+}) => {
   const state = await mockApiAndLogin(page);
   await attachFile(page, sampleFile('pdf', 'application/pdf'), 'drop');
   await page.getByRole('button', { name: 'Create document', exact: true }).click();
   await page.getByLabel('Creation mode', { exact: true }).selectOption('export');
   await page.getByLabel('Text to export', { exact: true }).fill('Literal notes');
-  await page.getByRole('form', { name: 'Create a document', exact: true })
-    .getByRole('button', { name: 'Create document', exact: true }).click();
+  await page
+    .getByRole('form', { name: 'Create a document', exact: true })
+    .getByRole('button', { name: 'Create document', exact: true })
+    .click();
   await expect(page.getByRole('alert')).toContainText('Remove the attached file');
   await expect(page.locator('.document-preview')).toContainText('nutrition.pdf');
   expect(state.uploads).toHaveLength(0);
   expect(state.generations).toHaveLength(0);
   await page.getByRole('button', { name: 'Remove attached document', exact: true }).click();
-  await page.getByRole('form', { name: 'Create a document', exact: true })
-    .getByRole('button', { name: 'Create document', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Download nutrition-summary.pdf', exact: true })).toBeVisible();
+  await page
+    .getByRole('form', { name: 'Create a document', exact: true })
+    .getByRole('button', { name: 'Create document', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', { name: 'Download nutrition-summary.pdf', exact: true }),
+  ).toBeVisible();
   expect(state.uploads).toHaveLength(0);
   expect(state.generations).toHaveLength(1);
   expect(state.unexpected).toEqual([]);
 });
 
-test.skip('imports a staged document before generating from its returned session', async ({ page }) => {
+test.skip('imports a staged document before generating from its returned session', async ({
+  page,
+}) => {
   const state = await mockApiAndLogin(page);
   await attachFile(page, sampleFile('csv', 'text/csv'), 'drop');
   await page.getByRole('button', { name: 'Create document', exact: true }).click();

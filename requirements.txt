@@ -39,6 +39,7 @@ python-dotenv==1.2.2
 python-json-logger==3.3.0
 python-jose==3.5.0
 python-multipart==0.0.32
+python-pptx==1.0.2
 requests==2.34.2
 reportlab==4.4.4
 rsa==4.9.1
