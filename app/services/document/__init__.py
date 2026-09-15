@@ -11,11 +11,17 @@ from app.services.document.document_intent_service import (
     MissingDocumentInputError,
     UnsupportedDocumentOperationError,
 )
+from app.services.document.document_modification_service import (
+    DocumentModificationService,
+    ModifiedDocument,
+)
 from app.services.document.document_operation_registry import (
     DocumentOperation,
     DocumentOperationDefinition,
     DocumentOperationRegistry,
     DocumentType,
+    Fidelity,
+    InputArity,
 )
 from app.services.document.document_reading_service import DocumentReadingService
 from app.services.document.document_validation_service import (
@@ -23,30 +29,73 @@ from app.services.document.document_validation_service import (
     GeneratedDocumentValidationError,
 )
 from app.services.document.exceptions import (
+    DocumentChangeVerificationError,
+    DocumentLocatorError,
     DocumentProcessingUnavailableError,
     InvalidDocumentError,
+    UnsupportedDocumentModificationError,
 )
-from app.services.document.extraction_models import ExtractedDocument, ExtractedTable
+from app.services.document.extraction_models import (
+    DocumentBlock,
+    DocumentBlockType,
+    DocumentEdit,
+    DocumentEditAction,
+    DocumentLocation,
+    DocumentMetadata,
+    DocumentRepresentation,
+    DocumentSource,
+    ExtractedDocument,
+    ExtractedTable,
+    ExtractionMode,
+    GeneratedSectionContent,
+    GeneratedTableContent,
+    IntentCategory,
+    OperationPlan,
+    OperationPlanStep,
+    StructuredDocumentContent,
+)
 
 __all__ = [
     "AmbiguousDocumentIntentError",
     "DocumentIntent",
     "DocumentIntentError",
     "DocumentIntentService",
+    "DocumentModificationService",
+    "ModifiedDocument",
     "DocumentGenerationService",
+    "DocumentBlock",
+    "DocumentBlockType",
+    "DocumentEdit",
+    "DocumentEditAction",
+    "DocumentLocation",
+    "DocumentMetadata",
+    "DocumentRepresentation",
+    "DocumentSource",
     "DocumentOperation",
     "DocumentOperationDefinition",
     "DocumentOperationRegistry",
     "DocumentProcessingUnavailableError",
+    "DocumentLocatorError",
+    "DocumentChangeVerificationError",
     "DocumentReadingService",
     "DocumentType",
+    "ExtractionMode",
+    "Fidelity",
+    "InputArity",
+    "IntentCategory",
     "DocumentValidationService",
     "GeneratedDocument",
     "GeneratedDocumentValidationError",
     "ExtractedDocument",
     "ExtractedTable",
+    "GeneratedSectionContent",
+    "GeneratedTableContent",
     "InvalidDocumentError",
     "InvalidDocumentParametersError",
     "MissingDocumentInputError",
+    "OperationPlan",
+    "OperationPlanStep",
+    "StructuredDocumentContent",
     "UnsupportedDocumentOperationError",
+    "UnsupportedDocumentModificationError",
 ]

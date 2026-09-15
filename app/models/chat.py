@@ -1,7 +1,18 @@
 import base64
 from datetime import datetime, timezone
+from typing import cast
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+)
 from sqlalchemy.orm import relationship
 
 from app.database.database import Base
@@ -88,6 +99,19 @@ class ChatDocumentAttachment(Base):
     file_data = Column(LargeBinary, nullable=False)
     raw_text = Column(Text, nullable=True)
     structured_summary = Column(Text, nullable=True)
+    generation_metadata = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     message = relationship("ChatMessageRecord", back_populates="document_attachment")
+
+    @property
+    def provenance(self) -> str | None:
+        return cast(dict, self.generation_metadata or {}).get("provenance")
+
+    @property
+    def source_document_ids(self) -> list[int]:
+        return cast(dict, self.generation_metadata or {}).get("source_document_ids", [])
+
+    @property
+    def assumptions(self) -> list[str]:
+        return cast(dict, self.generation_metadata or {}).get("assumptions", [])

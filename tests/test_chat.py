@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -1122,8 +1123,8 @@ def test_nvidia_chat_failure_calls_ollama_once_with_same_messages(monkeypatch):
     monkeypatch.setattr("app.services.chat_service.requests.post", post)
 
     assert ChatService().chat("Hello", [], []) == "Ollama answer"
-    assert len(calls) == 2
-    assert calls[0][1] == calls[1][1]
+    assert len(calls) == 4
+    assert all(call[1] == calls[0][1] for call in calls)
 
 
 def test_malformed_nvidia_chat_200_response_calls_ollama_once(monkeypatch):
@@ -1229,6 +1230,168 @@ def test_stream_does_not_fallback_after_nvidia_content_is_exposed(monkeypatch):
     with pytest.raises(ChatModelUnavailableError, match="interrupted"):
         asyncio.run(collect())
     assert ollama_calls == 0
+
+
+def test_nvidia_sse_error_event_falls_back_before_content_is_exposed(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    original_client = httpx.AsyncClient
+
+    async def handler(request):
+        assert request.url.path.endswith("/chat/completions")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text='data: {"error":{"message":"provider unavailable"}}\n\ndata: [DONE]\n\n',
+        )
+
+    def mocked_client(*args, **kwargs):
+        return original_client(*args, transport=httpx.MockTransport(handler), **kwargs)
+
+    async def ollama(_body):
+        yield "fallback"
+
+    monkeypatch.setattr("app.services.chat_service.httpx.AsyncClient", mocked_client)
+    service = ChatService()
+    monkeypatch.setattr(service, "_stream_ollama", ollama)
+
+    async def collect():
+        return [chunk async for chunk in service.stream_chat("Hello", [], [])]
+
+    assert asyncio.run(collect()) == ["fallback"]
+
+
+def test_complete_chat_uses_nvidia_non_streaming_response(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    original_client = httpx.AsyncClient
+    seen_body = {}
+
+    async def handler(request):
+        seen_body.update(__import__("json").loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "Grounded answer"},
+                    }
+                ]
+            },
+        )
+
+    def mocked_client(*args, **kwargs):
+        return original_client(*args, transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr("app.services.chat_service.httpx.AsyncClient", mocked_client)
+    answer = asyncio.run(ChatService().complete_chat("Read this document", [], []))
+
+    assert answer == "Grounded answer"
+    assert seen_body["stream"] is False
+
+
+def test_complete_chat_falls_back_once_and_uses_document_output_budget(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    captured = {}
+
+    async def unavailable(self, body, *, allow_fallback=True):
+        del self, body, allow_fallback
+        raise _NvidiaFallbackError("temporary provider failure")
+
+    async def ollama(self, body):
+        del self
+        captured.update(body)
+        return "Fallback answer"
+
+    monkeypatch.setattr(ChatService, "_complete_with_nvidia", unavailable)
+    monkeypatch.setattr(ChatService, "_complete_with_ollama", ollama)
+    answer = asyncio.run(ChatService().complete_chat("Read this document", [], []))
+
+    assert answer == "Fallback answer"
+    assert captured["options"]["num_predict"] == settings.DOCUMENT_AI_MAX_TOKENS
+    assert captured["nvidia_max_tokens"] == settings.DOCUMENT_AI_MAX_TOKENS
+
+
+@pytest.mark.parametrize("statuses", [[503, 200], [503, 503, 200], [503, 503, 503], [401]])
+def test_document_completion_retries_transient_gateway_failure(monkeypatch, statuses):
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    original_client = httpx.AsyncClient
+    calls = []
+    fallback = AsyncMock(return_value="Local answer")
+
+    async def handler(request):
+        code = statuses[len(calls)]
+        calls.append(code)
+        return httpx.Response(
+            code,
+            json={
+                "choices": [{"finish_reason": "stop", "message": {"content": "Document answer"}}]
+            },
+        )
+
+    def mocked_client(*args, **kwargs):
+        return original_client(*args, transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr("app.services.chat_service.httpx.AsyncClient", mocked_client)
+    monkeypatch.setattr(ChatService, "_complete_with_ollama", fallback)
+    answer = asyncio.run(ChatService().complete_chat("Read this document", [], []))
+    assert calls == statuses
+    assert answer == ("Document answer" if statuses[-1] == 200 else "Local answer")
+    assert fallback.await_count == (0 if statuses[-1] == 200 else 1)
+
+
+def test_complete_chat_returns_immediate_answer_without_calling_provider(monkeypatch):
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("Immediate answer must not call a provider")
+
+    monkeypatch.setattr(ChatService, "_complete_with_ollama", unexpected)
+    answer = asyncio.run(
+        ChatService().complete_chat("content anuppalama, Thanglish la explain pannuva?", [], [])
+    )
+
+    assert "content-a anuppunga" in answer
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "can you create which type of documet",
+        "why you shouldn't generate or create actual file",
+        "What types of document files can you generate?",
+    ],
+)
+def test_file_capability_answers_do_not_depend_on_the_provider(monkeypatch, question):
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("App capability information is already known")
+
+    monkeypatch.setattr(ChatService, "_complete_with_ollama", unexpected)
+    answer = asyncio.run(ChatService().complete_chat(question, [], []))
+    assert "downloadable Word (.docx)" in answer
+    assert "Build my document file" in answer
+    assert ChatService()._immediate_answer("Create a Word document from this PDF") is None
+
+
+def test_complete_chat_corrects_wrong_language_with_same_provider(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "ollama")
+    answers = ["வணக்கம்", "Hello"]
+    bodies = []
+
+    async def ollama(self, body):
+        del self
+        bodies.append(body)
+        return answers.pop(0)
+
+    monkeypatch.setattr(ChatService, "_complete_with_ollama", ollama)
+    answer = asyncio.run(ChatService().complete_chat("Explain photosynthesis", [], []))
+
+    assert answer == "Hello"
+    assert len(bodies) == 2
+    assert bodies[-1]["messages"][-1]["role"] == "system"
+    assert "only in English" in bodies[-1]["messages"][-1]["content"]
 
 
 def test_interrupted_answer_is_saved_with_notice_and_never_emits_done(client, monkeypatch):

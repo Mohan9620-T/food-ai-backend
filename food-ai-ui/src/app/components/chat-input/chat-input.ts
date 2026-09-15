@@ -16,6 +16,10 @@ import { Router } from '@angular/router';
 import { ChatService, ChatStreamError } from '../../services/chat';
 import { AuthService } from '../../services/auth';
 import { ChatRequest } from '../../models/chat';
+import {
+  isDocumentCapabilityQuestion,
+  isDocumentFileRequest,
+} from '../../models/document-requests';
 import { finalize, Subscription } from 'rxjs';
 import { SpeechRecognitionService } from '../../services/speech-recognition';
 
@@ -160,11 +164,12 @@ export class ChatInput {
   }
 
   private attachDocument(file: File): void {
-    const supported = ['.pdf', '.docx', '.txt', '.csv', '.xlsx'].some((extension) =>
-      file.name.toLowerCase().endsWith(extension),
+    const supported = ['.pdf', '.docx', '.txt', '.csv', '.xlsx', '.pptx', '.md', '.markdown'].some(
+      (extension) => file.name.toLowerCase().endsWith(extension),
     );
     if (!supported) {
-      this.imageError = 'Upload an image, PDF, DOCX, TXT, CSV, or XLSX file.';
+      this.imageError =
+        'Upload an image, PDF, Word, Excel, CSV, PowerPoint, TXT, or Markdown file.';
       return;
     }
     if (file.size > 15 * 1024 * 1024) {
@@ -318,9 +323,20 @@ export class ChatInput {
       ? this.chatService.getActiveSessionId()
       : null;
     if (spreadsheetOperation && spreadsheetSessionId === null) {
-      this.imageError = 'Upload an Excel spreadsheet first, then ask me to update it.';
+      this.imageError = this.chatService.isSpreadsheetRowCountRequest(userMessage)
+        ? 'Upload an Excel or CSV spreadsheet first, then ask your row-count question.'
+        : 'Upload an Excel spreadsheet first, then ask me to add the filter.';
       return;
     }
+    const documentAutomation =
+      !image &&
+      !spreadsheetOperation &&
+      !isDocumentCapabilityQuestion(userMessage) &&
+      (this.chatService.hasPendingAutomation(conversationId) ||
+        isDocumentFileRequest(userMessage) ||
+        (this.chatService.hasDocumentContext(conversationId) &&
+          this.chatService.isDocumentAutomationRequest(userMessage)));
+    const automationSessionId = documentAutomation ? this.chatService.getActiveSessionId() : null;
     const previewUrl = this.imagePreviewUrl;
     if (!isEditing) {
       this.chatService.addMessage(
@@ -347,6 +363,8 @@ export class ChatInput {
     if (image) this.requestVisionResponse(conversationId, image, userMessage || null);
     else if (spreadsheetOperation && spreadsheetSessionId !== null) {
       this.requestSpreadsheetResponse(conversationId, spreadsheetSessionId, userMessage);
+    } else if (documentAutomation) {
+      this.requestDocumentAutomationResponse(conversationId, automationSessionId, userMessage);
     } else this.requestResponse(conversationId, request);
   }
 
@@ -412,6 +430,18 @@ export class ChatInput {
     const sessionId = this.chatService.getActiveSessionId();
     if (this.chatService.isSpreadsheetOperationRequest(retryMessage.text) && sessionId !== null) {
       this.requestSpreadsheetResponse(retryMessage.conversationId, sessionId, retryMessage.text);
+    } else if (
+      !isDocumentCapabilityQuestion(retryMessage.text) &&
+      (this.chatService.hasPendingAutomation(retryMessage.conversationId) ||
+        isDocumentFileRequest(retryMessage.text) ||
+        (this.chatService.hasDocumentContext(retryMessage.conversationId) &&
+          this.chatService.isDocumentAutomationRequest(retryMessage.text)))
+    ) {
+      this.requestDocumentAutomationResponse(
+        retryMessage.conversationId,
+        sessionId,
+        retryMessage.text,
+      );
     } else {
       this.requestResponse(retryMessage.conversationId, request);
     }
@@ -457,6 +487,7 @@ export class ChatInput {
     file: File,
     message: string | null,
   ): void {
+    let uploaded = false;
     const operation = new Subscription();
     this.documentSubscriptions.set(conversationId, operation);
     operation.add(
@@ -464,13 +495,19 @@ export class ChatInput {
         .uploadDocument(file, message, conversationId)
         .pipe(finalize(() => this.finishDocumentResponse(conversationId)))
         .subscribe({
-          next: () => this.acceptDocumentUpload(conversationId, file, message ?? ''),
+          next: () => {
+            uploaded = true;
+            this.acceptDocumentUpload(conversationId, file, message ?? '');
+          },
           error: (error: HttpErrorResponse) => {
             this.updateDraft(
               {
+                ...(uploaded ? { message: message ?? '' } : {}),
                 imageError: this.documentError(
                   error,
-                  'The document could not be processed. Your file is still attached; please try again.',
+                  uploaded
+                    ? 'Your file is saved, but the document request failed. Send your instruction again to retry.'
+                    : 'The document could not be processed. Your file is still attached; please try again.',
                 ),
               },
               conversationId,
@@ -500,6 +537,35 @@ export class ChatInput {
                 imageError: this.documentError(
                   error,
                   'The Excel workbook could not be updated. Please try again.',
+                ),
+              },
+              conversationId,
+            );
+          },
+        }),
+    );
+  }
+
+  private requestDocumentAutomationResponse(
+    conversationId: string,
+    sessionId: number | null,
+    message: string,
+  ): void {
+    const operation = new Subscription();
+    this.documentSubscriptions.set(conversationId, operation);
+    operation.add(
+      this.chatService
+        .automateDocument(sessionId, message, conversationId)
+        .pipe(finalize(() => this.finishDocumentResponse(conversationId)))
+        .subscribe({
+          next: () => this.updateDraft({ imageError: null }, conversationId),
+          error: (error: HttpErrorResponse) => {
+            this.updateDraft(
+              {
+                message,
+                imageError: this.documentError(
+                  error,
+                  'The document request could not be completed. Please try again.',
                 ),
               },
               conversationId,

@@ -19,7 +19,7 @@
     @if (msg.sender === 'user') {
       <div class="user-message-group">
         <div class="message user-message">
-        @if (msg.imageUrl) {
+          @if (msg.imageUrl) {
             <button
               type="button"
               class="message-image-button"
@@ -28,10 +28,23 @@
             >
               <img class="message-image" [src]="msg.imageUrl" alt="Attached image preview" />
             </button>
-        }
-        @if (msg.attachment) {
-          <div class="document-card"><span aria-hidden="true">&#128196;</span><div><strong>{{ msg.attachment.filename }}</strong><small>{{ msg.attachment.kind }} · {{ msg.attachment.file_size }} bytes</small></div><button type="button" (click)="downloadDocument(msg.attachment.id, msg.attachment.filename)" aria-label="Download {{ msg.attachment.filename }}">Download</button></div>
-        }
+          }
+          @if (msg.attachment) {
+            <div class="document-card">
+              <span aria-hidden="true">&#128196;</span>
+              <div>
+                <strong>{{ msg.attachment.filename }}</strong
+                ><small>{{ msg.attachment.kind }} · {{ msg.attachment.file_size }} bytes</small>
+              </div>
+              <button
+                type="button"
+                (click)="downloadDocument(msg.attachment.id, msg.attachment.filename)"
+                aria-label="Download {{ msg.attachment.filename }}"
+              >
+                Download
+              </button>
+            </div>
+          }
           @if (msg.text !== '[Image]') {
             <span>{{ msg.text }}</span>
           }
@@ -93,10 +106,12 @@
           </button>
         </div>
       </div>
-    } @else if (msg.text.trim() || msg.attachment) {
+    } @else if (msg.text.trim() || msg.attachment || (msg.attachments?.length ?? 0) > 0) {
       <article class="bot-message-group" aria-label="AI assistant response">
         <div class="assistant-label">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6Z"></path></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6Z"></path>
+          </svg>
           <span>AI assistant</span>
         </div>
         <button
@@ -115,16 +130,38 @@
             </svg>
           }
         </button>
-      <div class="message bot-message markdown-body" [innerHTML]="renderMarkdown(msg.text)"></div>
-      @if (streamingMessageIndex() === $index) {
-        <div class="writing-status" role="status" aria-live="polite">
-          <span class="writing-indicator" aria-hidden="true"></span>
-          Writing response&hellip;
-        </div>
-      }
-      @if (msg.attachment) {
-        <div class="document-card generated"><span aria-hidden="true">&#128196;</span><div><strong>{{ msg.attachment.filename }}</strong><small>Generated document · {{ msg.attachment.file_size }} bytes</small></div><button type="button" (click)="downloadDocument(msg.attachment.id, msg.attachment.filename)" aria-label="Download {{ msg.attachment.filename }}">Download</button></div>
-      }
+        @if (wizardTurn($index); as turn) {
+          <app-document-wizard
+            [response]="turn.response"
+            [sessionId]="turn.response.session_id"
+            [conversationId]="activeConversationId() ?? ''"
+            [instruction]="turn.instruction"
+            [choices]="turn.choices"
+          />
+        } @else {
+          <div
+            class="message bot-message markdown-body"
+            [innerHTML]="renderMarkdown(msg.text)"
+          ></div>
+        }
+        @if (streamingMessageIndex() === $index) {
+          <div class="writing-status" role="status" aria-live="polite">
+            <span class="writing-indicator" aria-hidden="true"></span>
+            Writing response&hellip;
+          </div>
+        }
+        @if (msg.attachment) {
+          <app-document-result
+            [attachment]="msg.attachment"
+            (download)="downloadDocument(msg.attachment.id, msg.attachment.filename)"
+          />
+        }
+        @for (attachment of msg.attachments ?? []; track attachment.id) {
+          <app-document-result
+            [attachment]="attachment"
+            (download)="downloadDocument(attachment.id, attachment.filename)"
+          />
+        }
       </article>
     }
   }
@@ -142,7 +179,8 @@
       aria-label="AI is preparing a response"
     >
       <strong>Preparing a response&hellip;</strong>
-      <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
+      <span aria-hidden="true"></span><span aria-hidden="true"></span
+      ><span aria-hidden="true"></span>
     </div>
   }
 </div>

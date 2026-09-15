@@ -99,10 +99,19 @@ use the documented default or disable the associated integration when empty.
 | `LLM_PROVIDER` | Optional | Development override: `ollama` is local-only; `nvidia` uses NVIDIA first with one Ollama fallback. |
 | `NVIDIA_API_KEY` | Required for NVIDIA | NVIDIA API credential. Never commit a real value. |
 | `NVIDIA_API_BASE_URL` | Optional | NVIDIA OpenAI-compatible API base URL. |
-| `NVIDIA_CHAT_MODEL` | Optional | NVIDIA text model; defaults to `google/gemma-4-31b-it`. |
+| `NVIDIA_CHAT_MODEL` | Optional | NVIDIA text model; defaults to `nvidia/nemotron-3-super-120b-a12b`. |
 | `NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA text connection timeout; default `5`. |
-| `NVIDIA_CHAT_TIMEOUT_SECONDS` | Optional | NVIDIA text response-read timeout; default `60`. |
-| `DOCUMENT_AI_TIMEOUT_SECONDS` | Optional | Total deadline for each document AI operation, including provider fallback and all tokens; default `45`. Does not affect ordinary chat or direct text export. |
+| `NVIDIA_CHAT_TIMEOUT_SECONDS` | Optional | NVIDIA text response-read timeout; default `30`. |
+| `DOCUMENT_AI_TIMEOUT_SECONDS` | Optional | Total deadline for each document AI operation, including provider fallback and all tokens; default `90`. Keep this greater than the NVIDIA timeout so the one Ollama fallback can run. Does not affect ordinary chat or direct text export. |
+| `DOCUMENT_AI_MAX_TOKENS` | Optional | Output budget for document Q&A and planning; default `2048`. Ordinary chat keeps its own smaller budget. |
+| `DOCUMENT_GENERATION_MAX_TOKENS` | Optional | Output budget for complete generated document structures; default `8192`, capped at `16384`. An invalid structure gets at most one correction attempt, with a separate document AI deadline. |
+| `DOCUMENT_PLAN_CONFIDENCE_THRESHOLD` | Optional | Minimum confidence accepted for semantic document plans before the assistant asks for clarification; default `0.65`. |
+| `DOCUMENT_PIPELINE_MAX_STEPS` | Optional | Maximum validated operations in one natural-language document pipeline; default `8`, range `1`–`20`. |
+| `DOCUMENT_CONVERSION_TIMEOUT_SECONDS` | Optional | Headless LibreOffice conversion deadline in seconds; default `90`. |
+| `DOCUMENT_OOXML_MAX_UNCOMPRESSED_BYTES` | Optional | Absolute pre-parse decompressed-size ceiling for DOCX/XLSX/PPTX; default `134217728` (128 MiB). |
+| `DOCUMENT_OOXML_MAX_TOTAL_RATIO` | Optional | Maximum total decompressed-to-upload size ratio for OOXML archives; default `100`. |
+| `DOCUMENT_OOXML_MAX_ENTRY_RATIO` | Optional | Maximum decompressed-to-compressed size ratio for one OOXML entry; default `200`. |
+| `DOCUMENT_OOXML_MAX_ENTRIES` | Optional | Maximum number of entries in an OOXML archive; default `5000`. |
 | `NVIDIA_CHAT_MAX_TOKENS` | Optional | NVIDIA text output budget; default `1024`, independent of Ollama's limit. Nemotron 3 chat disables thinking to reserve this budget for the answer. |
 | `NVIDIA_TEST_CHAT_MODEL` | Optional | NVIDIA model used only by `/nvidia-chat`; defaults to `nvidia/nemotron-3-ultra-550b-a55b`. |
 | `NVIDIA_CHAT_VISION_MODEL` | Optional | NVIDIA image-chat model; defaults to `meta/llama-3.2-90b-vision-instruct`. |
@@ -356,6 +365,23 @@ App available at \`http://localhost:4200\`.
   `markdown`. This request exports an owned uploaded file's full extracted text;
   `instruction` may be
   omitted. The source must belong to the requested chat when `session_id` is supplied.
+- Multi-step requests use `POST /chat/documents/automate` and the same validated pipeline engine
+  as `POST /chat/documents/pipeline`. The assistant can resolve the latest file, exact filenames,
+  ordinal references such as `the first PDF`, and collective references such as `both PDFs`.
+  Ambiguous requests return one clarification question and use persisted chat history to resolve
+  the reply. Optional `clarification.options` supplies 2–5 choices; a plain question remains valid.
+  By default, a ready plan returns `status: "ready_for_review"` and `plan_summary` without executing
+  or generating any file. Repeat the last instruction with `confirm: true` to re-plan and execute;
+  confirmation still returns clarification if details are missing. The Angular cards show choices,
+  a running answer summary and a Build action through the same `/automate` endpoint. There is no
+  separate wizard state endpoint or new database migration for this gate. Every generated
+  intermediate is validated and saved, while all useful outputs are
+  returned as normal downloadable chat attachments. See
+  [Phase 5 document automation](docs/universal-document-phase5.md). Production
+  hardening, fidelity rules, security limits, and final acceptance evidence are
+  recorded in the [Phase 6 report](docs/universal-document-phase6.md).
+- DOCX/PPTX-to-PDF conversion requires headless LibreOffice. The converter detects standard
+  Windows installations and `soffice` on `PATH`; set `LIBREOFFICE_BINARY` for a custom location.
 - TXT and CSV files support UTF-8 (with or without a BOM) and BOM-marked UTF-16
   exports. Legacy `.doc` and `.xls`, password-protected files, corrupt files, and
   files without readable text are not supported; export a supported readable copy.

@@ -10,6 +10,9 @@ class ChatDocumentAttachmentOut(BaseModel):
     content_type: str
     file_size: int
     kind: Literal["uploaded", "generated"]
+    provenance: Literal["uploaded_source", "general_knowledge"] | None = None
+    source_document_ids: list[int] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
 
     class Config:
         from_attributes = True

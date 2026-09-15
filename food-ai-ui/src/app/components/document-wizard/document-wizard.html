@@ -1,0 +1,77 @@
+﻿<section class="wizard" aria-label="Document creation" [attr.aria-busy]="busy()">
+  @if (choices().length) {
+    <aside aria-label="Your choices so far">
+      <h3>Your choices so far</h3>
+      <dl>
+        @for (choice of choices(); track $index) {
+          <div>
+            <dt>{{ choice.question }}</dt>
+            <dd>{{ choice.answer }}</dd>
+          </div>
+        }
+      </dl>
+    </aside>
+  }
+  @if (review()) {
+    <h2 #heading tabindex="-1">Review your answers</h2>
+    <p>{{ response().plan_summary ?? response().response }}</p>
+    <button class="primary" type="button" [disabled]="busy()" (click)="build()">
+      Build my document file
+    </button>
+  } @else {
+    <h2 #heading tabindex="-1">{{ question() }}</h2>
+    <fieldset [disabled]="busy()">
+      <legend>Choose your answer</legend>
+      @for (option of options(); track option.id) {
+        <label class="option">
+          <input
+            type="radio"
+            [name]="'answer-' + sessionId()"
+            [checked]="selected() === option.id && !freeform()"
+            (change)="choose(option.id)"
+          />
+          <span
+            ><strong>{{ option.label }}</strong>
+            @if (option.recommended) {
+              <span class="recommended">Recommended</span>
+            }
+            @if (option.description) {
+              <small>{{ option.description }}</small>
+            }
+          </span>
+        </label>
+      }
+      @if (options().length && response().clarification?.allow_other) {
+        <label class="option"
+          ><input
+            type="radio"
+            [name]="'answer-' + sessionId()"
+            [checked]="freeform()"
+            (change)="chooseOther()"
+          />Other</label
+        >
+      }
+      @if (freeform()) {
+        <label class="other-label" [for]="'other-' + sessionId()">Your answer</label>
+        <input
+          #otherInput
+          [id]="'other-' + sessionId()"
+          type="text"
+          [formControl]="other"
+          (keydown.enter)="next()"
+          maxlength="4000"
+        />
+      }
+    </fieldset>
+    <button class="primary" type="button" [disabled]="busy()" (click)="next()">Next</button>
+  }
+  @if (busy()) {
+    <p role="status">
+      <span class="spinner" aria-hidden="true"></span
+      >{{ review() ? 'Building your file…' : 'Preparing the next step…' }}
+    </p>
+  }
+  @if (error(); as message) {
+    <p role="alert">{{ message }}</p>
+  }
+</section>

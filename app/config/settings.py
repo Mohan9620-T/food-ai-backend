@@ -61,12 +61,24 @@ NVIDIA_API_KEY = (_read_secret("NVIDIA_API_KEY", "") or "").strip()
 NVIDIA_API_BASE_URL = os.getenv(
     "NVIDIA_API_BASE_URL", "https://integrate.api.nvidia.com/v1"
 ).rstrip("/")
-NVIDIA_CHAT_MODEL = os.getenv("NVIDIA_CHAT_MODEL", "nvidia/nemotron-3-ultra-550b-a55b").strip()
+NVIDIA_CHAT_MODEL = os.getenv("NVIDIA_CHAT_MODEL", "nvidia/nemotron-3-super-120b-a12b").strip()
 NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS", "5"))
-NVIDIA_CHAT_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_CHAT_TIMEOUT_SECONDS", "60"))
+NVIDIA_CHAT_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_CHAT_TIMEOUT_SECONDS", "30"))
 NVIDIA_CHAT_MAX_TOKENS = int(os.getenv("NVIDIA_CHAT_MAX_TOKENS", "1024"))
 # Total AI time for a document, including primary/fallback and streamed tokens.
-DOCUMENT_AI_TIMEOUT_SECONDS = float(os.getenv("DOCUMENT_AI_TIMEOUT_SECONDS", "45"))
+DOCUMENT_AI_TIMEOUT_SECONDS = float(os.getenv("DOCUMENT_AI_TIMEOUT_SECONDS", "90"))
+DOCUMENT_AI_MAX_TOKENS = int(os.getenv("DOCUMENT_AI_MAX_TOKENS", "2048"))
+DOCUMENT_GENERATION_MAX_TOKENS = int(os.getenv("DOCUMENT_GENERATION_MAX_TOKENS", "8192"))
+DOCUMENT_PLAN_CONFIDENCE_THRESHOLD = float(os.getenv("DOCUMENT_PLAN_CONFIDENCE_THRESHOLD", "0.65"))
+DOCUMENT_PIPELINE_MAX_STEPS = max(1, min(int(os.getenv("DOCUMENT_PIPELINE_MAX_STEPS", "8")), 20))
+# OOXML (DOCX/XLSX/PPTX) archive limits are checked before any XML parser runs.
+DOCUMENT_OOXML_MAX_UNCOMPRESSED_BYTES = int(
+    os.getenv("DOCUMENT_OOXML_MAX_UNCOMPRESSED_BYTES", str(128 * 1024 * 1024))
+)
+DOCUMENT_OOXML_MAX_TOTAL_RATIO = int(os.getenv("DOCUMENT_OOXML_MAX_TOTAL_RATIO", "100"))
+DOCUMENT_OOXML_MAX_ENTRY_RATIO = int(os.getenv("DOCUMENT_OOXML_MAX_ENTRY_RATIO", "200"))
+DOCUMENT_OOXML_MAX_ENTRIES = int(os.getenv("DOCUMENT_OOXML_MAX_ENTRIES", "5000"))
+DOCUMENT_CONVERSION_TIMEOUT_SECONDS = int(os.getenv("DOCUMENT_CONVERSION_TIMEOUT_SECONDS", "90"))
 # Optional explicit path to soffice. When empty, common install paths and PATH are checked.
 LIBREOFFICE_BINARY = os.getenv("LIBREOFFICE_BINARY", "").strip()
 NVIDIA_TEST_CHAT_MODEL = os.getenv(

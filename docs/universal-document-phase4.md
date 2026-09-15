@@ -13,8 +13,8 @@ new attachment is validated, stored, and made the latest document before the nex
 | XLSX | CSV | Fully supported for one populated sheet | Multi-sheet workbooks are rejected instead of silently dropping sheets. |
 | TXT | Markdown | Fully supported | Extracted UTF-8 text is preserved. |
 | Markdown | TXT | Fully supported | Markdown source is treated as plain UTF-8 text. |
-| DOCX | PDF | Best effort | Uses headless LibreOffice to preserve layout. |
-| PPTX | PDF | Best effort | Uses headless LibreOffice to preserve slide layout. |
+| DOCX | PDF | Supported with LibreOffice | Uses headless LibreOffice to preserve layout. |
+| PPTX | PDF | Supported with LibreOffice | Uses headless LibreOffice to preserve slide layout. |
 
 DOCX/PPTX to PDF is available only when LibreOffice is installed. The converter discovers
 `soffice` on `PATH` and in standard Windows installation folders. Deployments can instead set
@@ -33,6 +33,10 @@ changing the source or creating an approximate output.
 
 Reading and summarization do not produce a file and therefore are not pipeline transformation
 steps in Phase 4. Natural-language agent planning and clarification are reserved for Phase 5.
+
+The Windows development environment used for the Phase 4 acceptance run has LibreOffice
+26.8.0.3 installed, and the real DOCX/PPTX-to-PDF conversion tests pass. Other environments must
+install LibreOffice separately or configure `LIBREOFFICE_BINARY`.
 
 Example that is executed end to end by the test suite:
 

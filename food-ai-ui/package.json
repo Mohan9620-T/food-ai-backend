@@ -39,6 +39,7 @@
     "@types/node": "^20.17.19",
     "@vitest/coverage-v8": "4.1.10",
     "angular-eslint": "^22.2.0",
+    "axe-core": "^4.13.0",
     "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.12.0",

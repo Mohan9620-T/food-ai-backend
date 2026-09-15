@@ -78,6 +78,17 @@ def test_universal_document_operations_resolve_to_structured_intents(
     }
 
 
+def test_information_does_not_match_format_workbook_command():
+    intent = DocumentIntentService().resolve(
+        "Take all the information from this PDF and create a Word document.",
+        input_file="quarterly.pdf",
+    )
+
+    assert intent.operation == DocumentOperation.CONVERT_DOCUMENT
+    assert intent.document_type == DocumentType.PDF
+    assert intent.output_type == DocumentType.DOCX
+
+
 @pytest.mark.parametrize(
     ("filename", "expected"),
     [
@@ -103,7 +114,7 @@ def test_registry_resolves_canonical_names_and_aliases_to_one_definition():
     assert canonical is not None
     assert alias is canonical
     assert canonical.operation == DocumentOperation.EXPAND_DISH_BY_DIETARY_CATEGORY
-    assert len(registry.operations()) == 9
+    assert {item.operation for item in registry.operations()} == set(DocumentOperation)
 
 
 def test_filter_parameters_are_extracted_by_existing_spreadsheet_logic():

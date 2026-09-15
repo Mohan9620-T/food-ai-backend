@@ -57,6 +57,19 @@ class ChatRepository:
         primary = sessions[0]
         redundant_ids = [session.id for session in sessions[1:]]
         if redundant_ids:
+            # Attachments have their own session FK with ON DELETE CASCADE.
+            # Move them before removing sessions or their bytes are lost.
+            db.query(ChatDocumentAttachment).filter(
+                ChatDocumentAttachment.session_id.in_(redundant_ids)
+            ).update({ChatDocumentAttachment.session_id: primary.id}, synchronize_session=False)
+            latest_document = (
+                db.query(ChatDocumentAttachment)
+                .filter(ChatDocumentAttachment.session_id == primary.id)
+                .order_by(ChatDocumentAttachment.created_at.desc(), ChatDocumentAttachment.id.desc())
+                .first()
+            )
+            setattr(primary, "latest_document_id", latest_document.id if latest_document else None)
+            db.flush()
             db.query(ChatMessageRecord).filter(
                 ChatMessageRecord.session_id.in_(redundant_ids)
             ).update(
@@ -100,18 +113,33 @@ class ChatRepository:
             .first()
         )
 
+    def get_session_for_update(
+        self, db: Session, session_id: int, user_id: int
+    ) -> ChatSession | None:
+        """Lock the session while a pipeline advances its latest-document pointer."""
+        return (
+            db.query(ChatSession)
+            .filter(ChatSession.id == session_id, ChatSession.user_id == user_id)
+            .with_for_update()
+            .first()
+        )
+
     def add_message(
-        self, db: Session, session_id: int, sender: str, content: str
+        self,
+        db: Session,
+        session_id: int,
+        sender: str,
+        content: str,
+        *,
+        commit: bool = True,
     ) -> ChatMessageRecord:
         message = ChatMessageRecord(session_id=session_id, sender=sender, content=content)
         db.add(message)
-        db.commit()
-        db.refresh(message)
-
-        session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
-        if session:
-            db.add(session)
+        if commit:
             db.commit()
+            db.refresh(message)
+        else:
+            db.flush()
 
         return message
 
@@ -124,6 +152,7 @@ class ChatRepository:
         *,
         image_data: bytes | None = None,
         image_content_type: str | None = None,
+        commit: bool = True,
     ) -> tuple[ChatMessageRecord, ChatMessageRecord]:
         user_message = ChatMessageRecord(
             session_id=session_id,
@@ -138,9 +167,12 @@ class ChatRepository:
             content=bot_content,
         )
         db.add_all([user_message, bot_message])
-        db.commit()
-        db.refresh(user_message)
-        db.refresh(bot_message)
+        if commit:
+            db.commit()
+            db.refresh(user_message)
+            db.refresh(bot_message)
+        else:
+            db.flush()
         return user_message, bot_message
 
     def add_document_attachment(
@@ -188,6 +220,8 @@ class ChatRepository:
         raw_text: str | None = None,
         structured_summary: str | None = None,
         is_internal: bool = False,
+        commit: bool = True,
+        locked_session: ChatSession | None = None,
     ) -> tuple[ChatMessageRecord, ChatDocumentAttachment]:
         """Commit a completion message, generated file, and latest pointer atomically."""
         bot_record = ChatMessageRecord(
@@ -212,15 +246,19 @@ class ChatRepository:
             )
             db.add(attachment)
             db.flush()
-            session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            session = locked_session or (
+                db.query(ChatSession).filter(ChatSession.id == session_id).with_for_update().first()
+            )
             if session is not None:
                 session.latest_document_id = attachment.id
-            db.commit()
+            if commit:
+                db.commit()
         except Exception:
             db.rollback()
             raise
-        db.refresh(bot_record)
-        db.refresh(attachment)
+        if commit:
+            db.refresh(bot_record)
+            db.refresh(attachment)
         return bot_record, attachment
 
     def save_document_upload(

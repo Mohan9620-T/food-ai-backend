@@ -1,11 +1,17 @@
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.services.document.document_operation_registry import DocumentType
+from pydantic import ValidationError
+
+from app.services.document.document_operation_registry import DocumentType, Fidelity
 from app.services.document.document_validation_service import DocumentValidationService
-from app.services.document.extraction_models import ExtractedTable
+from app.services.document.extraction_models import (
+    ExtractedTable,
+    StructuredDocumentContent,
+)
 from app.services.pdf.pdf_generator import PdfGenerator
 from app.services.powerpoint.pptx_generator import PptxGenerator
 from app.services.spreadsheet.csv_generator import CsvGenerator
@@ -19,6 +25,8 @@ class GeneratedDocument:
     filename: str
     content_type: str
     document_type: DocumentType
+    fidelity: Fidelity = Fidelity.HIGH
+    fidelity_note: str | None = None
 
 
 class DocumentGenerationService:
@@ -58,34 +66,91 @@ class DocumentGenerationService:
 
     def generate(
         self,
-        content: str,
+        content: str | StructuredDocumentContent,
         output_format: str,
         *,
         plain_text: bool = False,
         requested_filename: str | None = None,
     ) -> GeneratedDocument:
         document_type = self._document_type(output_format)
-        if document_type in {DocumentType.TXT, DocumentType.MARKDOWN}:
-            file_data = content.encode("utf-8")
-        elif document_type == DocumentType.PDF:
-            file_data = self.pdf_generator.generate(content, plain_text=plain_text)
-        elif document_type == DocumentType.DOCX:
-            file_data = self.docx_generator.generate(content, plain_text=plain_text)
-        elif document_type == DocumentType.XLSX:
-            file_data = self.excel_generator.generate(content)
-        elif document_type == DocumentType.CSV:
-            file_data = self.csv_generator.generate(content)
-        elif document_type == DocumentType.PPTX:
-            file_data = self.pptx_generator.generate(content)
+        if isinstance(content, StructuredDocumentContent):
+            file_data = self._generate_structured(content, document_type)
+            requested_filename = requested_filename or content.title
         else:
-            raise ValueError(f"Unsupported generated document type: {document_type.value}.")
-        self.validator.validate(file_data, document_type)
+            file_data = self._generate_text(content, document_type, plain_text=plain_text)
+        if isinstance(content, StructuredDocumentContent):
+            source_text = (
+                content.to_markdown()
+                if document_type == DocumentType.MARKDOWN
+                else content.to_plain_text()
+            )
+        else:
+            source_text = content
+        assessment = self.validator.assess_generation(
+            file_data, document_type, source_text=source_text
+        )
         return GeneratedDocument(
             file_data=file_data,
             filename=self.safe_filename(requested_filename, document_type),
             content_type=self.MIME_TYPES[document_type],
             document_type=document_type,
+            fidelity=assessment.fidelity,
+            fidelity_note=assessment.note,
         )
+
+    def _generate_text(
+        self, content: str, document_type: DocumentType, *, plain_text: bool
+    ) -> bytes:
+        if document_type in {DocumentType.TXT, DocumentType.MARKDOWN}:
+            return content.encode("utf-8")
+        if document_type == DocumentType.PDF:
+            return self.pdf_generator.generate(content, plain_text=plain_text)
+        if document_type == DocumentType.DOCX:
+            return self.docx_generator.generate(content, plain_text=plain_text)
+        if document_type == DocumentType.XLSX:
+            return self.excel_generator.generate(content)
+        if document_type == DocumentType.CSV:
+            return self.csv_generator.generate(content)
+        if document_type == DocumentType.PPTX:
+            return self.pptx_generator.generate(content)
+        raise ValueError(f"Unsupported generated document type: {document_type.value}.")
+
+    def _generate_structured(
+        self, content: StructuredDocumentContent, document_type: DocumentType
+    ) -> bytes:
+        if document_type == DocumentType.TXT:
+            return content.to_plain_text().encode("utf-8")
+        if document_type == DocumentType.MARKDOWN:
+            return content.to_markdown().encode("utf-8")
+        generators = {
+            DocumentType.PDF: self.pdf_generator.generate_structured,
+            DocumentType.DOCX: self.docx_generator.generate_structured,
+            DocumentType.XLSX: self.excel_generator.generate_structured,
+            DocumentType.CSV: self.csv_generator.generate_structured,
+            DocumentType.PPTX: self.pptx_generator.generate_structured,
+        }
+        try:
+            generator = generators[document_type]
+        except KeyError as error:
+            raise ValueError(
+                f"Unsupported generated document type: {document_type.value}."
+            ) from error
+        return generator(content)
+
+    @staticmethod
+    def parse_ai_content(response: str) -> StructuredDocumentContent:
+        """Parse only the validated JSON contract; never accept model-produced file bytes."""
+        candidate = response.strip()
+        fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", candidate, flags=re.DOTALL)
+        if fence:
+            candidate = fence.group(1).strip()
+        if not candidate.startswith("{") or not candidate.endswith("}"):
+            raise ValueError("The AI returned invalid structured document content.")
+        try:
+            payload = json.loads(candidate)
+            return StructuredDocumentContent.model_validate(payload)
+        except (json.JSONDecodeError, ValidationError, TypeError) as error:
+            raise ValueError("The AI returned invalid structured document content.") from error
 
     def generate_excel_from_tables(
         self,
@@ -95,7 +160,7 @@ class DocumentGenerationService:
     ) -> GeneratedDocument:
         file_data = self.excel_generator.generate_tables(tables)
         document_type = DocumentType.XLSX
-        self.validator.validate(file_data, document_type)
+        assessment = self.validator.assess_generation(file_data, document_type)
         return GeneratedDocument(
             file_data=file_data,
             filename=self.safe_filename(
@@ -103,6 +168,8 @@ class DocumentGenerationService:
             ),
             content_type=self.MIME_TYPES[document_type],
             document_type=document_type,
+            fidelity=assessment.fidelity,
+            fidelity_note=assessment.note,
         )
 
     @staticmethod
@@ -120,7 +187,10 @@ class DocumentGenerationService:
     @classmethod
     def safe_filename(cls, requested_filename: str | None, document_type: DocumentType) -> str:
         raw_name = Path((requested_filename or "nutrition-document").replace("\\", "/")).name
-        stem = Path(raw_name).stem
+        # A title may contain periods ("U.S. Presidents"). Strip only a file
+        # extension, so the rest of a dotted title does not get lost.
+        suffix = Path(raw_name).suffix
+        stem = Path(raw_name).stem if re.fullmatch(r"\.[a-zA-Z0-9]{1,10}", suffix) else raw_name
         ascii_stem = unicodedata.normalize("NFKD", stem).encode("ascii", "ignore").decode()
         safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "-", ascii_stem).strip("._-")[:100]
         if not safe_stem:

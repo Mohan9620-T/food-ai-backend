@@ -11,6 +11,7 @@ import { HttpClient } from '@angular/common/http';
 import { isPlatformBrowser } from '@angular/common';
 import {
   catchError,
+  concat,
   concatMap,
   defer,
   finalize,
@@ -30,10 +31,12 @@ import {
   ChatMessage,
   ChatRequest,
   ChatResponse,
+  DocumentAutomationTurn,
   PendingChatResponse,
 } from '../models/chat';
 import { environment } from '../../environments/environment';
 import { AuthService } from './auth';
+import { isDocumentFileRequest } from '../models/document-requests';
 
 interface ChatSessionSummaryApi {
   id: number;
@@ -77,7 +80,6 @@ export class ChatService {
   private readonly legacyPendingStorageKeyPrefix = 'food-ai-pending-response';
   private readonly activeStorageKeyPrefix = 'food-ai-active-session-v2';
   private readonly migrationFlagPrefix = 'food-ai-migrated-v1';
-  private readonly consolidationFlagPrefix = 'food-ai-sessions-consolidated-single-v3';
   private readonly pendingHistoryMaxAgeMs = 15 * 60 * 1000;
 
   private readonly http = inject(HttpClient);
@@ -138,7 +140,6 @@ export class ChatService {
 
       const subscription = this.migrateLegacyConversations(userId)
         .pipe(
-          switchMap(() => this.consolidateExistingSessions(userId)),
           switchMap(() => this.fetchConversations()),
           finalize(() => this.loadingSessionsState.set(false)),
         )
@@ -216,9 +217,10 @@ export class ChatService {
     analyze = true,
   ): Observable<ChatResponse> {
     return defer(() => {
+      const fileAction = analyze && Boolean(message && isDocumentFileRequest(message));
       const form = new FormData();
       form.append('file', file, file.name);
-      if (!analyze) form.append('analyze', 'false');
+      if (!analyze || fileAction) form.append('analyze', 'false');
       if (message?.trim()) form.append('message', message.trim());
       const sessionId = this.toServerSessionId(conversationId);
       if (sessionId !== null) form.append('session_id', String(sessionId));
@@ -226,6 +228,19 @@ export class ChatService {
       return this.http.post<ChatResponse>(`${environment.apiUrl}/chat/documents`, form).pipe(
         tap((response) => {
           if (conversationId) this.acceptResponse(conversationId, response);
+        }),
+        switchMap((response) => {
+          if (!fileAction || !message || !response.attachment) return of(response);
+          return concat(
+            of(response),
+            this.automateDocument(
+              response.session_id,
+              message,
+              conversationId,
+              false,
+              response.attachment.id,
+            ),
+          );
         }),
         finalize(() => this.setDocumentProcessing(conversationId, false)),
       );
@@ -244,7 +259,47 @@ export class ChatService {
       /\b(?:expand\s+(?:each|every)?\s*dish\s+rows?|split\s+(?:each|every)\s+dish\s+into\s+rows|one\s+row\s+(?:for\s+every|per)\s+category|separate\s+rows\s+based\s+on)\b/.test(
         normalized,
       );
-    return filterRequest || dishExpansionRequest;
+    return filterRequest || dishExpansionRequest || this.isSpreadsheetRowCountRequest(message);
+  }
+
+  isSpreadsheetRowCountRequest(message: string): boolean {
+    const normalized = message.trim().toLowerCase();
+    return (
+      /\b(?:how many|number of|count(?: the)?|total|ethana|evlo|evalo)\b.{0,50}\b(?:rows?|records?)\b/.test(
+        normalized,
+      ) || /\b(?:rows?|records?)\s+counts?\b/.test(normalized)
+    );
+  }
+
+  isDocumentAutomationRequest(message: string): boolean {
+    return /\b(?:read|extract|summari[sz]e|analy[sz]e|review|answer|create|generate|make|prepare|convert|export|update|modify|edit|improve|format|merge|combine|split|filter|report|brochure|document|file|pdf|word|docx|excel|xlsx|csv|powerpoint|pptx|spreadsheet|workbook|table)\b/i.test(
+      message,
+    );
+  }
+
+  hasDocumentContext(conversationId = this.activeConversationIdState()): boolean {
+    const conversation = this.conversationsState().find((item) => item.id === conversationId);
+    return Boolean(
+      conversation?.messages.some(
+        (message) => message.attachment || (message.attachments?.length ?? 0) > 0,
+      ),
+    );
+  }
+
+  private pendingAutomation(conversationId: string | null): DocumentAutomationTurn | undefined {
+    const messages = this.conversationsState().find((item) => item.id === conversationId)?.messages;
+    const turn = messages
+      ?.slice()
+      .reverse()
+      .find((message) => message.sender === 'bot')?.automation;
+    return turn &&
+      ['clarification_required', 'ready_for_review'].includes(turn.response.status ?? '')
+      ? turn
+      : undefined;
+  }
+
+  hasPendingAutomation(conversationId = this.activeConversationIdState()): boolean {
+    return Boolean(this.pendingAutomation(conversationId));
   }
 
   updateSpreadsheet(
@@ -262,6 +317,71 @@ export class ChatService {
         .pipe(
           tap((response) => {
             if (conversationId) this.acceptResponse(conversationId, response);
+          }),
+          finalize(() => this.setDocumentProcessing(conversationId, false)),
+        );
+    });
+  }
+
+  automateDocument(
+    sessionId: number | null,
+    instruction: string,
+    conversationId = this.activeConversationIdState(),
+    confirm = false,
+    sourceDocumentId?: number,
+  ): Observable<ChatResponse> {
+    return defer(() => {
+      this.setDocumentProcessing(conversationId, true);
+      const prior = this.pendingAutomation(conversationId);
+      const source = sourceDocumentId ?? prior?.sourceDocumentId;
+      const choices = [...(prior?.choices ?? [])];
+      if (!confirm && prior?.response.status === 'clarification_required') {
+        choices.push({
+          question: prior.response.clarification?.question ?? prior.response.response,
+          answer: instruction,
+        });
+      }
+      const session =
+        sessionId !== null
+          ? of({ id: sessionId })
+          : this.http
+              .post<ChatSessionSummaryApi>(this.sessionsUrl, { title: this.toTitle(instruction) })
+              .pipe(
+                tap((created) =>
+                  this.conversationsState.update((items) =>
+                    items.map((item) =>
+                      item.id === conversationId ? { ...item, sessionId: created.id } : item,
+                    ),
+                  ),
+                ),
+              );
+      return session
+        .pipe(
+          switchMap((created) =>
+            this.http.post<ChatResponse>(`${environment.apiUrl}/chat/documents/automate`, {
+              session_id: created.id,
+              instruction,
+              confirm,
+              ...(source !== undefined ? { source_document_id: source } : {}),
+            }),
+          ),
+        )
+        .pipe(
+          tap((response) => {
+            if (conversationId) {
+              const last = this.conversationsState()
+                .find((item) => item.id === conversationId)
+                ?.messages.at(-1);
+              if (!confirm && prior && !(last?.sender === 'user' && last.text === instruction)) {
+                this.addMessage({ sender: 'user', text: instruction }, conversationId);
+              }
+              this.acceptResponse(conversationId, response, {
+                response,
+                instruction,
+                choices,
+                sourceDocumentId: source,
+              });
+            }
           }),
           finalize(() => this.setDocumentProcessing(conversationId, false)),
         );
@@ -349,7 +469,11 @@ export class ChatService {
     this.streamAbortController?.abort();
   }
 
-  acceptResponse(conversationId: string, response: ChatResponse): void {
+  acceptResponse(
+    conversationId: string,
+    response: ChatResponse,
+    automation?: DocumentAutomationTurn,
+  ): void {
     this.conversationsState.update((conversations) =>
       conversations
         .map((conversation) => {
@@ -363,10 +487,18 @@ export class ChatService {
                 attachment: response.attachment,
               };
           }
+          const generatedAttachments = response.attachments?.filter(
+            (attachment) => attachment.kind === 'generated',
+          );
           messages.push({
             sender: 'bot' as const,
+            automation,
             text: response.response,
-            attachment: response.attachment?.kind === 'generated' ? response.attachment : undefined,
+            attachment:
+              !generatedAttachments?.length && response.attachment?.kind === 'generated'
+                ? response.attachment
+                : undefined,
+            attachments: generatedAttachments?.length ? generatedAttachments : undefined,
             createdAt: new Date().toISOString(),
           });
           return {
@@ -788,22 +920,6 @@ export class ChatService {
             ),
       ),
       map((sessions) => sessions.map((session) => this.fromApiSession(session))),
-    );
-  }
-
-  private consolidateExistingSessions(userId: string): Observable<void> {
-    if (!this.isBrowser) return of(undefined);
-    const flagKey = `${this.consolidationFlagPrefix}:${userId}`;
-    if (localStorage.getItem(flagKey)) return of(undefined);
-    return this.http.post<ChatSessionSummaryApi[]>(`${this.sessionsUrl}/consolidate`, {}).pipe(
-      tap(() => localStorage.setItem(flagKey, 'true')),
-      map(() => undefined),
-      catchError(() => {
-        this.migrationNoticeState.set(
-          'Old chats could not be combined. They are still saved and consolidation will retry next login.',
-        );
-        return of(undefined);
-      }),
     );
   }
 

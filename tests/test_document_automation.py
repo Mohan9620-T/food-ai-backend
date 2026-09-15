@@ -98,6 +98,7 @@ def test_natural_language_csv_automation_runs_three_real_steps(client, monkeypat
     response = client.post(
         "/chat/documents/automate",
         json={
+            "confirm": True,
             "session_id": uploaded["session_id"],
             "instruction": (
                 "Turn inventory.csv into a polished workbook and make Category easy to search."
@@ -109,9 +110,14 @@ def test_natural_language_csv_automation_runs_three_real_steps(client, monkeypat
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "done"
-    assert body["response"] == "Done."
-    assert len(body["attachments"]) == 1
-    assert body["attachments"][0]["filename"] == "inventory-converted_updated_filter_updated.xlsx"
+    assert body["response"].startswith("Done")
+    assert len(body["attachments"]) == 3
+    assert body["attachments"][-1]["filename"] == "inventory-converted_updated_filter_updated.xlsx"
+    assert [step["status"] for step in body["steps"]] == [
+        "completed",
+        "completed",
+        "completed",
+    ]
     assert provider_calls and "Available files" in provider_calls[0]
     download = client.get(f"/chat/documents/{body['latest_document_id']}/download", headers=headers)
     with closing(load_workbook(BytesIO(download.content))) as workbook:
@@ -121,10 +127,10 @@ def test_natural_language_csv_automation_runs_three_real_steps(client, monkeypat
         "messages"
     ]
     visible_automation_messages = [item["content"] for item in history[-2:]]
-    assert visible_automation_messages == [
-        "Turn inventory.csv into a polished workbook and make Category easy to search.",
-        "Done.",
-    ]
+    assert visible_automation_messages[0] == (
+        "Turn inventory.csv into a polished workbook and make Category easy to search."
+    )
+    assert visible_automation_messages[1].startswith("Done")
 
 
 def test_natural_language_workbook_automation_splits_and_formats(client, monkeypatch):
@@ -166,6 +172,7 @@ def test_natural_language_workbook_automation_splits_and_formats(client, monkeyp
     response = client.post(
         "/chat/documents/automate",
         json={
+            "confirm": True,
             "session_id": uploaded["session_id"],
             "instruction": (
                 "Organize products.xlsx into a tab for each category and make it presentation-ready."
@@ -177,7 +184,8 @@ def test_natural_language_workbook_automation_splits_and_formats(client, monkeyp
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "done"
-    assert body["attachments"][0]["filename"] == "products_category_wise_updated.xlsx"
+    assert len(body["attachments"]) == 2
+    assert body["attachments"][-1]["filename"] == "products_category_wise_updated.xlsx"
     download = client.get(f"/chat/documents/{body['latest_document_id']}/download", headers=headers)
     with closing(load_workbook(BytesIO(download.content))) as workbook:
         assert set(workbook.sheetnames) == {"Fruit", "Vegetable"}
@@ -217,7 +225,11 @@ def test_ambiguous_automation_returns_and_persists_one_clarifying_question(clien
 
     response = client.post(
         "/chat/documents/automate",
-        json={"session_id": first["session_id"], "instruction": "Make it a workbook."},
+        json={
+            "confirm": True,
+            "session_id": first["session_id"],
+            "instruction": "Make it a workbook.",
+        },
         headers=headers,
     )
 
@@ -270,6 +282,7 @@ def test_partial_failure_never_claims_done(client, monkeypatch):
     response = client.post(
         "/chat/documents/automate",
         json={
+            "confirm": True,
             "session_id": uploaded["session_id"],
             "instruction": "Create a polished workbook from inventory.csv.",
         },

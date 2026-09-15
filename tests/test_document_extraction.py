@@ -122,6 +122,23 @@ def test_searchable_pdf_with_physically_empty_page_does_not_need_ocr(monkeypatch
     assert "Allergy: peanuts" in ChatDocumentService().extract(buffer.getvalue(), "report.pdf")
 
 
+def test_searchable_pdf_with_vector_only_page_does_not_need_ocr(monkeypatch):
+    vector_buffer = BytesIO()
+    canvas = Canvas(vector_buffer, pagesize=(300, 120))
+    canvas.rect(20, 20, 100, 50)
+    canvas.save()
+    writer = PdfWriter(clone_from=BytesIO(text_pdf()))
+    writer.add_page(PdfReader(BytesIO(vector_buffer.getvalue())).pages[0])
+    buffer = BytesIO()
+    writer.write(buffer)
+
+    def unexpected_ocr(*args, **kwargs):
+        pytest.fail("A vector-only page must not need OCR")
+
+    monkeypatch.setattr(pytesseract, "image_to_string", unexpected_ocr)
+    assert "Allergy: peanuts" in ChatDocumentService().extract(buffer.getvalue(), "report.pdf")
+
+
 @pytest.mark.parametrize(
     ("failure", "message"),
     [
@@ -221,7 +238,8 @@ def test_xlsx_includes_multiple_sheets_values_and_closes_archive(monkeypatch):
     text = ChatDocumentService().extract(buffer.getvalue(), "projects.xlsx")
     assert "[Projects]\nProject\tBudget\tApproved\nLaunch\t1250\tTrue" in text
     assert "[Owners]\nAlex\t\tTeam A" in text
-    assert len(opened) == 1
+    # One view preserves formulas and the second exposes cached values.
+    assert len(opened) == 2
     assert opened[0]._archive.fp is None
 
 
@@ -259,9 +277,9 @@ def test_binary_data_cannot_be_imported_as_text(extension):
 
 
 @pytest.mark.parametrize("extension", [".txt", ".csv"])
-def test_unsupported_text_encoding_has_actionable_error(extension):
-    with pytest.raises(InvalidDocumentError, match="UTF-8 or UTF-16"):
-        ChatDocumentService().extract(b"Name: Am\xe9lie", f"notes{extension}")
+def test_windows_1252_text_encoding_is_detected(extension):
+    extracted = ChatDocumentService().extract(b"Name: Am\xe9lie", f"notes{extension}")
+    assert "Am\xe9lie" in extracted
 
 
 def test_unsupported_document_extension_is_rejected():

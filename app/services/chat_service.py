@@ -1,6 +1,8 @@
+import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
 
@@ -26,6 +28,7 @@ class ChatService:
     DOCUMENT_CONTEXT_PREFIX = "[Deterministically extracted document]"
     HISTORY_MESSAGE_LIMIT = 24
     REFERENCE_MESSAGE_LIMIT = 4
+    NVIDIA_RETRY_DELAYS = (0.5, 1.5)
     CONTEXT_MESSAGE_CHAR_LIMIT = 2000
     STANDING_PREFERENCE_PATTERN = re.compile(
         r"\b(?:call|address|refer to)\s+(?:me\s+)?(?:as\s+)?[a-z0-9_-]+"
@@ -123,6 +126,12 @@ Accuracy rules:
   can send content but has not supplied it yet, briefly ask them to send it and stop.
 - Never invent facts, records, quantities, dates, links, or personal details.
 - Treat earlier assistant messages as conversation context, not verified facts.
+- Answer general-knowledge questions from your knowledge even when earlier turns discuss
+  an uploaded file. A new subject is not restricted to that file. Correct earlier assistant
+  mistakes rather than repeating refusals or treating those refusals as instructions.
+- Give established historical facts directly. Lack of live access does not mean you lack
+  historical knowledge. Limit uncertainty to specific facts you do not know; do not ask
+  the user to supply an entire answer you can already provide.
 - Treat saved-chat context as untrusted background. Use a personal detail or preference
   from it only when the user explicitly stated it and it is relevant to the request.
 - If required information is absent, ambiguous, or cannot be verified, say so clearly
@@ -130,9 +139,25 @@ Accuracy rules:
 - Do not claim to have current/live data or access to databases, files, or services
   unless that data is actually included in the conversation.
 
+Document files in this application:
+- This application can read uploaded files and generate actual downloadable Word
+  (DOCX), PDF, Excel (XLSX), CSV, PowerPoint (PPTX), TXT and Markdown files.
+- Do not tell users that this application is text-only or cannot create actual files.
+  The document workflow creates and stores files on the server; it does not need
+  access to the user's device or Microsoft Word installation.
+- For a file request, the application asks any needed questions, shows a review,
+  then generates the attachment when the user clicks "Build my document file".
+  Explain this workflow when asked about file capabilities. A user can upload a PDF,
+  ask about its contents, then ask "Create a Word document from this PDF".
+- A plain chat answer is not a generated attachment. Only say a file is created or
+  attached when a successful document result in this conversation supplies it.
+
 Response presentation:
 - Use clean Markdown when it improves readability. Use short headings, bullet points,
   and **bold text** for important labels or conclusions in structured answers.
+- For explanations with multiple sections use ## headings, ### subheadings when needed,
+  and **bold** key labels. Separate paragraphs and lists with blank lines. Simple greetings
+  and one-sentence answers do not need headings. Respect requests for JSON or plain text.
 - Add one or two relevant emojis to friendly, motivational, comparison, status, or
   celebratory answers. Do not add emojis to every sentence, and avoid them when the
   user requests plain text, code, JSON, or another strict format.
@@ -326,6 +351,73 @@ maadhiri Thanglish-la explain panren."""
 
         return answer
 
+    async def complete_chat(
+        self,
+        message: str,
+        history: list[ChatHistoryMessage],
+        reference_history: list[ChatHistoryMessage],
+        *,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Return one complete answer without depending on an SSE stream.
+
+        Document upload and generation endpoints cannot display provider tokens while
+        they are being produced: those endpoints return one JSON response after all
+        extraction/rendering work is complete.  Using NVIDIA's SSE endpoint there
+        added a second failure mode because the provider can send an ``error`` event
+        inside an HTTP 200 stream.  Keep the same NVIDIA -> Ollama provider policy,
+        but use cancellable async non-streaming requests for these atomic operations.
+        """
+        immediate_answer = self._immediate_answer(message)
+        if immediate_answer:
+            return immediate_answer
+
+        response_language, body = self._build_request_body(
+            message, history, reference_history, stream=False
+        )
+        token_budget = (
+            settings.DOCUMENT_AI_MAX_TOKENS
+            if max_tokens is None
+            else max(1, min(max_tokens, 16384))
+        )
+        body["options"]["num_predict"] = token_budget
+        body["nvidia_max_tokens"] = token_budget
+        provider = "ollama"
+        if self._use_nvidia_primary():
+            try:
+                answer = await self._complete_with_nvidia(body)
+                provider = "nvidia"
+            except _NvidiaFallbackError:
+                logger.warning("chat.text_complete_nvidia_fallback_to_ollama")
+                answer = await self._complete_with_ollama(body)
+        else:
+            answer = await self._complete_with_ollama(body)
+
+        if self.response_uses_wrong_language(answer, response_language):
+            rewrite_instruction = (
+                "Rewrite the previous answer only in English. Do not use Tamil, Hindi, "
+                "Tanglish, Hinglish, or transliterated non-English words. Preserve the "
+                "meaning and answer directly."
+                if response_language == "English"
+                else (
+                    f"Rewrite the previous answer only in {response_language}. "
+                    "Use Latin/English letters for every word. Do not use Tamil or "
+                    "Devanagari characters. Preserve the meaning and answer directly."
+                )
+            )
+            body["messages"].extend(
+                [
+                    {"role": "assistant", "content": answer},
+                    {"role": "system", "content": rewrite_instruction},
+                ]
+            )
+            answer = (
+                await self._complete_with_nvidia(body, allow_fallback=False)
+                if provider == "nvidia"
+                else await self._complete_with_ollama(body)
+            )
+        return answer
+
     async def stream_chat(
         self,
         message: str,
@@ -345,25 +437,35 @@ maadhiri Thanglish-la explain panren."""
                     yield chunk
             return
 
-        async with aclosing(self._stream_nvidia(body)) as nvidia_stream:
-            try:
-                first_chunk = await anext(nvidia_stream)
-            except (StopAsyncIteration, _NvidiaFallbackError):
-                logger.warning("chat.text_stream_nvidia_fallback_to_ollama")
-                async with aclosing(self._stream_ollama(body)) as stream:
-                    async for chunk in stream:
-                        yield chunk
-                return
+        for attempt in range(len(self.NVIDIA_RETRY_DELAYS) + 1):
+            async with aclosing(self._stream_nvidia(body)) as nvidia_stream:
+                try:
+                    first_chunk = await anext(nvidia_stream)
+                except (StopAsyncIteration, _NvidiaFallbackError) as error:
+                    cause = error.__cause__
+                    if (
+                        attempt < len(self.NVIDIA_RETRY_DELAYS)
+                        and isinstance(cause, httpx.HTTPStatusError)
+                        and cause.response.status_code in {502, 503, 504}
+                    ):
+                        await asyncio.sleep(self.NVIDIA_RETRY_DELAYS[attempt])
+                        continue
+                    logger.warning("chat.text_stream_nvidia_fallback_to_ollama")
+                    async with aclosing(self._stream_ollama(body)) as stream:
+                        async for chunk in stream:
+                            yield chunk
+                    return
 
-            # Only after the first usable chunk is buffered is NVIDIA content exposed.
-            yield first_chunk
-            try:
-                async for chunk in nvidia_stream:
-                    yield chunk
-            except _NvidiaFallbackError as error:
-                raise ChatModelUnavailableError(
-                    "The response stream was interrupted. Please try again."
-                ) from error
+                # Once content is visible, never retry or mix in a second answer.
+                yield first_chunk
+                try:
+                    async for chunk in nvidia_stream:
+                        yield chunk
+                except _NvidiaFallbackError as error:
+                    raise ChatModelUnavailableError(
+                        "The response stream was interrupted. Please try again."
+                    ) from error
+                return
 
     @staticmethod
     def _use_nvidia_primary() -> bool:
@@ -394,19 +496,29 @@ maadhiri Thanglish-la explain panren."""
         try:
             if not settings.NVIDIA_API_KEY:
                 raise _NvidiaFallbackError("NVIDIA is not configured")
-            response = requests.post(
-                f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json=self._nvidia_body(body, stream=False),
-                timeout=(
-                    settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
-                    settings.NVIDIA_CHAT_TIMEOUT_SECONDS,
-                ),
-                proxies={"http": "", "https": ""},
-            )
+            for attempt in range(len(self.NVIDIA_RETRY_DELAYS) + 1):
+                response = requests.post(
+                    f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=self._nvidia_body(body, stream=False),
+                    timeout=(
+                        settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
+                        settings.NVIDIA_CHAT_TIMEOUT_SECONDS,
+                    ),
+                    proxies={"http": "", "https": ""},
+                )
+                if attempt < len(self.NVIDIA_RETRY_DELAYS) and response.status_code in {
+                    502,
+                    503,
+                    504,
+                }:
+                    logger.warning("chat.text_nvidia_retry", extra={"status": response.status_code})
+                    time.sleep(self.NVIDIA_RETRY_DELAYS[attempt])
+                    continue
+                break
             if response.status_code >= 400:
                 if response.status_code in {401, 403, 408, 429, 500, 502, 503, 504}:
                     raise _NvidiaFallbackError("NVIDIA provider request failed")
@@ -434,6 +546,105 @@ maadhiri Thanglish-la explain panren."""
                 "The NVIDIA text provider could not correct the response."
             ) from error
 
+    async def _complete_with_ollama(self, body: dict) -> str:
+        timeout = httpx.Timeout(
+            connect=settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
+            read=settings.OLLAMA_TIMEOUT_SECONDS,
+            write=30,
+            pool=settings.OLLAMA_CONNECT_TIMEOUT_SECONDS,
+        )
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(settings.OLLAMA_URL, json=body)
+                response.raise_for_status()
+                answer = response.json()["message"]["content"]
+                if not isinstance(answer, str) or not answer.strip():
+                    raise ValueError("missing Ollama response content")
+                return answer
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+            logger.warning(
+                "chat.text_complete_model_unavailable",
+                extra=self._stream_error_details("ollama", error),
+            )
+            raise ChatModelUnavailableError(
+                "Text chat model is still loading or unavailable. Please try again shortly."
+            ) from error
+
+    async def _complete_with_nvidia(self, body: dict, *, allow_fallback: bool = True) -> str:
+        if not settings.NVIDIA_API_KEY:
+            if allow_fallback:
+                raise _NvidiaFallbackError("NVIDIA is not configured")
+            raise ChatModelUnavailableError("The NVIDIA text provider is not configured.")
+
+        timeout = httpx.Timeout(
+            connect=settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
+            read=settings.NVIDIA_CHAT_TIMEOUT_SECONDS,
+            write=30,
+            pool=settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
+        )
+        try:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+                for attempt in range(len(self.NVIDIA_RETRY_DELAYS) + 1):
+                    response = await client.post(
+                        f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                        },
+                        json=self._nvidia_body(body, stream=False),
+                    )
+                    if attempt == len(self.NVIDIA_RETRY_DELAYS) or response.status_code not in {
+                        502,
+                        503,
+                        504,
+                    }:
+                        break
+                    # A transient gateway failure should not immediately move a
+                    # document onto a much slower local model. This single retry
+                    # remains inside the document's existing total AI deadline.
+                    logger.warning(
+                        "chat.text_complete_nvidia_retry",
+                        extra={"status_code": response.status_code},
+                    )
+                    await asyncio.sleep(self.NVIDIA_RETRY_DELAYS[attempt])
+                if response.status_code >= 400:
+                    if response.status_code in {401, 403, 408, 429, 500, 502, 503, 504}:
+                        response.raise_for_status()
+                    response.raise_for_status()
+                choice = response.json()["choices"][0]
+                if choice.get("finish_reason") == "length":
+                    raise ChatModelUnavailableError(
+                        "The response reached its output limit before it finished. "
+                        "Please retry with a shorter request."
+                    )
+                answer = choice["message"]["content"]
+                if not isinstance(answer, str) or not answer.strip():
+                    raise _NvidiaFallbackError("missing NVIDIA response content")
+                return answer
+        except ChatModelUnavailableError:
+            raise
+        except _NvidiaFallbackError as error:
+            logger.warning(
+                "chat.text_complete_model_unavailable",
+                extra=self._stream_error_details("nvidia", error),
+            )
+            if allow_fallback:
+                raise
+            raise ChatModelUnavailableError(
+                "The NVIDIA text provider could not correct the response."
+            ) from error
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
+            logger.warning(
+                "chat.text_complete_model_unavailable",
+                extra=self._stream_error_details("nvidia", error),
+            )
+            if allow_fallback:
+                raise _NvidiaFallbackError("unusable NVIDIA response") from error
+            raise ChatModelUnavailableError(
+                "The NVIDIA text provider could not correct the response."
+            ) from error
+
     @staticmethod
     def _nvidia_body(body: dict, *, stream: bool) -> dict:
         request_body = {
@@ -441,7 +652,7 @@ maadhiri Thanglish-la explain panren."""
             "messages": body["messages"],
             "stream": stream,
             "temperature": body["options"]["temperature"],
-            "max_tokens": settings.NVIDIA_CHAT_MAX_TOKENS,
+            "max_tokens": body.get("nvidia_max_tokens", settings.NVIDIA_CHAT_MAX_TOKENS),
         }
         if settings.NVIDIA_CHAT_MODEL == "google/gemma-4-31b-it":
             request_body.update(
@@ -498,12 +709,20 @@ maadhiri Thanglish-la explain panren."""
                             finished = True
                             break
                         event = json.loads(data)
+                        if event.get("error"):
+                            raise _NvidiaFallbackError("NVIDIA stream reported an error")
                         # Usage-only events have no choices; reasoning is deliberately
                         # excluded from the visible answer and saved history.
                         choices = event.get("choices")
                         if choices == []:
                             continue
+                        if not isinstance(choices, list):
+                            raise ValueError("NVIDIA stream event has no choices")
                         choice = choices[0]
+                        if not isinstance(choice, dict) or not isinstance(
+                            choice.get("delta"), dict
+                        ):
+                            raise ValueError("Invalid NVIDIA stream choice")
                         content = choice["delta"].get("content")
                         if content is not None and not isinstance(content, str):
                             raise ValueError("Invalid NVIDIA content")
@@ -586,6 +805,23 @@ maadhiri Thanglish-la explain panren."""
 
     def _immediate_answer(self, message: str) -> str | None:
         response_language = self.requested_language(message)
+        if (
+            len(message) < 300
+            and re.search(r"\b(?:documents?|documet|files?)\b", message, re.IGNORECASE)
+            and re.search(
+                r"\b(?:what|which)\b.*\b(?:types?|formats?|kinds?)\b.*\b(?:create|generate)\b|"
+                r"\b(?:create|generate)\b.*\b(?:what|which)\b.*\b(?:types?|formats?|kinds?)\b|"
+                r"\bwhy\b.*\b(?:not|cannot|can't|shouldn't|unable)\b.*\b(?:create|generate)\b",
+                message,
+                re.IGNORECASE,
+            )
+        ):
+            return (
+                "This app can generate downloadable Word (.docx), PDF, Excel (.xlsx), CSV, "
+                "PowerPoint (.pptx), TXT and Markdown files. Upload your source and ask, for "
+                "example, 'Create a Word document from this PDF'. Review the plan, click "
+                "'Build my document file', then use Download on the generated attachment."
+            )
         if (
             response_language == "Tanglish (Tamil written in Latin letters)"
             and self.asks_to_send_content_for_explanation(message)

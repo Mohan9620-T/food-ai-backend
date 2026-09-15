@@ -55,6 +55,97 @@ describe('ChatService session continuity', () => {
     http.verify();
   });
 
+  it('saves an attached PDF before planning Word and keeps the source through Build', () => {
+    const id = service.getActiveConversationId()!;
+    const instruction = 'can you create the word document on this content';
+    service.addMessage({ sender: 'user', text: instruction }, id);
+    const results: string[] = [];
+    service
+      .uploadDocument(
+        new File(['pdf bytes'], 'sample-1.pdf', { type: 'application/pdf' }),
+        instruction,
+        id,
+      )
+      .subscribe((result) => results.push(result.response));
+    const upload = http.expectOne((r) => r.url.endsWith('/chat/documents'));
+    expect(upload.request.body.get('analyze')).toBe('false');
+    upload.flush({
+      session_id: 99,
+      response: 'File saved',
+      analysis_status: 'skipped',
+      attachment: {
+        id: 21,
+        filename: 'sample-1.pdf',
+        kind: 'uploaded',
+        content_type: 'application/pdf',
+        file_size: 9,
+      },
+    });
+    expect(results).toEqual(['File saved']);
+    expect(service.messages()[0].attachment?.id).toBe(21);
+    expect(service.processingDocument()).toBe(true);
+    const plan = http.expectOne((r) => r.url.endsWith('/automate'));
+    expect(plan.request.body).toEqual({
+      session_id: 99,
+      instruction,
+      confirm: false,
+      source_document_id: 21,
+    });
+    plan.flush({
+      session_id: 99,
+      response: 'Review Word creation',
+      plan_summary: 'Review Word creation',
+      status: 'ready_for_review',
+      attachments: [],
+    });
+    expect(service.messages().at(-1)?.automation?.sourceDocumentId).toBe(21);
+    expect(service.hasPendingAutomation(id)).toBe(true);
+    expect(service.processingDocument()).toBe(false);
+    service.automateDocument(99, instruction, id, true).subscribe();
+    const build = http.expectOne((r) => r.url.endsWith('/automate'));
+    expect(build.request.body).toEqual({
+      session_id: 99,
+      instruction,
+      confirm: true,
+      source_document_id: 21,
+    });
+    build.flush({
+      session_id: 99,
+      response: 'Created Word',
+      status: 'done',
+      attachments: [
+        {
+          id: 22,
+          filename: 'source.docx',
+          kind: 'generated',
+          content_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          file_size: 100,
+        },
+      ],
+    });
+    expect(service.messages().at(-1)?.attachments?.[0].filename).toBe('source.docx');
+  });
+
+  it('keeps upload-and-read on the document reading endpoint', () => {
+    const id = service.getActiveConversationId()!;
+    service
+      .uploadDocument(
+        new File(['pdf'], 'sample.pdf'),
+        'Read this PDF end to end and give me a summary',
+        id,
+      )
+      .subscribe();
+    const upload = http.expectOne((r) => r.url.endsWith('/chat/documents'));
+    expect(upload.request.body.get('analyze')).toBeNull();
+    upload.flush({
+      session_id: 99,
+      response: 'The full PDF describes Project Cedar',
+      analysis_status: 'complete',
+    });
+    http.expectNone((r) => r.url.endsWith('/automate'));
+    expect(service.messages().at(-1)?.text).toContain('Project Cedar');
+  });
+
   it('uses the session_id returned by the first non-streaming response on the second message', () => {
     const conversationId = service.getActiveConversationId()!;
     const request = { message: 'First', history: [], referenceHistory: [] };
@@ -70,6 +161,105 @@ describe('ChatService session continuity', () => {
     );
     expect(second.request.urlWithParams).toContain('session_id=73');
     second.flush({ response: 'Second answer', session_id: 73 });
+  });
+
+  it('creates a session before planning a source-free document request', () => {
+    const conversationId = service.getActiveConversationId()!;
+    service.automateDocument(null, 'Create an Excel file', conversationId).subscribe();
+    http
+      .expectOne((r) => r.method === 'POST' && r.url.endsWith('/chat/sessions'))
+      .flush({ id: 99 });
+    const plan = http.expectOne((r) => r.url.endsWith('/chat/documents/automate'));
+    expect(plan.request.body).toEqual({
+      session_id: 99,
+      instruction: 'Create an Excel file',
+      confirm: false,
+    });
+    plan.flush({ session_id: 99, response: 'Which scope?', status: 'clarification_required' });
+    expect(service.getActiveSessionId()).toBe(99);
+  });
+
+  it('accumulates choices from ordinary answer turns and confirms the same instruction', () => {
+    const id = service.getActiveConversationId()!;
+    service.automateDocument(99, 'Make a brochure', id).subscribe();
+    http
+      .expectOne((r) => r.url.endsWith('/automate'))
+      .flush({
+        session_id: 99,
+        status: 'clarification_required',
+        response: 'Which format?',
+        clarification: {
+          question: 'Which format?',
+          allow_other: true,
+          options: [
+            { id: 'word', label: 'Word', recommended: true },
+            { id: 'pdf', label: 'PDF', recommended: false },
+          ],
+        },
+      });
+    expect(service.hasPendingAutomation(id)).toBe(true);
+    service.automateDocument(99, 'Word', id).subscribe();
+    const answer = http.expectOne((r) => r.url.endsWith('/automate'));
+    expect(answer.request.body.confirm).toBe(false);
+    answer.flush({
+      session_id: 99,
+      status: 'ready_for_review',
+      response: 'Review',
+      plan_summary: 'Create DOCX',
+    });
+    expect(service.messages().at(-1)?.automation?.choices).toEqual([
+      { question: 'Which format?', answer: 'Word' },
+    ]);
+    service.automateDocument(99, 'Word', id, true).subscribe();
+    const build = http.expectOne((r) => r.url.endsWith('/automate'));
+    expect(build.request.body).toEqual({ session_id: 99, instruction: 'Word', confirm: true });
+    build.flush({ session_id: 99, status: 'done', response: 'Created' });
+    expect(service.hasPendingAutomation(id)).toBe(false);
+  });
+
+  it('keeps every generated automation attachment available for download', () => {
+    const conversationId = service.getActiveConversationId()!;
+    service.automateDocument(73, 'Create Excel and Word reports', conversationId, true).subscribe();
+    const request = http.expectOne((candidate) =>
+      candidate.url.endsWith('/chat/documents/automate'),
+    );
+    expect(request.request.body).toEqual({
+      session_id: 73,
+      instruction: 'Create Excel and Word reports',
+      confirm: true,
+    });
+    request.flush({
+      response: 'Done — both files are attached.',
+      session_id: 73,
+      status: 'done',
+      latest_document_id: 12,
+      attachments: [
+        {
+          id: 11,
+          filename: 'data.xlsx',
+          content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          file_size: 100,
+          kind: 'generated',
+        },
+        {
+          id: 12,
+          filename: 'report.docx',
+          content_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          file_size: 200,
+          kind: 'generated',
+        },
+      ],
+      steps: [],
+    });
+
+    expect(
+      service
+        .messages()
+        .at(-1)
+        ?.attachments?.map((item) => item.filename),
+    ).toEqual(['data.xlsx', 'report.docx']);
+    expect(service.hasDocumentContext(conversationId)).toBe(true);
+    expect(service.processingDocument()).toBe(false);
   });
 
   it('uses the first streaming session_id on the next streaming request', async () => {

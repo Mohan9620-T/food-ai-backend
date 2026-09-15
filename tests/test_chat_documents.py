@@ -169,7 +169,7 @@ def test_all_supported_uploads_can_be_reloaded_and_downloaded(client, monkeypatc
     )
     assert result.status_code == 200, result.text
     body = result.json()
-    assert "oats 100" in captured[0][0]
+    assert "oats 100" in captured[0][0].text
     assert captured[0][1] == "Show the headings and details"
     reloaded = client.get(f"/chat/sessions/{body['session_id']}", headers=headers).json()
     assert len(reloaded["messages"]) == 2
@@ -386,7 +386,7 @@ def test_dish_category_expansion_upload_is_stored_and_downloadable_without_ai(cl
         side_effect=AssertionError("Dish category expansion must not call a provider")
     )
     monkeypatch.setattr(ChatDocumentService, "summarize", summarize)
-    monkeypatch.setattr(chat_documents.service.chat_service, "stream_chat", provider_call)
+    monkeypatch.setattr(chat_documents.service.chat_service, "complete_chat", provider_call)
 
     response = client.post(
         "/chat/documents",
@@ -601,6 +601,58 @@ def test_filter_follow_up_without_spreadsheet_returns_clean_error(client):
     }
 
 
+def test_row_count_upload_returns_deterministic_answer_without_ai(client, monkeypatch):
+    token = _login(client, "spreadsheet-row-count@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    workbook = Workbook()
+    workbook.active.title = "Items"
+    workbook.active.append(["Code", "Name"])
+    workbook.active.append(["A001", "Apple"])
+    workbook.active.append(["B002", "Banana"])
+    output = BytesIO()
+    workbook.save(output)
+    workbook.close()
+    summarize = AsyncMock(side_effect=AssertionError("Row counting must not call AI"))
+    monkeypatch.setattr(ChatDocumentService, "summarize", summarize)
+
+    response = client.post(
+        "/chat/documents",
+        files={"file": ("items.xlsx", output.getvalue(), DOCUMENT_XLSX_MIME)},
+        data={"message": "Can you read the file and give me the row counts?"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["analysis_status"] == "complete"
+    assert body["attachment"]["kind"] == "uploaded"
+    assert "2 data rows" in body["response"]
+    assert "3 populated rows total" in body["response"]
+    assert summarize.await_count == 0
+
+
+def test_row_count_follow_up_without_spreadsheet_returns_specific_error(client):
+    token = _login(client, "spreadsheet-row-count-missing@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = client.post(
+        "/chat/sessions", json={"title": "No spreadsheet"}, headers=headers
+    ).json()["id"]
+
+    response = client.post(
+        "/chat/documents/spreadsheet",
+        json={
+            "session_id": session_id,
+            "instruction": "Can you read the file and give me the row counts?",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "Upload an Excel or CSV spreadsheet first, then ask your row-count question."
+    }
+
+
 def test_filter_upload_missing_category_returns_clean_error_without_ai(client, monkeypatch):
     token = _login(client, "spreadsheet-filter-missing-column@example.com")
     headers = {"Authorization": f"Bearer {token}"}
@@ -718,7 +770,7 @@ def test_missing_ocr_is_not_reported_as_corrupt_document(client, monkeypatch):
             "Scanned PDFs require Tesseract OCR on the backend."
         )
 
-    monkeypatch.setattr(ChatDocumentService, "extract", unavailable)
+    monkeypatch.setattr(ChatDocumentService, "extract_document", unavailable)
     headers = {"Authorization": f"Bearer {token}"}
     response = client.post(
         "/chat/documents",
@@ -795,7 +847,7 @@ def test_document_routes_check_session_ownership_before_processing(client, monke
     def unexpected(*args):
         raise AssertionError("Do not process another user's session")
 
-    monkeypatch.setattr(ChatDocumentService, "extract", unexpected)
+    monkeypatch.setattr(ChatDocumentService, "extract_document", unexpected)
     monkeypatch.setattr(ChatDocumentService, "generate_content", unexpected)
     upload = client.post(
         "/chat/documents",

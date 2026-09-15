@@ -7,7 +7,11 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from app.services.document.content_parser import tabular_rows
-from app.services.document.extraction_models import ExtractedTable
+from app.services.document.extraction_models import (
+    ExtractedTable,
+    GeneratedTableContent,
+    StructuredDocumentContent,
+)
 
 
 class ExcelGenerator:
@@ -31,6 +35,37 @@ class ExcelGenerator:
             existing_titles.add(sheet.title.casefold())
             self._write_rows(sheet, [list(row) for row in table.rows])
         return self._save(workbook)
+
+    def generate_structured(self, content: StructuredDocumentContent) -> bytes:
+        workbook = Workbook()
+        overview = workbook.active
+        overview.title = "Overview"
+        overview_rows: list[list[str]] = [[content.title]]
+        overview_rows.extend([paragraph] for paragraph in content.paragraphs)
+        for items in content.bullet_lists:
+            overview_rows.extend([[f"• {item}"] for item in items])
+        for section in content.sections:
+            overview_rows.append([section.heading])
+            overview_rows.extend([paragraph] for paragraph in section.paragraphs)
+            for items in section.bullet_lists:
+                overview_rows.extend([[f"• {item}"] for item in items])
+        self._write_rows(overview, overview_rows)
+
+        existing_titles = {overview.title.casefold()}
+        for content_table in content.all_tables():
+            sheet = workbook.create_sheet(
+                self._safe_sheet_title(content_table.title, existing_titles)
+            )
+            existing_titles.add(sheet.title.casefold())
+            self._write_rows(sheet, self._content_table_rows(content_table))
+        return self._save(workbook)
+
+    @staticmethod
+    def _content_table_rows(table: GeneratedTableContent) -> list[list[str]]:
+        rows = [list(row) for row in table.rows]
+        if table.headers:
+            rows.insert(0, list(table.headers))
+        return rows
 
     @staticmethod
     def _write_rows(sheet, rows: list[list[str]]) -> None:

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from io import BytesIO
 from time import monotonic
 
@@ -33,19 +34,18 @@ def _assert_no_artifacts(db_session):
 
 @pytest.mark.parametrize("operation", ["generate", "summarize"])
 def test_document_deadline_cancels_and_closes_upstream(monkeypatch, operation):
-    state = {"closed": False, "cancelled": False}
+    state = {"finished": False, "cancelled": False}
 
-    async def stalled(self, message, history, reference_history):
+    async def stalled(self, message, history, reference_history, **kwargs):
         try:
-            yield "Incomplete document"
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             state["cancelled"] = True
             raise
         finally:
-            state["closed"] = True
+            state["finished"] = True
 
-    monkeypatch.setattr(ChatService, "stream_chat", stalled)
+    monkeypatch.setattr(ChatService, "complete_chat", stalled)
     monkeypatch.setattr(settings, "DOCUMENT_AI_TIMEOUT_SECONDS", 0.02)
     service = ChatDocumentService()
     request = (
@@ -57,22 +57,29 @@ def test_document_deadline_cancels_and_closes_upstream(monkeypatch, operation):
     with pytest.raises(ChatModelUnavailableError):
         asyncio.run(request)
     assert monotonic() - started < 2
-    assert state == {"closed": True, "cancelled": True}
+    assert state == {"finished": True, "cancelled": True}
 
 
-def test_document_generation_stream_receives_saved_context(monkeypatch):
+def test_document_generation_completion_receives_saved_context(monkeypatch):
     captured = []
     history = [
         ChatHistoryMessage(role="user", content="Use the May billing period."),
         ChatHistoryMessage(role="assistant", content="The billing period is May 2026."),
     ]
 
-    async def completed(self, message, previous, references):
+    async def completed(self, message, previous, references, **kwargs):
         captured.append((message, previous, references))
-        yield "# Billing report\n"
-        yield "Company: Catering Solutions"
+        return json.dumps(
+            {
+                "title": "Billing report",
+                "paragraphs": ["Company: Catering Solutions"],
+                "bullet_lists": [],
+                "tables": [],
+                "sections": [],
+            }
+        )
 
-    monkeypatch.setattr(ChatService, "stream_chat", completed)
+    monkeypatch.setattr(ChatService, "complete_chat", completed)
     result = asyncio.run(
         ChatDocumentService().generate_content(
             "Create a billing report",
@@ -81,7 +88,8 @@ def test_document_generation_stream_receives_saved_context(monkeypatch):
             {"goal": "Maintain weight"},
         )
     )
-    assert result == "# Billing report\nCompany: Catering Solutions"
+    assert result.title == "Billing report"
+    assert result.paragraphs == ["Company: Catering Solutions"]
     prompt, previous, references = captured[0]
     assert "Create a billing report" in prompt
     assert "Company: Catering Solutions" in prompt
@@ -93,29 +101,27 @@ def test_document_generation_stream_receives_saved_context(monkeypatch):
 
 @pytest.mark.parametrize("chunks", [[], ["", " \n\t"]])
 def test_document_generation_rejects_empty_stream(monkeypatch, chunks):
-    async def empty(self, message, history, reference_history):
-        for chunk in chunks:
-            yield chunk
+    async def empty(self, message, history, reference_history, **kwargs):
+        return "".join(chunks)
 
-    monkeypatch.setattr(ChatService, "stream_chat", empty)
+    monkeypatch.setattr(ChatService, "complete_chat", empty)
     with pytest.raises(ChatModelUnavailableError):
         asyncio.run(ChatDocumentService().generate_content("Create a report", [], []))
 
 
-def test_failed_document_stream_never_returns_partial_content(monkeypatch):
-    state = {"closed": False}
+def test_failed_document_completion_never_returns_partial_content(monkeypatch):
+    state = {"finished": False}
 
-    async def interrupted(self, message, history, reference_history):
+    async def interrupted(self, message, history, reference_history, **kwargs):
         try:
-            yield "# Incomplete report"
             raise ChatModelUnavailableError("The upstream response was interrupted")
         finally:
-            state["closed"] = True
+            state["finished"] = True
 
-    monkeypatch.setattr(ChatService, "stream_chat", interrupted)
+    monkeypatch.setattr(ChatService, "complete_chat", interrupted)
     with pytest.raises(ChatModelUnavailableError):
         asyncio.run(ChatDocumentService().generate_content("Create a report", [], []))
-    assert state["closed"]
+    assert state["finished"]
 
 
 @pytest.mark.parametrize("output_format", ["pdf", "docx"])
@@ -133,7 +139,7 @@ def test_export_creates_downloadable_document_without_ai_or_context_queries(
 
     with monkeypatch.context() as patch:
         patch.setattr(ChatDocumentService, "generate_content", unexpected)
-        patch.setattr(ChatService, "stream_chat", unexpected)
+        patch.setattr(ChatService, "complete_chat", unexpected)
         patch.setattr(chat_documents.repository, "get_message_history", unexpected)
         patch.setattr(chat_documents.repository, "get_document_summaries", unexpected)
         patch.setattr(chat_documents.profile_service, "get", unexpected)
@@ -305,7 +311,7 @@ def test_nvidia_failure_and_ollama_stall_share_document_deadline(
     provider_errors = [
         record
         for record in caplog.records
-        if record.message == "chat.text_stream_model_unavailable"
+        if record.message == "chat.text_complete_model_unavailable"
         and getattr(record, "provider", None) == "nvidia"
     ]
     assert len(provider_errors) == 1

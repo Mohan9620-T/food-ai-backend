@@ -18,6 +18,8 @@ from app.services.chat_service import ChatService
 from app.services.document.document_intent_service import DocumentIntentService
 from app.services.document.document_operation_registry import DocumentOperation, DocumentType
 
+FILE_DOCUMENT_TYPES = [item for item in DocumentType if item != DocumentType.IMAGE]
+
 
 def _pdf_bytes(*, populated: bool = True) -> bytes:
     buffer = BytesIO()
@@ -111,7 +113,7 @@ def _filename(document_type: DocumentType) -> str:
     return f"results.{extension}"
 
 
-@pytest.mark.parametrize("document_type", list(DocumentType))
+@pytest.mark.parametrize("document_type", FILE_DOCUMENT_TYPES)
 def test_extracts_text_from_every_readable_format(document_type):
     extracted = ChatDocumentService().extract_document(
         _document_bytes(document_type), _filename(document_type)
@@ -141,14 +143,14 @@ def test_extracts_structured_tables_where_supported(document_type):
     assert extracted.tables[0].rows == (("Item", "Revenue"), ("Oats", "125"))
 
 
-@pytest.mark.parametrize("document_type", list(DocumentType))
+@pytest.mark.parametrize("document_type", FILE_DOCUMENT_TYPES)
 def test_semantic_analysis_uses_deterministically_extracted_text(document_type):
     calls = []
 
     class CapturingChatService:
-        async def stream_chat(self, message, history, reference_history):
+        async def complete_chat(self, message, history, reference_history):
             calls.append((message, history, reference_history))
-            yield "Oats revenue is 125."
+            return "Oats revenue is 125."
 
     service = ChatDocumentService(chat_service=CapturingChatService())
     extracted = service.extract_document(_document_bytes(document_type), _filename(document_type))
@@ -161,7 +163,7 @@ def test_semantic_analysis_uses_deterministically_extracted_text(document_type):
     assert calls[0][2] == []
 
 
-@pytest.mark.parametrize("document_type", list(DocumentType))
+@pytest.mark.parametrize("document_type", FILE_DOCUMENT_TYPES)
 def test_empty_documents_are_rejected(document_type):
     with pytest.raises(InvalidDocumentError, match="empty|does not contain readable text"):
         ChatDocumentService().extract_document(
@@ -189,7 +191,7 @@ def test_unsupported_format_is_rejected():
         ChatDocumentService().extract_document(b"content", "archive.zip")
 
 
-@pytest.mark.parametrize("document_type", list(DocumentType))
+@pytest.mark.parametrize("document_type", FILE_DOCUMENT_TYPES)
 def test_reading_never_modifies_original_bytes(document_type):
     original = _document_bytes(document_type)
     snapshot = bytes(original)
@@ -257,7 +259,7 @@ def test_pdf_table_to_excel_is_persisted_and_downloadable(client, db_session):
     assert attachments[1].kind == "generated"
 
 
-@pytest.mark.parametrize("document_type", list(DocumentType))
+@pytest.mark.parametrize("document_type", FILE_DOCUMENT_TYPES)
 def test_normal_chat_receives_saved_document_context(client, monkeypatch, document_type):
     headers = _headers(client, f"phase3-{document_type.value}@example.com")
     uploaded = client.post(

@@ -28,14 +28,19 @@ class ChatDocumentAttachmentOut(BaseModel):
     content_type: str
     file_size: int
     kind: Literal["uploaded", "generated"]
+    provenance: Literal["uploaded_source", "general_knowledge"] | None = None
+    source_document_ids: list[int] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
 
 
 class ChatDocumentResponse(ChatResponse):
-    attachment: ChatDocumentAttachmentOut
+    attachment: ChatDocumentAttachmentOut | None = None
     analysis_status: Literal["complete", "unavailable", "skipped"] | None = None
+    fidelity: str | None = None
+    fidelity_note: str | None = None
 
 
 class ChatSpreadsheetOperationRequest(BaseModel):
@@ -70,8 +75,10 @@ class ChatDocumentGenerateRequest(BaseModel):
         if self.filename is not None:
             self.filename = self.filename.strip() or None
         if self.source_document_id is not None:
-            if self.mode != "export":
-                raise ValueError("source_document_id is only supported for direct file export.")
+            if self.mode == "ai" and not self.instruction.strip():
+                raise ValueError("Describe the document you want to create from the source file.")
+            if self.mode == "ai":
+                self.instruction = self.instruction.strip()
             return self
         if not self.instruction.strip():
             raise ValueError("Describe the document you want to create.")
@@ -99,6 +106,8 @@ class ChatDocumentPipelineStepOut(BaseModel):
     source_document_id: int
     output_document_id: int
     filename: str
+    fidelity: str
+    fidelity_note: str | None = None
 
 
 class ChatDocumentPipelineResponse(ChatDocumentResponse):
@@ -110,6 +119,7 @@ class ChatDocumentAutomationRequest(BaseModel):
     session_id: int = Field(gt=0)
     instruction: str = Field(min_length=1, max_length=4000)
     source_document_id: int | None = Field(default=None, gt=0)
+    confirm: bool = False
 
     @model_validator(mode="after")
     def normalize_instruction(self):
@@ -119,9 +129,39 @@ class ChatDocumentAutomationRequest(BaseModel):
         return self
 
 
+class ChatDocumentAutomationStepOut(BaseModel):
+    position: int
+    operation: str
+    source_document_ids: list[int] = Field(default_factory=list)
+    output_type: str
+    parameters: dict[str, object] = Field(default_factory=dict)
+    output_document_id: int | None = None
+    filename: str | None = None
+    status: Literal["completed", "failed", "not_started"]
+    detail: str | None = None
+    fidelity: str | None = None
+    fidelity_note: str | None = None
+
+
+class ClarificationOption(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=200)
+    description: str | None = None
+    recommended: bool = False
+
+
+class ClarificationQuestionOut(BaseModel):
+    question: str
+    options: list[ClarificationOption] = Field(default_factory=list)
+    allow_other: bool = True
+
+
 class ChatDocumentAutomationResponse(BaseModel):
     response: str
     session_id: int
-    status: Literal["done", "clarification_required", "partial", "failed"]
+    status: Literal["done", "clarification_required", "ready_for_review", "partial", "failed"]
+    plan_summary: str | None = None
+    clarification: ClarificationQuestionOut | None = None
     attachments: list[ChatDocumentAttachmentOut] = Field(default_factory=list)
     latest_document_id: int | None = None
+    steps: list[ChatDocumentAutomationStepOut] = Field(default_factory=list)

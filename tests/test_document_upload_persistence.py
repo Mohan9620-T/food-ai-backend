@@ -286,19 +286,21 @@ def test_source_export_requires_an_uploaded_document_with_readable_text(
 
 
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "expected_status"),
     [
-        {},
-        {"mode": "export"},
-        {"mode": "ai", "source_document_id": 1, "instruction": "Create a report"},
-        {"source_document_id": 1, "instruction": "Create a report"},
-        {"mode": "export", "source_document_id": 0},
+        ({}, 422),
+        ({"mode": "export"}, 422),
+        ({"mode": "ai", "source_document_id": 1, "instruction": "Create a report"}, 404),
+        ({"source_document_id": 1, "instruction": "Create a report"}, 404),
+        ({"mode": "export", "source_document_id": 0}, 422),
     ],
 )
-def test_instruction_is_optional_only_for_exporting_a_source(client, db_session, payload):
+def test_generation_request_validation_and_missing_sources(
+    client, db_session, payload, expected_status
+):
     headers = _headers(client)
     response = client.post("/chat/documents/generate", json=payload, headers=headers)
-    assert response.status_code == 422, response.text
+    assert response.status_code == expected_status, response.text
     assert db_session.query(ChatSession).count() == 0
     assert db_session.query(ChatDocumentAttachment).count() == 0
 

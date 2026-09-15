@@ -27,6 +27,7 @@ from app.schemas.chat_session import (
 )
 from app.services.chat_service import ChatModelUnavailableError, ChatService
 from app.services.chat_vision_service import ChatVisionService
+from app.services.document.document_references import matches_document_topic, references_document
 from app.services.image_parser_service import VisionModelUnavailableError
 from app.services.image_validation import InvalidImageError, validate_image_content
 from app.utils.auth_dependency import get_current_user
@@ -108,7 +109,14 @@ def _get_persisted_history(db: Session, session_id: int) -> list[ChatHistoryMess
     ]
 
 
-def _document_reference_history(db: Session, session_id: int) -> list[ChatHistoryMessage]:
+def _document_reference_history(
+    db: Session, session_id: int, message: str
+) -> list[ChatHistoryMessage]:
+    contexts = repository.get_document_contexts(db, session_id)
+    if not references_document(message, (filename for filename, _ in contexts)):
+        contexts = [
+            (filename, text) for filename, text in contexts if matches_document_topic(message, text)
+        ]
     return [
         ChatHistoryMessage(
             role="user",
@@ -117,7 +125,7 @@ def _document_reference_history(db: Session, session_id: int) -> list[ChatHistor
                 f"Filename: {filename}\nExtracted content:\n{raw_text}"
             ),
         )
-        for filename, raw_text in repository.get_document_contexts(db, session_id)
+        for filename, raw_text in contexts
     ]
 
 
@@ -352,7 +360,7 @@ def chat(
     history = _get_persisted_history(db, session.id)
 
     try:
-        document_references = _document_reference_history(db, session.id)
+        document_references = _document_reference_history(db, session.id, request.message)
         answer = service.chat(
             request.message,
             history,
@@ -495,7 +503,7 @@ async def stream_chat(
     session = _get_or_create_chat_session(db, user_id, session_id, payload.message)
 
     history = _get_persisted_history(db, session.id)
-    document_references = _document_reference_history(db, session.id)
+    document_references = _document_reference_history(db, session.id, payload.message)
     image_turns = repository.get_image_turns(db, session.id)
     referenced_image = _select_referenced_image(payload.message, image_turns)
     referenced_turn = next(

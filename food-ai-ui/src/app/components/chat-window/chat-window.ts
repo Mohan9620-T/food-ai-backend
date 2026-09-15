@@ -1,14 +1,29 @@
 import { DOCUMENT } from '@angular/common';
 import { DomSanitizer } from '@angular/platform-browser';
-import { AfterViewChecked, Component, computed, DestroyRef, effect, ElementRef, inject, SecurityContext, signal, viewChild } from '@angular/core';
+import {
+  AfterViewChecked,
+  Component,
+  computed,
+  DestroyRef,
+  effect,
+  ElementRef,
+  inject,
+  SecurityContext,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { ChatService } from '../../services/chat';
 import { marked } from 'marked';
+import { DocumentWizard } from '../document-wizard/document-wizard';
+import { DocumentResult } from '../document-result/document-result';
+import { DocumentAutomationTurn } from '../../models/chat';
 
 @Component({
   selector: 'app-chat-window',
+  imports: [DocumentWizard, DocumentResult],
   templateUrl: './chat-window.html',
   styleUrls: ['./chat-window.css'],
-  host: { '(document:keydown.escape)': 'closeImagePreviewFromKeyboard()' }
+  host: { '(document:keydown.escape)': 'closeImagePreviewFromKeyboard()' },
 })
 export class ChatWindow implements AfterViewChecked {
   private readonly chatService = inject(ChatService);
@@ -16,6 +31,7 @@ export class ChatWindow implements AfterViewChecked {
   private readonly destroyRef = inject(DestroyRef);
   private readonly sanitizer = inject(DomSanitizer);
   readonly messages = this.chatService.messages;
+  readonly activeConversationId = this.chatService.activeConversationId;
   readonly isResponding = this.chatService.isResponding;
   readonly analyzingImage = this.chatService.analyzingImage;
   readonly streamingMessageIndex = computed(() => {
@@ -51,12 +67,16 @@ export class ChatWindow implements AfterViewChecked {
 
     const conversationId = this.chatService.getActiveConversationId();
     const messageCount = this.messages().length;
-    const contentLength = this.messages().reduce((total, message) => total + message.text.length, 0);
+    const contentLength = this.messages().reduce(
+      (total, message) => total + message.text.length,
+      0,
+    );
     const responding = this.isResponding();
     const conversationChanged = conversationId !== this.previousConversationId;
-    const contentChanged = messageCount !== this.previousMessageCount
-      || contentLength !== this.previousContentLength
-      || responding !== this.previousRespondingState;
+    const contentChanged =
+      messageCount !== this.previousMessageCount ||
+      contentLength !== this.previousContentLength ||
+      responding !== this.previousRespondingState;
 
     if (conversationChanged) {
       container.scrollTop = container.scrollHeight;
@@ -82,7 +102,18 @@ export class ChatWindow implements AfterViewChecked {
     this.chatService.deleteMessage(index);
   }
 
-  downloadDocument(id: number, filename: string): void { this.chatService.downloadDocument(id, filename); }
+  downloadDocument(id: number, filename: string): void {
+    this.chatService.downloadDocument(id, filename);
+  }
+
+  wizardTurn(index: number): DocumentAutomationTurn | undefined {
+    if (index !== this.messages().length - 1) return undefined;
+    const turn = this.messages()[index]?.automation;
+    return turn &&
+      ['clarification_required', 'ready_for_review'].includes(turn.response.status ?? '')
+      ? turn
+      : undefined;
+  }
 
   isAwaitingResponse(index: number): boolean {
     return this.chatService.isMessageAwaitingResponse(index);
@@ -132,10 +163,16 @@ export class ChatWindow implements AfterViewChecked {
     const yesterday = new Date(today);
     yesterday.setDate(today.getDate() - 1);
     if (this.dateKey(value) === this.dateKey(yesterday.toISOString())) return 'Yesterday';
-    const daysAgo = Math.floor((this.localDayStart(today).getTime() - this.localDayStart(date).getTime()) / 86_400_000);
+    const daysAgo = Math.floor(
+      (this.localDayStart(today).getTime() - this.localDayStart(date).getTime()) / 86_400_000,
+    );
     return daysAgo >= 0 && daysAgo < 7
       ? new Intl.DateTimeFormat(undefined, { weekday: 'long' }).format(date)
-      : new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+      : new Intl.DateTimeFormat(undefined, {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+        }).format(date);
   }
 
   private dateKey(value: string): string {

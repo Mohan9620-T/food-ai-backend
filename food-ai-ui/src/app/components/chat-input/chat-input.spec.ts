@@ -47,8 +47,16 @@ class ChatServiceStub {
     of({ response: 'Imported', session_id: 12 }),
   );
   readonly isSpreadsheetOperationRequest = vi.fn((message: string) =>
-    /\b(?:filter|expand|transform|separate rows|split each dish)\b/i.test(message),
+    /\b(?:filter|expand|transform|separate rows|split each dish|rows? counts?)\b/i.test(message),
   );
+  readonly isSpreadsheetRowCountRequest = vi.fn((message: string) =>
+    /\b(?:how many|number of|count|total)\b.*\b(?:rows?|records?)\b|\b(?:rows?|records?)\s+counts?\b/i.test(
+      message,
+    ),
+  );
+  readonly isDocumentAutomationRequest = vi.fn(() => false);
+  readonly hasDocumentContext = vi.fn(() => false);
+  readonly hasPendingAutomation = vi.fn(() => false);
   readonly updateSpreadsheet = vi.fn((): Observable<ChatResponse> =>
     of({
       response: 'Updated workbook',
@@ -61,6 +69,9 @@ class ChatServiceStub {
         kind: 'generated',
       },
     }),
+  );
+  readonly automateDocument = vi.fn((): Observable<ChatResponse> =>
+    of({ response: 'Document request completed', session_id: 12 }),
   );
   readonly generateDocument = vi.fn((): Observable<ChatResponse> =>
     of({ response: 'Created', session_id: 12 }),
@@ -179,6 +190,36 @@ describe('ChatInput image drag and drop', () => {
     expect(component.imageError).toBeNull();
   });
 
+  it('routes source-free Excel creation to planning with a new session', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    chatService.isDocumentAutomationRequest.mockReturnValue(true);
+    const instruction = 'Create an Excel file listing the top 50 South Indian dishes';
+    component.message = instruction;
+    component.sendMessage();
+    expect(chatService.automateDocument).toHaveBeenCalledExactlyOnceWith(null, instruction, 'conversation-1');
+    expect(chatService.streamMessage).not.toHaveBeenCalled();
+  });
+
+  it('routes a multi-step document follow-up through the automation endpoint', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    chatService.getActiveSessionId.mockReturnValue(42);
+    chatService.hasDocumentContext.mockReturnValue(true);
+    chatService.isDocumentAutomationRequest.mockReturnValue(true);
+    const instruction =
+      'Read this PDF, extract the customer data, create an Excel and prepare a Word report.';
+    component.message = instruction;
+
+    component.sendMessage();
+
+    expect(chatService.automateDocument).toHaveBeenCalledExactlyOnceWith(
+      42,
+      instruction,
+      'conversation-1',
+    );
+    expect(chatService.streamMessage).not.toHaveBeenCalled();
+    expect(component.message).toBe('');
+  });
+
   it('keeps a filter request editable when no spreadsheet has been uploaded', () => {
     const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
     component.message = 'Add a filter to the Category* column.';
@@ -190,6 +231,19 @@ describe('ChatInput image drag and drop', () => {
     expect(chatService.streamMessage).not.toHaveBeenCalled();
     expect(component.message).toBe('Add a filter to the Category* column.');
     expect(component.imageError).toContain('Upload an Excel spreadsheet first');
+  });
+
+  it('keeps a row-count request editable when no spreadsheet has been uploaded', () => {
+    const chatService = TestBed.inject(ChatService) as unknown as ChatServiceStub;
+    component.message = 'Can you read the file and give me the row counts?';
+
+    component.sendMessage();
+    fixture.detectChanges();
+
+    expect(chatService.updateSpreadsheet).not.toHaveBeenCalled();
+    expect(chatService.streamMessage).not.toHaveBeenCalled();
+    expect(component.message).toBe('Can you read the file and give me the row counts?');
+    expect(component.imageError).toContain('Upload an Excel or CSV spreadsheet first');
   });
 
   it('shows a clean filter failure and restores the request for retry', () => {

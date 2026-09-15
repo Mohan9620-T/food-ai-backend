@@ -1,12 +1,16 @@
 import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { vi } from 'vitest';
+import { provideHttpClient } from '@angular/common/http';
 
 import { ChatWindow } from './chat-window';
 import { ChatService } from '../../services/chat';
 import { ChatMessage } from '../../models/chat';
 
 class ChatServiceStub {
+  getActiveSessionId(): number | null {
+    return null;
+  }
   readonly messages = signal<ChatMessage[]>([]);
   readonly isResponding = signal(false);
   readonly analyzingImage = signal(false);
@@ -34,7 +38,7 @@ describe('ChatWindow', () => {
     });
     await TestBed.configureTestingModule({
       imports: [ChatWindow],
-      providers: [{ provide: ChatService, useClass: ChatServiceStub }],
+      providers: [provideHttpClient(), { provide: ChatService, useClass: ChatServiceStub }],
     }).compileComponents();
     fixture = TestBed.createComponent(ChatWindow);
     service = TestBed.inject(ChatService) as unknown as ChatServiceStub;
@@ -43,6 +47,32 @@ describe('ChatWindow', () => {
 
   it('renders the empty state when there are no messages', () => {
     expect(fixture.nativeElement.querySelector('h1')?.textContent).toContain('How can I help?');
+  });
+
+  it('routes a ready-for-review response to a Build card instead of a plain bubble', () => {
+    service.messages.set([
+      {
+        sender: 'bot',
+        text: 'Review',
+        automation: {
+          response: {
+            session_id: 9,
+            status: 'ready_for_review',
+            response: 'Review',
+            plan_summary: 'Create brochure.docx',
+          },
+          instruction: 'Word',
+          choices: [{ question: 'Format?', answer: 'Word' }],
+        },
+      },
+    ]);
+    fixture.detectChanges();
+    const root: HTMLElement = fixture.nativeElement;
+    expect(root.querySelector('app-document-wizard')).toBeTruthy();
+    expect(root.querySelector('.markdown-body')).toBeNull();
+    expect(root.textContent).toContain('Build my document file');
+    expect(root.textContent).toContain('Create brochure.docx');
+    expect(root.textContent).toContain('Format?');
   });
 
   it('downloads a saved original attachment even when AI analysis was unavailable', () => {
@@ -98,6 +128,44 @@ describe('ChatWindow', () => {
     );
   });
 
+  it('renders and downloads every file produced by document automation', () => {
+    service.messages.set([
+      {
+        sender: 'bot',
+        text: 'Done — I created both requested files.',
+        attachments: [
+          {
+            id: 41,
+            filename: 'extracted-data.xlsx',
+            content_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            file_size: 6400,
+            kind: 'generated',
+          },
+          {
+            id: 42,
+            filename: 'document-report.docx',
+            content_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            file_size: 7200,
+            kind: 'generated',
+          },
+        ],
+      },
+    ]);
+    fixture.detectChanges();
+
+    const buttons = Array.from(
+      fixture.nativeElement.querySelectorAll('app-document-result button[aria-label^="Download"]'),
+    ) as HTMLButtonElement[];
+    expect(buttons).toHaveLength(2);
+    expect(fixture.nativeElement.textContent).toContain('extracted-data.xlsx');
+    expect(fixture.nativeElement.textContent).toContain('document-report.docx');
+
+    buttons[0].click();
+    buttons[1].click();
+    expect(service.downloadDocument).toHaveBeenNthCalledWith(1, 41, 'extracted-data.xlsx');
+    expect(service.downloadDocument).toHaveBeenNthCalledWith(2, 42, 'document-report.docx');
+  });
+
   it('shows icon actions and delegates retry, edit, and delete', () => {
     service.messages.set([
       { sender: 'user', text: 'Try this' },
@@ -135,6 +203,15 @@ describe('ChatWindow', () => {
     const rendered = component.renderMarkdown('Safe<script>alert(1)</script>');
     expect(rendered).toContain('Safe');
     expect(rendered).not.toContain('<script>');
+  });
+
+  it('renders heading levels and bold labels in assistant answers', () => {
+    service.messages.set([{ sender: 'bot', text: '## Overview\n\n### Details\n\n**Key point:** Content.' }]);
+    fixture.detectChanges();
+    const root: HTMLElement = fixture.nativeElement;
+    expect(root.querySelector('.markdown-body h2')?.textContent).toBe('Overview');
+    expect(root.querySelector('.markdown-body h3')?.textContent).toBe('Details');
+    expect(root.querySelector('.markdown-body strong')?.textContent).toBe('Key point:');
   });
 
   it('renders paragraphs, emphasis, lists, and links in a labelled assistant response', () => {

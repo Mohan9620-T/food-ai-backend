@@ -77,11 +77,14 @@ app-chat-window .markdown-body pre { margin: .85em 0; }
 app-chat-window .markdown-body :is(h1, h2, h3, h4, h5, h6) {
   margin: 1.25em 0 .55em;
   font-family: var(--font-ui);
-  font-size: 1.08em;
-  font-weight: 650;
+  font-weight: 700;
   line-height: 1.4;
   letter-spacing: normal;
 }
+app-chat-window .markdown-body h1 { font-size: 1.65em; }
+app-chat-window .markdown-body h2 { font-size: 1.4em; }
+app-chat-window .markdown-body h3 { font-size: 1.2em; }
+app-chat-window .markdown-body :is(h4, h5, h6) { font-size: 1.05em; }
 app-chat-window .markdown-body :is(ul, ol) { padding-left: 1.5em; }
 app-chat-window .markdown-body li + li { margin-top: .4em; }
 app-chat-window .markdown-body li > p { margin: .35em 0; }
