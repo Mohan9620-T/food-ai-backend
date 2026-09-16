@@ -57,6 +57,7 @@ from app.services.document.document_pipeline_service import (
     DocumentPipelineService,
     PipelineDocument,
 )
+from app.services.document.document_references import references_document, references_image
 from app.services.document.document_validation_service import (
     FidelityAssessment,
     GeneratedDocumentValidationError,
@@ -64,8 +65,10 @@ from app.services.document.document_validation_service import (
 from app.services.document.extraction_models import (
     DocumentEdit,
     ExtractedDocument,
+    ExtractionMode,
     StructuredDocumentContent,
 )
+from app.services.image_validation import InvalidImageError, validate_image_content
 from app.services.profile_service import ProfileService
 from app.services.spreadsheet.spreadsheet_preview_service import SpreadsheetPreviewService
 from app.utils.auth_dependency import get_current_user
@@ -96,6 +99,11 @@ DOCUMENT_TYPES = {
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".md": "text/markdown",
     ".markdown": "text/markdown",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
 }
 
 
@@ -141,15 +149,16 @@ def _completion_message(filenames: list[str], text_result: str | None) -> str:
     "",
     response_model=ChatDocumentResponse,
     summary="Upload a chat document",
-    description="Read and save a PDF, DOCX, XLSX, CSV, PPTX, TXT, or Markdown file before "
+    description="Read and save an image, PDF, DOCX, XLSX, CSV, PPTX, TXT, or Markdown file before "
     "optional AI analysis. "
     "For XLSX formatting or category-sheet instructions, and XLSX/CSV column-filter instructions, "
     "a revised workbook is "
     "returned "
     "without requiring AI. "
     "An AI failure returns the saved file with analysis_status=unavailable, not an upload error. "
-    "Use analyze=false to save/extract without AI. Scanned PDF pages require Tesseract. "
-    "Maximum upload size is 15 MB.",
+    "Use analyze=false to save without AI; image extraction is deferred until Build. "
+    "Scanned PDF pages require Tesseract. Images support JPEG, PNG, WebP and GIF, up to 8 MB. "
+    "Other documents support up to 15 MB.",
     responses={
         404: {"description": "Chat session not found or not owned by this user."},
         413: {"description": "File exceeds 15 MB."},
@@ -179,7 +188,7 @@ async def upload_document(
     if expected_type is None or content_type not in accepted_types:
         raise HTTPException(
             status_code=415,
-            detail="Upload a PDF, DOCX, XLSX, CSV, PPTX, TXT, or Markdown document.",
+            detail="Upload an image, PDF, DOCX, XLSX, CSV, PPTX, TXT, or Markdown document.",
         )
     try:
         file_data = await file.read(MAX_CHAT_DOCUMENT_BYTES + 1)
@@ -189,6 +198,14 @@ async def upload_document(
         raise HTTPException(status_code=413, detail="Document is too large. Maximum size is 15 MB.")
     if not file_data:
         raise HTTPException(status_code=422, detail="The uploaded document is empty.")
+    image_upload = expected_type.startswith("image/")
+    if image_upload:
+        if len(file_data) > 8 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Image is too large. Maximum size is 8 MB.")
+        try:
+            validate_image_content(file_data, expected_type)
+        except InvalidImageError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
     user_id = int(current_user["sub"])
     resolved_session = None
     if session_id is not None:
@@ -196,8 +213,19 @@ async def upload_document(
         if resolved_session is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
     try:
-        extracted = await asyncio.to_thread(service.extract_document, file_data, filename)
-        response_fidelity = pipeline_service.validator.fidelity_for_extraction(extracted)
+        if image_upload and not analyze:
+            # Save the original before any model request; extraction happens on Build.
+            extracted = ExtractedDocument(
+                document_type=DocumentType.IMAGE,
+                text="",
+                extraction_mode=ExtractionMode.OCR,
+            )
+            response_fidelity = FidelityAssessment(
+                Fidelity.BEST_EFFORT, "The image is saved; its data has not been extracted yet."
+            )
+        else:
+            extracted = await asyncio.to_thread(service.extract_document, file_data, filename)
+            response_fidelity = pipeline_service.validator.fidelity_for_extraction(extracted)
         raw_text = extracted.text
         row_count_response = (
             service.spreadsheet_row_count_response(extracted, filename)
@@ -257,7 +285,9 @@ async def upload_document(
         resolved_session = repository.create_session(db, user_id, user_text[:60])
     resolved_session_id = cast(int, resolved_session.id)
     saved_notice = (
-        "The file and its extracted text are saved. "
+        "The image is saved. Review your document request, then build to extract its data."
+        if image_upload and not analyze
+        else "The file and its extracted text are saved. "
         "You can download the original or export the saved text as PDF or Word."
     )
     bot_record, attachment = repository.save_document_upload(
@@ -967,6 +997,11 @@ async def automate_document(
 
         request_instruction = payload.instruction
         source_document_id = payload.source_document_id
+        if source_document_id is None and (
+            references_image(request_instruction)
+            or references_document(request_instruction, creation=True)
+        ):
+            repository.ensure_image_document_sources(db, payload.session_id)
         documents = repository.get_documents_for_user(db, payload.session_id, user_id)
         selected_source = None
         if source_document_id is not None:

@@ -446,7 +446,9 @@ async def chat_vision(
             persisted_user_message,
         )
         try:
-            answer = vision_service.describe(image_bytes, message_text or None)
+            answer = await asyncio.to_thread(
+                vision_service.describe, image_bytes, message_text or None
+            )
         except VisionModelUnavailableError as error:
             logger.warning(
                 "chat.vision_unavailable",

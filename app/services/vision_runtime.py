@@ -9,8 +9,12 @@ _vision_semaphore = threading.BoundedSemaphore(value=1)
 
 
 @contextmanager
-def vision_inference_slot():
-    _vision_semaphore.acquire()
+def vision_inference_slot(timeout_seconds: float | None = None):
+    acquired = _vision_semaphore.acquire(timeout=timeout_seconds)
+    if not acquired:
+        from app.services.image_parser_service import VisionModelUnavailableError
+
+        raise VisionModelUnavailableError("Image analysis is busy. Please retry shortly.")
     try:
         yield
     finally:

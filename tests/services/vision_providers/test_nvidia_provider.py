@@ -137,3 +137,25 @@ def test_infer_uses_openai_image_url_payload(monkeypatch):
         },
     ]
     assert "images" not in payload["messages"][1]
+
+
+def test_busy_hosted_vision_retries_and_disables_omni_thinking(monkeypatch):
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    monkeypatch.setattr(
+        settings, "NVIDIA_CHAT_VISION_MODEL", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+    )
+    busy = Mock(status_code=503, headers={"Retry-After": "1"})
+    success = response_with(valid_result_json())
+    success.status_code = 200
+    post = Mock(side_effect=[busy, success])
+    monkeypatch.setattr("app.services.vision_providers.nvidia_provider._HTTP_SESSION.post", post)
+    monkeypatch.setattr(
+        "app.services.vision_providers.nvidia_provider.time.sleep", lambda seconds: None
+    )
+    result = NvidiaVisionProvider().infer(
+        "system", "user", "image", max_tokens=4096, timeout_seconds=10
+    )
+    assert result.answer
+    assert post.call_count == 2
+    assert post.call_args.kwargs["json"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert post.call_args.kwargs["timeout"][1] <= 10

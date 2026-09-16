@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 
 import requests
 from pydantic import ValidationError
@@ -11,6 +12,30 @@ from app.services.vision_providers.base import VisionProvider
 
 logger = logging.getLogger(__name__)
 _HTTP_SESSION = requests.Session()
+
+
+def _post_with_retry(url: str, *, headers: dict, json: dict, timeout: tuple) -> requests.Response:
+    """Retry transient hosted-capacity errors within the original read budget."""
+    started = time.monotonic()
+    for attempt in range(3):
+        remaining = timeout[1] if attempt == 0 else timeout[1] - (time.monotonic() - started)
+        if remaining <= 0:
+            raise requests.Timeout("Vision request deadline exceeded")
+        response = _HTTP_SESSION.post(
+            url, headers=headers, json=json, timeout=(min(timeout[0], remaining), remaining)
+        )
+        if response.status_code not in {429, 502, 503, 504} or attempt == 2:
+            return response
+        delay = float(2**attempt)
+        try:
+            delay = max(delay, min(5, float(response.headers.get("Retry-After", "0"))))
+        except (TypeError, ValueError):
+            pass
+        if time.monotonic() - started + delay >= timeout[1]:
+            return response
+        response.close()
+        time.sleep(delay)
+    raise requests.Timeout("Vision request deadline exceeded")
 
 
 class NvidiaConfigurationError(VisionModelUnavailableError):
@@ -26,7 +51,15 @@ class NvidiaVisionProvider(VisionProvider):
     a different trade-off (no local RAM/GPU cost, but no longer fully local).
     """
 
-    def infer(self, system_prompt: str, user_prompt: str, encoded_image: str) -> VisionResult:
+    def infer(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        encoded_image: str,
+        *,
+        max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
+    ) -> VisionResult:
         if not settings.NVIDIA_API_KEY:
             raise NvidiaConfigurationError("NVIDIA_API_KEY is not configured.")
 
@@ -37,7 +70,7 @@ class NvidiaVisionProvider(VisionProvider):
         )
 
         try:
-            response = _HTTP_SESSION.post(
+            response = _post_with_retry(
                 f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
@@ -47,7 +80,12 @@ class NvidiaVisionProvider(VisionProvider):
                     "model": settings.NVIDIA_CHAT_VISION_MODEL,
                     "stream": False,
                     "temperature": 0,
-                    "max_tokens": settings.NVIDIA_VISION_MAX_TOKENS,
+                    "max_tokens": max_tokens or settings.NVIDIA_VISION_MAX_TOKENS,
+                    **(
+                        {"chat_template_kwargs": {"enable_thinking": False}}
+                        if "nemotron-3-nano-omni" in settings.NVIDIA_CHAT_VISION_MODEL
+                        else {}
+                    ),
                     "messages": [
                         {
                             "role": "system",
@@ -67,7 +105,9 @@ class NvidiaVisionProvider(VisionProvider):
                 },
                 timeout=(
                     settings.NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS,
-                    settings.NVIDIA_VISION_TIMEOUT_SECONDS,
+                    min(timeout_seconds, settings.NVIDIA_VISION_TIMEOUT_SECONDS)
+                    if timeout_seconds is not None
+                    else settings.NVIDIA_VISION_TIMEOUT_SECONDS,
                 ),
             )
             response.raise_for_status()

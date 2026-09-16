@@ -81,12 +81,13 @@ DOCUMENT_OOXML_MAX_ENTRIES = int(os.getenv("DOCUMENT_OOXML_MAX_ENTRIES", "5000")
 DOCUMENT_CONVERSION_TIMEOUT_SECONDS = int(os.getenv("DOCUMENT_CONVERSION_TIMEOUT_SECONDS", "90"))
 # Optional explicit path to soffice. When empty, common install paths and PATH are checked.
 LIBREOFFICE_BINARY = os.getenv("LIBREOFFICE_BINARY", "").strip()
+TESSERACT_BINARY = os.getenv("TESSERACT_BINARY", "").strip()
 NVIDIA_TEST_CHAT_MODEL = os.getenv(
     "NVIDIA_TEST_CHAT_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"
 ).strip()
 NVIDIA_TEST_CHAT_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_TEST_CHAT_TIMEOUT_SECONDS", "60"))
 NVIDIA_CHAT_VISION_MODEL = os.getenv(
-    "NVIDIA_CHAT_VISION_MODEL", "meta/llama-3.2-90b-vision-instruct"
+    "NVIDIA_CHAT_VISION_MODEL", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
 ).strip()
 NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS = float(
     os.getenv("NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS", "5")

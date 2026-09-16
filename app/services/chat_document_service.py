@@ -61,6 +61,8 @@ class ChatDocumentService:
     )
 
     def __init__(self, chat_service: ChatService | None = None):
+        from app.services.document.image_document_reader import ImageDocumentReader
+
         self.chat_service = chat_service or ChatService()
         self.document_generator = DocumentGenerationService()
         # Pass the module-level factories through so existing dependency-injection
@@ -73,12 +75,23 @@ class ChatDocumentService:
             ),
             docx_reader=DocxReader(document_factory=Document),
             excel_reader=ExcelReader(workbook_loader=load_workbook),
+            image_reader=ImageDocumentReader().read,
         )
 
     def extract(self, file_data: bytes, filename: str) -> str:
         return self.extract_document(file_data, filename).text
 
-    def extract_document(self, file_data: bytes, filename: str) -> ExtractedDocument:
+    def extract_document(
+        self, file_data: bytes, filename: str, *, image_instruction: str | None = None
+    ) -> ExtractedDocument:
+        if image_instruction:
+            from app.services.document.image_document_reader import ImageDocumentReader
+
+            return DocumentReadingService(
+                image_reader=lambda data: ImageDocumentReader().read(
+                    data, instruction=image_instruction
+                )
+            ).read(file_data, filename)
         return self.document_reader.read(file_data, filename)
 
     @staticmethod
@@ -1271,8 +1284,25 @@ class ChatDocumentService:
             self._source_excerpt([*document_sources, *summaries])
             or "No uploaded-document content is available."
         )
+        image_guidance = (
+            "For image OCR data, left/top describe label positions: associate nearby vertically "
+            "aligned captions, omit coordinates, preserve source spellings, and exclude watermarks. "
+            "Treat low-confidence OCR as uncertain; never guess missing characters or invent rows. "
+            "Keep every identifiable data row even when one cell is uncertain: leave only that "
+            "cell empty and mention the affected row. Never omit the whole row when its other "
+            "labels or values are readable. "
+            "Do not infer illustration details, arrows, or other visuals from OCR coordinates. "
+            "Keep assumptions to actual extraction uncertainties; omit today's date and "
+            "irrelevant metadata. Do not claim all labels are accurate. "
+            if any(document.document_type == DocumentType.IMAGE for document in (documents or []))
+            else ""
+        )
         prompt = (
-            "Create document-ready content. Return ONLY one JSON object matching this exact schema: "
+            "Create document-ready content. Be thorough and detailed, not a short summary: "
+            "cover the topic completely with concrete specifics, examples, and sub-points under "
+            "each section rather than one line per idea. Prefer several well-developed sections "
+            "over a handful of sparse paragraphs when the topic supports it. "
+            "Return ONLY one JSON object matching this exact schema: "
             '{"title":"string","assumptions":["string"],"paragraphs":["string"],'
             '"bullet_lists":[["string"]],"tables":[{"title":"string",'
             '"headers":["string"],"rows":[["string"]]}],'
@@ -1281,6 +1311,7 @@ class ChatDocumentService:
             '"headers":["string"],"rows":[["string"]]}]}]}. '
             "Use empty arrays when a block type is not needed. Keep table row widths equal to the "
             "header width. Every table cell must be a JSON STRING, including numbers and prices. "
+            f"{image_guidance}"
             "Do not return Markdown fences, prose outside JSON, base64, binary data, "
             "or file bytes. List approximate prices, selection/ranking choices and any unstated "
             "defaults in assumptions. Do not invent verified rankings or live prices. "
@@ -1366,6 +1397,7 @@ class ChatDocumentService:
         lines = [
             f"Document: {document.source.filename if document.source else 'uploaded document'}",
             document.text,
+            *(f"Extraction warning: {warning}" for warning in document.warnings),
         ]
         for table in document.tables:
             lines.append(f"Table: {table.name}")

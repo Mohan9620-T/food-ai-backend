@@ -14,7 +14,15 @@ logger = logging.getLogger(__name__)
 class OllamaVisionProvider(VisionProvider):
     """Local, private, free-forever inference via a self-hosted Ollama server."""
 
-    def infer(self, system_prompt: str, user_prompt: str, encoded_image: str) -> VisionResult:
+    def infer(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        encoded_image: str,
+        *,
+        max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
+    ) -> VisionResult:
         try:
             response = requests.post(
                 settings.OLLAMA_URL,
@@ -27,7 +35,7 @@ class OllamaVisionProvider(VisionProvider):
                     "options": {
                         "temperature": 0,
                         "num_ctx": 8192,
-                        "num_predict": 1024,
+                        "num_predict": max_tokens or 1024,
                     },
                     "messages": [
                         {"role": "system", "content": system_prompt},
@@ -38,7 +46,7 @@ class OllamaVisionProvider(VisionProvider):
                         },
                     ],
                 },
-                timeout=settings.OLLAMA_CHAT_VISION_TIMEOUT_SECONDS,
+                timeout=timeout_seconds or settings.OLLAMA_CHAT_VISION_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
         except requests.Timeout as error:

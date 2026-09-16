@@ -19,7 +19,7 @@ from app.services.document.document_pipeline_service import (
     DocumentPipelineStep,
     StructuredPipelineStep,
 )
-from app.services.document.document_references import references_document
+from app.services.document.document_references import references_document, references_image
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +152,12 @@ class DocumentAutomationService:
             # The requested output format does not select an old attachment.
             # A new subject can be written from general knowledge in this chat.
             documents = ()
+        if (
+            references_image(instruction)
+            and references_document(instruction, creation=True)
+            and not any(document.document_type == DocumentType.IMAGE for document in documents)
+        ):
+            return self._clarification("Please upload the image you want me to use.")
         direct_plan = self._plan_unambiguous_creation(
             instruction,
             documents,
@@ -335,6 +341,9 @@ class DocumentAutomationService:
         output_types = self.pipeline_service.intent_service.registry.document_types_in_text(
             instruction
         )
+        image_source = any(document.document_type == DocumentType.IMAGE for document in documents)
+        if image_source:
+            output_types = [kind for kind in output_types if kind != DocumentType.IMAGE]
         selected = next(
             (document for document in documents if document.is_latest),
             documents[-1] if documents else None,
@@ -345,8 +354,23 @@ class DocumentAutomationService:
             and output_types[0] != selected.document_type
             and intent_service.is_modification_request(instruction, selected.filename)
         )
-        if not intent_service.is_creation_request(instruction) and not different_format_edit:
+        image_conversion = image_source and intent_service.is_conversion_request(instruction)
+        image_extraction = (
+            image_source
+            and len(output_types) == 1
+            and bool(re.search(r"\bextract\b", instruction, re.IGNORECASE))
+        )
+        if (
+            not intent_service.is_creation_request(instruction)
+            and not different_format_edit
+            and not image_conversion
+            and not image_extraction
+        ):
             return None
+        if image_source and not output_types:
+            return self._clarification(
+                "Which file should I create from the image: Excel, Word, or PDF?"
+            )
         if len(output_types) > 1 and documents:
             # Source formats in "create Word ... from/summarizing this PDF"
             # are not additional requested outputs.
@@ -560,19 +584,38 @@ class DocumentAutomationService:
 
         ordinal_match = re.search(
             r"\b(first|1st|second|2nd|third|3rd)\s+"
-            r"(?:file|document|pdf|workbook|spreadsheet)\b",
+            r"(file|document|pdf|workbook|spreadsheet|image|photo|picture|screenshot)\b",
             instruction,
             re.IGNORECASE,
         )
         if ordinal_match:
             selected_index = self._ORDINALS[ordinal_match.group(1).casefold()]
-            if selected_index >= len(documents):
+            ordinal_documents = (
+                tuple(doc for doc in documents if doc.document_type == DocumentType.IMAGE)
+                if ordinal_match.group(2).casefold() in {"image", "photo", "picture", "screenshot"}
+                else documents
+            )
+            if selected_index >= len(ordinal_documents):
                 return "clarify:Which uploaded document should I use for this request?"
-            return documents[selected_index].filename
+            return ordinal_documents[selected_index].filename
 
         mentioned_types = self.pipeline_service.intent_service.registry.document_types_in_text(
             instruction
         )
+        if DocumentType.IMAGE in mentioned_types:
+            # The image is the source; Excel/Word/PDF in the same request is the target.
+            images = [
+                document for document in documents if document.document_type == DocumentType.IMAGE
+            ]
+            if images:
+                if re.search(r"\b(?:previous|prior)\s+(?:image|photo|picture)\b", normalized):
+                    return images[-2].filename if len(images) > 1 else images[-1].filename
+                if len(images) == 1 or self._LATEST_REFERENCE.search(instruction):
+                    return images[-1].filename
+                return (
+                    "clarify:Which uploaded image should I use? Say first, second, or latest image."
+                )
+            return "clarify:Please upload the image you want me to use."
         if mentioned_types:
             candidates = [
                 document for document in documents if document.document_type == mentioned_types[0]

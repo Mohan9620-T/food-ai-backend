@@ -27,7 +27,7 @@ class PdfGenerator:
             if line.kind == "heading":
                 story.append(Paragraph(escape(line.text), headings[min(3, line.level)]))
             elif line.kind == "bullet":
-                story.append(Paragraph(escape(line.text), body, bulletText="&#8226;"))
+                story.append(Paragraph(escape(line.text), body, bulletText="•"))
             elif line.kind == "number":
                 story.append(Paragraph(escape(line.text), body, bulletText="-"))
             else:
@@ -113,7 +113,7 @@ class PdfGenerator:
             story.append(Paragraph(escape(text), body))
         for items in bullet_lists:
             for item in items:
-                story.append(Paragraph(escape(item), body, bulletText="&#8226;"))
+                story.append(Paragraph(escape(item), body, bulletText="•"))
         for content_table in tables:
             story.append(Paragraph(escape(content_table.title), headings[3]))
             rows = []

@@ -13,6 +13,7 @@ def prepare_vision_image(
     *,
     max_dimension: int | None = None,
     force_jpeg: bool = False,
+    jpeg_quality: int = 78,
 ) -> bytes:
     """Return a smaller inference copy while leaving the stored original untouched."""
     try:
@@ -31,7 +32,7 @@ def prepare_vision_image(
                 image = image.convert("RGB")
 
             output = BytesIO()
-            image.save(output, format="JPEG", quality=78, optimize=True)
+            image.save(output, format="JPEG", quality=jpeg_quality, optimize=True)
             logger.info(
                 "vision.image_downscaled",
                 extra={"original_size": original_size, "inference_size": image.size},

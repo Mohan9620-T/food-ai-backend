@@ -28,7 +28,11 @@ from app.services.document.document_operation_registry import (
 )
 from app.services.document.document_validation_service import DocumentValidationService
 from app.services.document.exceptions import InvalidDocumentError
-from app.services.document.extraction_models import DocumentEdit, ExtractedDocument
+from app.services.document.extraction_models import (
+    DocumentEdit,
+    ExtractedDocument,
+    GeneratedSectionContent,
+)
 
 
 @dataclass(frozen=True)
@@ -462,6 +466,14 @@ class DocumentPipelineService:
                             self.document_service.extract_document,
                             source.file_data,
                             source.filename,
+                            **(
+                                {"image_instruction": step.instruction or request_instruction}
+                                if self.intent_service.registry.document_type_from_filename(
+                                    source.filename
+                                )
+                                == DocumentType.IMAGE
+                                else {}
+                            ),
                         )
                     )
             generated_content = await self.document_service.generate_content(
@@ -472,8 +484,14 @@ class DocumentPipelineService:
             )
             requested_filename = step.intent.parameters.get("filename")
             if generated_content.assumptions:
-                generated_content.paragraphs.extend(
-                    f"Assumed: {item}" for item in generated_content.assumptions
+                # Keep assumptions out of the main body copy — surface them as a
+                # clearly labeled closing section instead of interleaving
+                # "Assumed: ..." lines between real content paragraphs.
+                generated_content.sections.append(
+                    GeneratedSectionContent(
+                        heading="Assumptions",
+                        bullet_lists=[list(generated_content.assumptions)],
+                    )
                 )
             data, filename, content_type = await asyncio.to_thread(
                 self.document_service.render,
@@ -488,6 +506,16 @@ class DocumentPipelineService:
                 filename=filename,
                 content_type=content_type,
                 document_type=step.intent.output_type,
+                fidelity=(
+                    Fidelity.BEST_EFFORT
+                    if any(item.document_type == DocumentType.IMAGE for item in extracted_sources)
+                    else Fidelity.HIGH
+                ),
+                fidelity_note=(
+                    "Created from image transcription. Review extracted labels and numbers."
+                    if any(item.document_type == DocumentType.IMAGE for item in extracted_sources)
+                    else None
+                ),
             )
             return replace(
                 self._agent_document_result(step, generated, f"Created {filename}."),

@@ -75,7 +75,17 @@ class DocumentOperationRegistry:
         DocumentType.PPTX: ("pptx", "powerpoint", "presentation", "slide deck", "slides"),
         DocumentType.TXT: ("txt", "text file", "plain text"),
         DocumentType.MARKDOWN: ("markdown", "md", "markdown file"),
-        DocumentType.IMAGE: ("image", "photo", "picture", "jpg", "jpeg", "png", "webp"),
+        DocumentType.IMAGE: (
+            "image",
+            "photo",
+            "picture",
+            "screenshot",
+            "jpg",
+            "jpeg",
+            "png",
+            "webp",
+            "gif",
+        ),
     }
 
     def __init__(self) -> None:

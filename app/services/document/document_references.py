@@ -4,6 +4,11 @@ import re
 from collections.abc import Iterable
 
 
+def references_image(message: str) -> bool:
+    instruction = re.sub(r'"[^\"]*"|`[^`]*`', " ", message).casefold()
+    return bool(re.search(r"\b(?:image|photo|picture|screenshot)\b", instruction))
+
+
 def matches_document_topic(message: str, text: str) -> bool:
     """Retain natural follow-ups such as 'What is the oats revenue?'."""
     stop_words = set(
@@ -29,13 +34,13 @@ def references_document(
         return True
     modifiers = (
         "this|that|these|those|uploaded|attached|provided|selected|"
-        "latest|last|current|first|second|third"
+        "latest|last|current|first|second|third|previous|prior"
     )
     if not creation:
         modifiers += "|the|my|our"
     nouns = (
         "content|document|file|pdf|word|docx|excel|xlsx|csv|powerpoint|pptx|"
-        "spreadsheet|workbook|table|data"
+        "spreadsheet|workbook|table|data|image|photo|picture|screenshot"
     )
     return bool(
         re.search(
@@ -44,6 +49,7 @@ def references_document(
             rf"(?:{nouns})\b"
             rf"|\b(?:from|using|based on|summary of|version of)\s+(?:the|my|our)\s+(?:{nouns})\b"
             r"|\b(?:from|using|based on)\s+(?:this|that|it|them)\b"
+            r"|\b(?:from|using)\s+(?:an?\s+)?(?:image|photo|picture|screenshot)\b"
             r"|\b(?:read|summari[sz]e|analy[sz]e|convert|edit|update|make|turn)\s+(?:this|that|it|them)\b"
             r"|\b(?:itha|indha)\b",
             instruction,

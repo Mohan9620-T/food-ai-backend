@@ -16,7 +16,15 @@ class VisionProvider(ABC):
     """
 
     @abstractmethod
-    def infer(self, system_prompt: str, user_prompt: str, encoded_image: str) -> VisionResult:
+    def infer(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        encoded_image: str,
+        *,
+        max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
+    ) -> VisionResult:
         """Run vision inference and return a validated VisionResult.
 
         Raises:

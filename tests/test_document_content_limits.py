@@ -45,7 +45,11 @@ def test_generation_source_is_bounded_and_discloses_omitted_content(monkeypatch)
     result = asyncio.run(request)
     assert result.paragraphs == ["Summary based only on the supplied excerpt."]
     prompt = prompts[0]
-    assert len(prompt) < service.MAX_DOCUMENT_CONTEXT_CHARS + 1500
+    source_block = prompt.split("--- UNTRUSTED DOCUMENT DATA ---\n", 1)[1].split(
+        "\n--- END UNTRUSTED DOCUMENT DATA ---", 1
+    )[0]
+    _, excerpt = source_block.split("\n\n", 1)
+    assert excerpt == source[: service.MAX_DOCUMENT_CONTEXT_CHARS]
     assert "Source excerpt truncated: first 30,000" in prompt
     assert "The remaining source content was not provided" in prompt
     assert "do not claim to have read the full document" in prompt

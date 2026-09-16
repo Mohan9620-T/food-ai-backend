@@ -5,6 +5,59 @@ from app.models.chat import ChatDocumentAttachment, ChatMessageRecord, ChatSessi
 
 
 class ChatRepository:
+    def ensure_image_document_sources(self, db: Session, session_id: int) -> None:
+        """Make existing image turns selectable by an owned, locked document pipeline.
+
+        The caller checks session ownership and commits/rolls back the whole request.
+        Retain the original image message and reuse its attachment on later builds.
+        """
+        records = (
+            db.query(ChatMessageRecord)
+            .filter(
+                ChatMessageRecord.session_id == session_id, ChatMessageRecord.image_data.isnot(None)
+            )
+            .order_by(ChatMessageRecord.created_at.asc(), ChatMessageRecord.id.asc())
+            .all()
+        )
+        extensions = {
+            "image/jpeg": "jpg",
+            "image/png": "png",
+            "image/webp": "webp",
+            "image/gif": "gif",
+        }
+        for record in records:
+            if record.document_attachment is not None:
+                continue
+            extension = extensions.get(str(record.image_content_type))
+            if extension is None:
+                continue
+            db.add(
+                ChatDocumentAttachment(
+                    session_id=session_id,
+                    message_id=record.id,
+                    filename=f"image-{record.id}.{extension}",
+                    content_type=record.image_content_type,
+                    file_size=len(record.image_data),
+                    file_data=record.image_data,
+                    kind="uploaded",
+                    created_at=record.created_at,
+                )
+            )
+        db.flush()
+
+        if records:
+            latest = (
+                db.query(ChatDocumentAttachment)
+                .filter(ChatDocumentAttachment.session_id == session_id)
+                .order_by(
+                    ChatDocumentAttachment.created_at.desc(), ChatDocumentAttachment.id.desc()
+                )
+                .first()
+            )
+            session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            if latest is not None and session is not None:
+                session.latest_document_id = latest.id
+
     def get_message_history(
         self,
         db: Session,
@@ -65,7 +118,9 @@ class ChatRepository:
             latest_document = (
                 db.query(ChatDocumentAttachment)
                 .filter(ChatDocumentAttachment.session_id == primary.id)
-                .order_by(ChatDocumentAttachment.created_at.desc(), ChatDocumentAttachment.id.desc())
+                .order_by(
+                    ChatDocumentAttachment.created_at.desc(), ChatDocumentAttachment.id.desc()
+                )
                 .first()
             )
             setattr(primary, "latest_document_id", latest_document.id if latest_document else None)
@@ -274,7 +329,13 @@ class ChatRepository:
         raw_text: str,
     ) -> tuple[ChatMessageRecord, ChatDocumentAttachment]:
         """Commit the turn and original file together, before any model request."""
-        user_record = ChatMessageRecord(session_id=session_id, sender="user", content=user_content)
+        user_record = ChatMessageRecord(
+            session_id=session_id,
+            sender="user",
+            content=user_content,
+            image_data=file_data if content_type.startswith("image/") else None,
+            image_content_type=content_type if content_type.startswith("image/") else None,
+        )
         bot_record = ChatMessageRecord(session_id=session_id, sender="bot", content=bot_content)
         try:
             db.add_all([user_record, bot_record])
