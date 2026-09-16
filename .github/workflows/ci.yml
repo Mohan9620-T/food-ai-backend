@@ -40,59 +40,15 @@ jobs:
           cache: pip
       - name: Install backend dependencies
         run: pip install -r requirements-dev.txt
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: food-ai-ui/package-lock.json
-      - name: Install frontend dependencies
-        working-directory: food-ai-ui
-        run: npm ci
       - name: Audit backend dependencies
         run: pip-audit -r requirements.txt
-      - name: Audit frontend dependencies
-        working-directory: food-ai-ui
-        run: npm audit --audit-level=high
       - name: Lint backend
         run: |
           ruff check .
           ruff format --check .
-      - name: Lint frontend
-        working-directory: food-ai-ui
-        run: npm run lint
       - name: Type-check backend
         run: mypy app
-      - name: Type-check frontend
-        working-directory: food-ai-ui
-        run: npm run typecheck
       - name: Apply database migrations
         run: alembic -c app/alembic.ini upgrade head
       - name: Run backend tests
         run: python -m pytest -v --cov=app --cov-report=term --cov-fail-under=90
-      - name: Run frontend tests
-        working-directory: food-ai-ui
-        run: npx ng test --watch=false --coverage
-      - name: Build frontend
-        working-directory: food-ai-ui
-        run: npx ng build
-
-  e2e:
-    name: End-to-end tests (non-blocking)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: food-ai-ui/package-lock.json
-      - name: Install frontend dependencies
-        working-directory: food-ai-ui
-        run: npm ci
-      - name: Install Playwright browser
-        working-directory: food-ai-ui
-        run: npx playwright install --with-deps chromium
-      - name: Run Playwright end-to-end tests
-        working-directory: food-ai-ui
-        run: npm run e2e

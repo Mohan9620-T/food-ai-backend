@@ -114,7 +114,7 @@ use the documented default or disable the associated integration when empty.
 | `DOCUMENT_OOXML_MAX_ENTRIES` | Optional | Maximum number of entries in an OOXML archive; default `5000`. |
 | `NVIDIA_CHAT_MAX_TOKENS` | Optional | NVIDIA text output budget; default `1024`, independent of Ollama's limit. Nemotron 3 chat disables thinking to reserve this budget for the answer. |
 | `NVIDIA_TEST_CHAT_MODEL` | Optional | NVIDIA model used only by `/nvidia-chat`; defaults to `nvidia/nemotron-3-ultra-550b-a55b`. |
-| `NVIDIA_CHAT_VISION_MODEL` | Optional | NVIDIA image-chat model; defaults to `meta/llama-3.2-90b-vision-instruct`. |
+| `NVIDIA_CHAT_VISION_MODEL` | Optional | NVIDIA image-chat model; defaults to `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`. |
 | `NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA vision connection timeout; default `5`. |
 | `NVIDIA_VISION_TIMEOUT_SECONDS` | Optional | NVIDIA vision response-read timeout; default `45`. |
 | `NVIDIA_VISION_MAX_DIMENSION` | Optional | Longest image edge sent to NVIDIA; default `768`. Stored originals are unchanged. |
@@ -145,20 +145,20 @@ food-ai-backend/
 │   ├── services/                # Business logic (auth, chat)
 │   ├── utils/                    # Security (JWT, password hashing)
 │   └── main.py                    # App entrypoint
-├── food-ai-ui/               # Angular frontend
-│   └── src/app/
-│       ├── components/         # sidebar, chat-window, chat-input
-│       ├── pages/               # home, login, chat
-│       └── services/             # auth, chat, interceptor, guard
 ├── tests/                    # pytest test suite
 └── requirements.txt
 \`\`\`
+
+The Angular frontend lives in its own sibling repository, `food-ai-ui/` (not a
+subdirectory of this repo). It talks to this API purely over HTTP/CORS, so the
+two can be developed, versioned, and deployed independently. See its own
+README for setup; `ALLOWED_ORIGINS` below controls which frontend origins this
+API accepts requests from.
 
 ## Prerequisites
 
 - Python 3.13
 - Docker Engine 24+ with Docker Compose v2.20+ (for the containerized setup)
-- Node.js 22.12+ and Angular CLI 22 (for frontend development)
 - PostgreSQL running locally
 - [Ollama](https://ollama.com) running locally with `qwen3:8b` and `qwen3-vl:4b` pulled
 - Tesseract OCR (optional, for more accurate text recognition in chat images)
@@ -295,13 +295,18 @@ FastAPI image.
 
 ## Frontend setup
 
+The frontend lives in the separate `food-ai-ui` repository (a sibling checkout
+next to this one, e.g. `../food-ai-ui`):
+
 \`\`\`
-cd food-ai-ui
+cd ../food-ai-ui
 npm install
 npm start
 \`\`\`
 
-App available at \`http://localhost:4200\`.
+App available at \`http://localhost:4200\`. Make sure `ALLOWED_ORIGINS` in this
+API's `.env` includes `http://localhost:4200` (the default) so the browser can
+reach the backend during local development.
 
 ## Chat document import
 
@@ -382,6 +387,29 @@ App available at \`http://localhost:4200\`.
   recorded in the [Phase 6 report](docs/universal-document-phase6.md).
 - DOCX/PPTX-to-PDF conversion requires headless LibreOffice. The converter detects standard
   Windows installations and `soffice` on `PATH`; set `LIBREOFFICE_BINARY` for a custom location.
+- **Create files from images:** attach a JPEG, PNG, WebP, or GIF (up to 8 MB) and ask,
+  for example, `Read this image and create an Excel sheet with item name and country name`.
+  Review the plan, click **Build my document file**, then **View** or **Download** the result.
+  If the wizard asks for a source, use its **Upload image or document** button;
+  it opens a file picker instead of asking for a typed answer. Attaching an image
+  through the composer while a document request is pending also resumes that request,
+  including earlier format choices, without needing to repeat the prompt.
+  Word and PDF use the same flow. Ordinary image questions still return a chat answer.
+  Images already sent in this chat can be used with `Create a Word document from this image`.
+  Original image bytes and generated files are saved with the conversation.
+  Image extraction is deferred until Build; `analyze=false` does not imply it has been read.
+  Local OCR preserves caption positions, with vision-provider fallback for photos or
+  insufficient readable text. Review extracted labels and numbers; animated GIFs use the
+  first frame. File creation still requires the configured text AI provider.
+  On Windows, install Tesseract with
+  `winget install --id UB-Mannheim.TesseractOCR --exact --source winget`.
+  The image reader discovers standard Windows locations or `PATH`; for a custom location,
+  set `TESSERACT_BINARY` in `.env`. Docker already includes Tesseract.
+  Requests about objects, people, scenes or charts use visual analysis even when the
+  image also contains readable text. A person's gender or other sensitive attributes
+  are not inferred from appearance; printed labels can be transcribed. Uncertain cells
+  remain empty with a note, while the other readable cells in that row are retained.
+  See [image document verification](docs/image-document-creation.md) for execution evidence.
 - TXT and CSV files support UTF-8 (with or without a BOM) and BOM-marked UTF-16
   exports. Legacy `.doc` and `.xls`, password-protected files, corrupt files, and
   files without readable text are not supported; export a supported readable copy.
@@ -413,10 +441,9 @@ pip install -r requirements-dev.txt
 pre-commit install
 \`\`\`
 
-The hooks check staged backend Python with Ruff, type-check the backend with MyPy,
-and run ESLint and Prettier checks for staged frontend files. Frontend hooks require
-the packages from `food-ai-ui/package-lock.json` to be installed with `npm ci` (or
-`npm install`). To check the entire repository without making a commit, run:
+The hooks check staged backend Python with Ruff and type-check it with MyPy. Frontend
+linting/formatting hooks live in the separate `food-ai-ui` repository. To check the
+entire repository without making a commit, run:
 
 \`\`\`powershell
 pre-commit run --all-files
@@ -430,9 +457,9 @@ Tests use an isolated in-memory SQLite database — no real database connection 
 python -m pytest -v
 \`\`\`
 
-The required CI job runs quality gates in fail-fast order: dependency audits, backend
-and frontend linting, type checking, database migrations, unit tests with coverage,
-and the production frontend build. Green required CI means all of these checks pass:
+The required CI job runs quality gates in fail-fast order: dependency audit, linting,
+type checking, database migrations, and unit tests with coverage. Green required CI
+means all of these checks pass:
 
 ```powershell
 # From the repository root
@@ -441,33 +468,14 @@ ruff check .
 ruff format --check .
 mypy app
 python -m pytest -v --cov=app --cov-report=term --cov-fail-under=90
-
-# From food-ai-ui/
-npm audit --audit-level=high
-npm run lint
-npm run typecheck
-npx ng test --watch=false --coverage
-npx ng build
 ```
 
 CI additionally applies every Alembic migration to a PostgreSQL service before running
-the test suite. Coverage gates currently require 90% backend coverage and the frontend
-thresholds configured in `angular.json` (55% statements, 45% branches, 45% functions,
-and 65% lines).
+the test suite. The coverage gate currently requires 90% backend coverage.
 
-Playwright exercises registration, login, streamed chat, food-photo upload, and the
-rendered nutrition response in Chromium. API responses are intercepted at the browser
-boundary, which keeps this UI flow deterministic and independent of Ollama inference
-time. Install its browser once and run the flow from `food-ai-ui/`:
-
-```powershell
-npx playwright install chromium
-npm run e2e
-```
-
-The GitHub Actions E2E job is intentionally separate and non-blocking because browser
-tests are slower and can be sensitive to runner conditions. A failure is still visible
-and should be investigated before release even though it does not block a pull request.
+The Angular frontend (`food-ai-ui` repository) has its own CI workflow covering
+linting, type checking, unit tests, the production build, and a non-blocking
+Playwright end-to-end suite — see that repository's README.
 
 ## Observability
 

@@ -22,17 +22,3 @@ repos:
         additional_dependencies: [mypy==2.3.1]
         pass_filenames: false
         types: [python]
-
-      - id: frontend-eslint
-        name: Frontend ESLint
-        entry: node food-ai-ui/node_modules/eslint/bin/eslint.js --config food-ai-ui/eslint.config.mjs
-        language: system
-        files: ^food-ai-ui/.*\.(?:js|mjs|cjs|ts|html)$
-        types_or: [javascript, jsx, ts, tsx, html]
-
-      - id: frontend-prettier
-        name: Frontend Prettier
-        entry: node food-ai-ui/node_modules/prettier/bin/prettier.cjs --check
-        language: system
-        files: ^food-ai-ui/.*\.(?:js|mjs|cjs|ts|html|css|scss|json|md|ya?ml)$
-        exclude: ^food-ai-ui/package-lock\.json$
