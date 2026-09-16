@@ -79,6 +79,14 @@ def test_question_answer_review_replay_and_confirm_generate_once(client, db_sess
     assert review["status"] == "ready_for_review"
     assert review["plan_summary"] == review["response"]
     assert review["attachments"] == []
+    db_session.expire_all()
+    saved_review = client.get(f"/chat/sessions/{sid}", headers=headers).json()["messages"][-1][
+        "automation"
+    ]
+    assert saved_review["response"] == review
+    assert saved_review["request_instruction"] == "Create an Excel file with dishes"
+    assert saved_review["instruction"] == "South India"
+    assert saved_review["choices"] == [{"question": "Which region?", "answer": "South India"}]
     before_messages = db_session.query(ChatMessageRecord).count()
     assert call(client, headers, sid, "South India") == review
     assert db_session.query(ChatMessageRecord).count() == before_messages

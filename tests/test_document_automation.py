@@ -131,6 +131,8 @@ def test_natural_language_csv_automation_runs_three_real_steps(client, monkeypat
         "Turn inventory.csv into a polished workbook and make Category easy to search."
     )
     assert visible_automation_messages[1].startswith("Done")
+    assert history[-1]["attachments"] == body["attachments"]
+    assert history[-1]["automation"]["response"] == body
 
 
 def test_natural_language_workbook_automation_splits_and_formats(client, monkeypatch):

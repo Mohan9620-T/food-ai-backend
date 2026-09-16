@@ -165,3 +165,17 @@ class ChatDocumentAutomationResponse(BaseModel):
     attachments: list[ChatDocumentAttachmentOut] = Field(default_factory=list)
     latest_document_id: int | None = None
     steps: list[ChatDocumentAutomationStepOut] = Field(default_factory=list)
+
+
+class DocumentHistoryChoice(BaseModel):
+    question: str
+    answer: str
+
+
+class ChatDocumentAutomationState(BaseModel):
+    instruction: str
+    request_instruction: str
+    source_document_id: int | None = None
+    confirmed: bool = False
+    choices: list[DocumentHistoryChoice] = Field(default_factory=list)
+    response: ChatDocumentAutomationResponse

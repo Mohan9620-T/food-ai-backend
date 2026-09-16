@@ -41,13 +41,25 @@ class ChatSession(Base):
         "ChatMessageRecord",
         back_populates="session",
         cascade="all, delete-orphan",
-        order_by="ChatMessageRecord.created_at",
+        order_by="(ChatMessageRecord.created_at, ChatMessageRecord.id)",
     )
 
     @property
     def public_messages(self):
         """Messages that are safe to expose in chat history."""
-        return [message for message in self.messages if not message.is_internal]
+        visible = []
+        pending_attachments: list[ChatDocumentAttachment] = []
+        for message in self.messages:
+            if message.sender == "user":
+                pending_attachments = []
+            attachment = message.document_attachment
+            if attachment is not None and attachment.kind == "generated":
+                pending_attachments.append(attachment)
+            if not message.is_internal:
+                message.history_attachments = list(pending_attachments)
+                visible.append(message)
+                pending_attachments = []
+        return visible
 
 
 class ChatMessageRecord(Base):
@@ -60,6 +72,7 @@ class ChatMessageRecord(Base):
     image_data = Column(LargeBinary, nullable=True)
     image_content_type = Column(String(50), nullable=True)
     is_internal = Column(Boolean, nullable=False, default=False)
+    automation = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     session = relationship("ChatSession", back_populates="messages")
@@ -100,6 +113,7 @@ class ChatDocumentAttachment(Base):
     raw_text = Column(Text, nullable=True)
     structured_summary = Column(Text, nullable=True)
     generation_metadata = Column(JSON, nullable=True)
+    extracted_data = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     message = relationship("ChatMessageRecord", back_populates="document_attachment")

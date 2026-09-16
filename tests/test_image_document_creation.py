@@ -77,7 +77,7 @@ def test_invalid_image_cannot_be_saved(client, headers, mime, data):
 
 @pytest.mark.parametrize("format", ["xlsx", "docx", "pdf"])
 def test_image_review_build_download_reopens_with_matching_parser(
-    client, headers, monkeypatch, valid_png_bytes, format
+    client, headers, monkeypatch, valid_png_bytes, format, db_session
 ):
     provider = MagicMock()
     provider.infer.return_value = VisionResult(image_type="text", answer=TRANSCRIPTION)
@@ -134,6 +134,28 @@ def test_image_review_build_download_reopens_with_matching_parser(
     assert extracted.text == TRANSCRIPTION
     assert extracted.tables[0].rows[-1] == ("Sushi", "Japan")
     assert provider.infer.call_args.kwargs["max_tokens"] == 4096
+    db_session.expire_all()
+    stored_source = db_session.get(ChatDocumentAttachment, source["attachment"]["id"])
+    assert stored_source.raw_text == TRANSCRIPTION
+    assert stored_source.extracted_data["tables"][0]["rows"][-1] == ["Sushi", "Japan"]
+    stored_output = db_session.get(ChatDocumentAttachment, attachment["id"])
+    assert "Curry" in stored_output.raw_text
+    assert stored_output.extracted_data["document_type"] == format
+    assert stored_output.generation_metadata["content"]["tables"][0]["rows"][0] == [
+        "Curry",
+        "India",
+    ]
+    assert (
+        stored_output.generation_metadata["source_extractions"][0]["data"]["text"] == TRANSCRIPTION
+    )
+    history = client.get(f"/chat/sessions/{source['session_id']}", headers=headers).json()[
+        "messages"
+    ]
+    assert history[-1]["automation"]["response"] == result
+    assert history[-1]["attachments"][0]["id"] == attachment["id"]
+    saved_data = client.get(f"/chat/documents/{attachment['id']}/data", headers=headers)
+    assert saved_data.status_code == 200
+    assert saved_data.json()["extracted_data"] == stored_output.extracted_data
 
 
 @pytest.mark.parametrize(

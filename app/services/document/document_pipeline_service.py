@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from app.services.document.extraction_models import (
     DocumentEdit,
     ExtractedDocument,
     GeneratedSectionContent,
+    StructuredDocumentContent,
 )
 
 
@@ -39,6 +41,7 @@ from app.services.document.extraction_models import (
 class PipelineDocument:
     file_data: bytes
     filename: str
+    document_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,7 @@ class DocumentAgentStepResult:
     fidelity: Fidelity = Fidelity.HIGH
     fidelity_note: str | None = None
     assumptions: tuple[str, ...] = ()
+    structured_content: StructuredDocumentContent | None = None
 
 
 @dataclass(frozen=True)
@@ -431,6 +435,7 @@ class DocumentPipelineService:
         history: list[ChatHistoryMessage] | None = None,
         context_documents: tuple[ExtractedDocument, ...] = (),
         context_texts: tuple[str, ...] = (),
+        on_extracted: Callable[[PipelineDocument, ExtractedDocument], None] | None = None,
     ) -> DocumentAgentStepResult:
         """Execute reading, analysis, creation, conversion, or modification uniformly."""
         if step.intent.operation in self._FILE_OPERATIONS:
@@ -461,21 +466,22 @@ class DocumentPipelineService:
             }
             for source in sources:
                 if source.filename not in known_names:
-                    extracted_sources.append(
-                        await asyncio.to_thread(
-                            self.document_service.extract_document,
-                            source.file_data,
-                            source.filename,
-                            **(
-                                {"image_instruction": step.instruction or request_instruction}
-                                if self.intent_service.registry.document_type_from_filename(
-                                    source.filename
-                                )
-                                == DocumentType.IMAGE
-                                else {}
-                            ),
-                        )
+                    extracted_source = await asyncio.to_thread(
+                        self.document_service.extract_document,
+                        source.file_data,
+                        source.filename,
+                        **(
+                            {"image_instruction": step.instruction or request_instruction}
+                            if self.intent_service.registry.document_type_from_filename(
+                                source.filename
+                            )
+                            == DocumentType.IMAGE
+                            else {}
+                        ),
                     )
+                    extracted_sources.append(extracted_source)
+                    if on_extracted is not None:
+                        on_extracted(source, extracted_source)
             generated_content = await self.document_service.generate_content(
                 step.instruction or request_instruction,
                 list(context_texts),
@@ -520,6 +526,8 @@ class DocumentPipelineService:
             return replace(
                 self._agent_document_result(step, generated, f"Created {filename}."),
                 assumptions=tuple(generated_content.assumptions),
+                extracted_documents=tuple(extracted_sources),
+                structured_content=generated_content,
             )
 
         if step.intent.operation not in self._TEXT_OPERATIONS:
@@ -536,6 +544,8 @@ class DocumentPipelineService:
             selected.file_data,
             selected.filename,
         )
+        if on_extracted is not None:
+            on_extracted(selected, extracted)
         if step.intent.operation in {
             DocumentOperation.READ_DOCUMENT,
             DocumentOperation.EXTRACT_DOCUMENT,

@@ -1,10 +1,78 @@
+from datetime import datetime, timezone
+from typing import cast
+
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.chat import ChatDocumentAttachment, ChatMessageRecord, ChatSession
+from app.schemas.chat import (
+    ChatDocumentAutomationRequest,
+    ChatDocumentAutomationResponse,
+    ChatDocumentAutomationState,
+)
+from app.services.document.extraction_models import ExtractedDocument
 
 
 class ChatRepository:
+    @staticmethod
+    def save_document_extraction(
+        attachment: ChatDocumentAttachment, extracted: ExtractedDocument
+    ) -> None:
+        """Keep full extraction, tables, locations and warnings in the same transaction."""
+        setattr(attachment, "raw_text", extracted.text)
+        setattr(attachment, "extracted_data", jsonable_encoder(extracted))
+
+    def save_automation_state(
+        self,
+        db: Session,
+        record: ChatMessageRecord,
+        request: ChatDocumentAutomationRequest,
+        response: ChatDocumentAutomationResponse,
+    ) -> None:
+        db.flush()
+        previous = (
+            db.query(ChatMessageRecord)
+            .filter(
+                ChatMessageRecord.session_id == request.session_id,
+                ChatMessageRecord.sender == "bot",
+                ChatMessageRecord.id < record.id,
+                ChatMessageRecord.is_internal.is_(False),
+            )
+            .order_by(ChatMessageRecord.id.desc())
+            .first()
+        )
+        prior = cast(dict | None, previous.automation) if previous is not None else None
+        if prior and prior.get("response", {}).get("status") not in {
+            "clarification_required",
+            "ready_for_review",
+        }:
+            prior = None
+        choices = list(prior.get("choices", [])) if prior else []
+        if (
+            prior
+            and not request.confirm
+            and prior["response"]["status"] == "clarification_required"
+        ):
+            choices.append(
+                {"question": prior["response"]["response"], "answer": request.instruction}
+            )
+        state = ChatDocumentAutomationState(
+            instruction=request.instruction,
+            request_instruction=prior["request_instruction"] if prior else request.instruction,
+            source_document_id=request.source_document_id,
+            confirmed=request.confirm,
+            choices=choices,
+            response=response,
+        )
+        setattr(record, "automation", state.model_dump(mode="json"))
+
+    @staticmethod
+    def _touch_session(db: Session, session_id: int) -> None:
+        session = db.get(ChatSession, session_id)
+        if session is not None:
+            setattr(session, "updated_at", datetime.now(timezone.utc))
+
     def ensure_image_document_sources(self, db: Session, session_id: int) -> None:
         """Make existing image turns selectable by an owned, locked document pipeline.
 
@@ -190,6 +258,7 @@ class ChatRepository:
     ) -> ChatMessageRecord:
         message = ChatMessageRecord(session_id=session_id, sender=sender, content=content)
         db.add(message)
+        self._touch_session(db, session_id)
         if commit:
             db.commit()
             db.refresh(message)
@@ -222,6 +291,7 @@ class ChatRepository:
             content=bot_content,
         )
         db.add_all([user_message, bot_message])
+        self._touch_session(db, session_id)
         if commit:
             db.commit()
             db.refresh(user_message)
@@ -242,6 +312,8 @@ class ChatRepository:
         kind: str,
         raw_text: str | None = None,
         structured_summary: str | None = None,
+        extracted: ExtractedDocument | None = None,
+        generation_metadata: dict | None = None,
     ) -> ChatDocumentAttachment:
         attachment = ChatDocumentAttachment(
             session_id=session_id,
@@ -253,7 +325,14 @@ class ChatRepository:
             kind=kind,
             raw_text=raw_text,
             structured_summary=structured_summary,
+            generation_metadata=generation_metadata,
         )
+        if extracted is not None:
+            self.save_document_extraction(attachment, extracted)
+            # The generation endpoint also keeps the original Markdown response.
+            # Parsed file text remains available separately in extracted_data.
+            if raw_text is not None:
+                setattr(attachment, "raw_text", raw_text)
         db.add(attachment)
         db.flush()
         session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
@@ -277,6 +356,7 @@ class ChatRepository:
         is_internal: bool = False,
         commit: bool = True,
         locked_session: ChatSession | None = None,
+        extracted: ExtractedDocument | None = None,
     ) -> tuple[ChatMessageRecord, ChatDocumentAttachment]:
         """Commit a completion message, generated file, and latest pointer atomically."""
         bot_record = ChatMessageRecord(
@@ -299,6 +379,8 @@ class ChatRepository:
                 raw_text=raw_text,
                 structured_summary=structured_summary,
             )
+            if extracted is not None:
+                self.save_document_extraction(attachment, extracted)
             db.add(attachment)
             db.flush()
             session = locked_session or (
@@ -327,6 +409,7 @@ class ChatRepository:
         content_type: str,
         file_data: bytes,
         raw_text: str,
+        extracted: ExtractedDocument | None = None,
     ) -> tuple[ChatMessageRecord, ChatDocumentAttachment]:
         """Commit the turn and original file together, before any model request."""
         user_record = ChatMessageRecord(
@@ -350,6 +433,8 @@ class ChatRepository:
                 kind="uploaded",
                 raw_text=raw_text,
             )
+            if extracted is not None:
+                self.save_document_extraction(attachment, extracted)
             db.add(attachment)
             db.flush()
             session = db.query(ChatSession).filter(ChatSession.id == session_id).first()

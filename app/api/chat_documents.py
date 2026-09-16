@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database.database import get_db
+from app.models.chat import ChatDocumentAttachment, ChatMessageRecord
 from app.repositories.chat_repository import ChatRepository
 from app.schemas.chat import (
     ChatDocumentAttachmentOut,
@@ -125,6 +126,21 @@ def _automation_history(db: Session, session_id: int) -> list[ChatHistoryMessage
         )
         for record in repository.get_message_history(db, session_id, limit=12)
     ]
+
+
+def _save_automation_response(
+    db: Session,
+    request: ChatDocumentAutomationRequest,
+    response: ChatDocumentAutomationResponse,
+    record: ChatMessageRecord | None = None,
+) -> ChatDocumentAutomationResponse:
+    if record is None:
+        _, record = repository.add_turn(
+            db, request.session_id, request.instruction, response.response, commit=False
+        )
+    repository.save_automation_state(db, record, request, response)
+    db.commit()
+    return response
 
 
 def _fidelity_message(results: list[tuple[str, str, str | None]]) -> str:
@@ -299,6 +315,7 @@ async def upload_document(
         content_type=expected_type,
         file_data=file_data,
         raw_text=raw_text,
+        extracted=extracted if not (image_upload and not analyze) else None,
     )
     response_text = saved_notice
     analysis_status: Literal["complete", "unavailable", "skipped"] = "skipped"
@@ -322,10 +339,16 @@ async def upload_document(
                 content_type=modification_output.content_type,
                 file_data=modification_output.file_data,
                 kind="generated",
-                raw_text=service.extract_document(
-                    modification_output.file_data, modification_output.filename
-                ).text,
+                extracted=await asyncio.to_thread(
+                    service.extract_document,
+                    modification_output.file_data,
+                    modification_output.filename,
+                ),
                 structured_summary=response_text,
+                generation_metadata={
+                    "instruction": user_text,
+                    "source_document_ids": [int(attachment.id)],
+                },
             )
             db.commit()
             db.refresh(response_attachment)
@@ -385,8 +408,14 @@ async def upload_document(
                 content_type=DOCUMENT_TYPES[".xlsx"],
                 file_data=updated_data,
                 kind="generated",
-                raw_text=raw_text,
                 structured_summary=response_text,
+                extracted=await asyncio.to_thread(
+                    service.extract_document, updated_data, updated_filename
+                ),
+                generation_metadata={
+                    "instruction": user_text,
+                    "source_document_ids": [int(attachment.id)],
+                },
             )
             db.commit()
             db.refresh(response_attachment)
@@ -425,8 +454,14 @@ async def upload_document(
                 content_type=updated_content_type,
                 file_data=updated_data,
                 kind="generated",
-                raw_text=raw_text,
                 structured_summary=response_text,
+                extracted=await asyncio.to_thread(
+                    service.extract_document, updated_data, updated_filename
+                ),
+                generation_metadata={
+                    "instruction": user_text,
+                    "source_document_ids": [int(attachment.id)],
+                },
             )
             db.commit()
             db.refresh(response_attachment)
@@ -599,7 +634,9 @@ async def update_session_spreadsheet(
             f"Applied: {', '.join(actions)}.\n\n"
             "The source workbook is unchanged. Use Download to get the generated workbook."
         )
-    _, bot_record = repository.add_turn(db, payload.session_id, payload.instruction, response_text)
+    _, bot_record = repository.add_turn(
+        db, payload.session_id, payload.instruction, response_text, commit=False
+    )
     try:
         attachment = repository.add_document_attachment(
             db,
@@ -609,8 +646,14 @@ async def update_session_spreadsheet(
             content_type=DOCUMENT_TYPES[".xlsx"],
             file_data=updated_data,
             kind="generated",
-            raw_text=cast(str | None, source.raw_text),
             structured_summary=response_text,
+            extracted=await asyncio.to_thread(
+                service.extract_document, updated_data, updated_filename
+            ),
+            generation_metadata={
+                "instruction": payload.instruction,
+                "source_document_ids": [int(source.id)],
+            },
         )
     except Exception as error:
         db.rollback()
@@ -761,6 +804,7 @@ async def generate_document(
         response_fidelity = pipeline_service.validator.assess_generation(
             file_data, output_type, source_text=source_text
         )
+        extracted_output = await asyncio.to_thread(service.extract_document, file_data, filename)
     except ChatModelUnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except InvalidDocumentError as error:
@@ -774,7 +818,9 @@ async def generate_document(
         if source_document is not None and payload.mode == "export"
         else payload.instruction
     )
-    _, bot_record = repository.add_turn(db, resolved_session_id, user_text, response_content)
+    _, bot_record = repository.add_turn(
+        db, resolved_session_id, user_text, response_content, commit=False
+    )
     attachment = repository.add_document_attachment(
         db,
         session_id=resolved_session_id,
@@ -785,6 +831,20 @@ async def generate_document(
         kind="generated",
         raw_text=response_content,
         structured_summary=response_content,
+        extracted=extracted_output,
+        generation_metadata={
+            "instruction": payload.instruction,
+            "mode": payload.mode,
+            "source_document_ids": [int(source_document.id)] if source_document is not None else [],
+            "content": content.model_dump(mode="json")
+            if isinstance(content, StructuredDocumentContent)
+            else content,
+            "assumptions": list(content.assumptions)
+            if isinstance(content, StructuredDocumentContent)
+            else [],
+            "fidelity": response_fidelity.fidelity.value,
+            "fidelity_note": response_fidelity.note,
+        },
     )
     logger.info(
         "chat.document_generated",
@@ -892,8 +952,8 @@ async def run_document_pipeline(
                         filename=cast(str, current_source.filename),
                     ),
                 )
-                raw_text = await asyncio.to_thread(
-                    service.extract,
+                extracted_output = await asyncio.to_thread(
+                    service.extract_document,
                     result.document.file_data,
                     result.document.filename,
                 )
@@ -904,7 +964,8 @@ async def run_document_pipeline(
                     filename=result.document.filename,
                     content_type=result.document.content_type,
                     file_data=result.document.file_data,
-                    raw_text=raw_text,
+                    raw_text=extracted_output.text,
+                    extracted=extracted_output,
                     structured_summary=result.summary,
                     is_internal=True,
                     commit=False,
@@ -1062,17 +1123,17 @@ async def automate_document(
             UnsupportedDocumentConversionError,
         ) as error:
             failure = f"I couldn't safely complete that document request. {error}"
-            repository.add_turn(db, payload.session_id, payload.instruction, failure, commit=False)
-            db.commit()
-            return ChatDocumentAutomationResponse(
-                response=failure, session_id=payload.session_id, status="failed"
+            return _save_automation_response(
+                db,
+                payload,
+                ChatDocumentAutomationResponse(
+                    response=failure, session_id=payload.session_id, status="failed"
+                ),
             )
 
         if plan.status == "clarification_required":
             question = cast(str, plan.clarifying_question)
-            repository.add_turn(db, payload.session_id, payload.instruction, question, commit=False)
-            db.commit()
-            return ChatDocumentAutomationResponse(
+            response_payload = ChatDocumentAutomationResponse(
                 response=question,
                 session_id=payload.session_id,
                 status="clarification_required",
@@ -1082,26 +1143,32 @@ async def automate_document(
                 if plan.clarification_options
                 else None,
             )
+            return _save_automation_response(db, payload, response_payload)
 
         if payload.confirm is not True and any(step.produces_document for step in plan.steps):
             summary = automation_service.summarize_plan(plan)
-            # Store ordinary conversation turns only. Repeated previews do not
-            # append duplicate turns or consume the history window.
-            if not (
+            # Repeated previews reuse the persisted review, including its choices.
+            if (
                 len(history) >= 2
                 and history[-2].role == "user"
                 and history[-2].content == payload.instruction
                 and history[-1].content == summary
             ):
-                repository.add_turn(
-                    db, payload.session_id, payload.instruction, summary, commit=False
-                )
-            db.commit()
-            return ChatDocumentAutomationResponse(
-                response=summary,
-                session_id=payload.session_id,
-                status="ready_for_review",
-                plan_summary=summary,
+                previous = repository.get_message_history(db, payload.session_id, limit=1)[0]
+                if previous.automation is not None:
+                    db.commit()
+                    return ChatDocumentAutomationResponse.model_validate(
+                        previous.automation["response"]
+                    )
+            return _save_automation_response(
+                db,
+                payload,
+                ChatDocumentAutomationResponse(
+                    response=summary,
+                    session_id=payload.session_id,
+                    status="ready_for_review",
+                    plan_summary=summary,
+                ),
             )
 
         repository.add_message(db, payload.session_id, "user", payload.instruction, commit=False)
@@ -1125,6 +1192,12 @@ async def automate_document(
         fidelity_results: list[tuple[str, str, str | None]] = []
         failure_reason = None
         failed_position = None
+
+        def persist_extraction(source: PipelineDocument, extracted: ExtractedDocument) -> None:
+            if source.document_id is not None:
+                attachment = db.get(ChatDocumentAttachment, source.document_id)
+                if attachment is not None:
+                    repository.save_document_extraction(attachment, extracted)
 
         try:
             for step in plan.steps:
@@ -1162,6 +1235,7 @@ async def automate_document(
                         PipelineDocument(
                             file_data=cast(bytes, document.file_data),
                             filename=cast(str, document.filename),
+                            document_id=int(document.id),
                         )
                         for document in step_sources
                     ),
@@ -1169,6 +1243,7 @@ async def automate_document(
                     history=history,
                     context_documents=tuple(context_documents),
                     context_texts=tuple(context_texts),
+                    on_extracted=persist_extraction,
                 )
                 known_context_sources = {
                     document.source.filename
@@ -1190,8 +1265,8 @@ async def automate_document(
 
                 generated = None
                 if result.document is not None:
-                    raw_text = await asyncio.to_thread(
-                        service.extract,
+                    extracted_output = await asyncio.to_thread(
+                        service.extract_document,
                         result.document.file_data,
                         result.document.filename,
                     )
@@ -1202,7 +1277,8 @@ async def automate_document(
                         filename=result.document.filename,
                         content_type=result.document.content_type,
                         file_data=result.document.file_data,
-                        raw_text=raw_text,
+                        raw_text=extracted_output.text,
+                        extracted=extracted_output,
                         structured_summary=result.summary,
                         is_internal=True,
                         commit=False,
@@ -1232,6 +1308,19 @@ async def automate_document(
                             "provenance": provenance,
                             "source_document_ids": sorted(used_source_ids),
                             "assumptions": list(result.assumptions),
+                            "instruction": request_instruction,
+                            "operation": step.intent.operation.value,
+                            "fidelity": result.fidelity.value,
+                            "fidelity_note": result.fidelity_note,
+                            "content": result.structured_content.model_dump(mode="json")
+                            if result.structured_content is not None
+                            else None,
+                            "source_extractions": [
+                                {"document_id": source_id, "data": source.extracted_data}
+                                for source_id in sorted(used_source_ids)
+                                if (source := db.get(ChatDocumentAttachment, source_id)) is not None
+                                and source.extracted_data is not None
+                            ],
                         },
                     )
                     lineage[int(generated.id)] = used_source_ids
@@ -1315,19 +1404,24 @@ async def automate_document(
             if completed_records:
                 setattr(completed_records[-1], "is_internal", False)
                 setattr(completed_records[-1], "content", response)
+                final_record = completed_records[-1]
             else:
-                repository.add_message(db, payload.session_id, "bot", response, commit=False)
-            db.commit()
-            for attachment in completed_attachments:
-                db.refresh(attachment)
+                final_record = repository.add_message(
+                    db, payload.session_id, "bot", response, commit=False
+                )
             latest = completed_attachments[-1] if completed_attachments else None
-            return ChatDocumentAutomationResponse(
-                response=response,
-                session_id=payload.session_id,
-                status=status,
-                attachments=cast(list[ChatDocumentAttachmentOut], completed_attachments),
-                latest_document_id=int(latest.id) if latest is not None else selected_id,
-                steps=response_steps,
+            return _save_automation_response(
+                db,
+                payload,
+                ChatDocumentAutomationResponse(
+                    response=response,
+                    session_id=payload.session_id,
+                    status=status,
+                    attachments=cast(list[ChatDocumentAttachmentOut], completed_attachments),
+                    latest_document_id=int(latest.id) if latest is not None else selected_id,
+                    steps=response_steps,
+                ),
+                final_record,
             )
 
         filenames = [str(attachment.filename) for attachment in completed_attachments]
@@ -1336,12 +1430,12 @@ async def automate_document(
         if completed_records:
             setattr(completed_records[-1], "is_internal", False)
             setattr(completed_records[-1], "content", response)
+            final_record = completed_records[-1]
         else:
-            repository.add_message(db, payload.session_id, "bot", response, commit=False)
+            final_record = repository.add_message(
+                db, payload.session_id, "bot", response, commit=False
+            )
         db.flush()
-        db.commit()
-        for attachment in completed_attachments:
-            db.refresh(attachment)
         latest = completed_attachments[-1] if completed_attachments else None
         logger.info(
             "chat.document_automation_completed",
@@ -1353,14 +1447,40 @@ async def automate_document(
                 "attachment_count": len(completed_attachments),
             },
         )
-        return ChatDocumentAutomationResponse(
-            response=response,
-            session_id=payload.session_id,
-            status="done",
-            attachments=cast(list[ChatDocumentAttachmentOut], completed_attachments),
-            latest_document_id=int(latest.id) if latest is not None else selected_id,
-            steps=response_steps,
+        return _save_automation_response(
+            db,
+            payload,
+            ChatDocumentAutomationResponse(
+                response=response,
+                session_id=payload.session_id,
+                status="done",
+                attachments=cast(list[ChatDocumentAttachmentOut], completed_attachments),
+                latest_document_id=int(latest.id) if latest is not None else selected_id,
+                steps=response_steps,
+            ),
+            final_record,
         )
+
+
+@router.get("/{document_id}/data", summary="Read the saved document data and generation history")
+def document_data(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    attachment = repository.get_document_for_user(db, document_id, int(current_user["sub"]))
+    if attachment is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {
+        "id": attachment.id,
+        "session_id": attachment.session_id,
+        "filename": attachment.filename,
+        "kind": attachment.kind,
+        "created_at": attachment.created_at,
+        "raw_text": attachment.raw_text,
+        "extracted_data": attachment.extracted_data,
+        "generation_metadata": attachment.generation_metadata,
+    }
 
 
 @router.get("/{document_id}/preview", summary="Read a page of the stored XLSX workbook")

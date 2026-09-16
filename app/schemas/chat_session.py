@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.chat import ChatDocumentAutomationState
+
 
 class ChatDocumentAttachmentOut(BaseModel):
     id: int
@@ -25,6 +27,10 @@ class ChatMessageOut(BaseModel):
     created_at: datetime
     image_url: str | None = None
     document_attachment: ChatDocumentAttachmentOut | None = None
+    attachments: list[ChatDocumentAttachmentOut] = Field(
+        default_factory=list, validation_alias="history_attachments"
+    )
+    automation: ChatDocumentAutomationState | None = None
 
     class Config:
         from_attributes = True
