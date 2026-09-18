@@ -1264,10 +1264,15 @@ def test_nvidia_sse_error_event_falls_back_before_content_is_exposed(monkeypatch
 def test_complete_chat_uses_nvidia_non_streaming_response(monkeypatch):
     monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_TIMEOUT_SECONDS", 30)
+    monkeypatch.setattr(settings, "DOCUMENT_AI_TIMEOUT_SECONDS", 90)
     original_client = httpx.AsyncClient
     seen_body = {}
 
     async def handler(request):
+        # A document can take longer than the streaming chat's idle timeout
+        # before its first byte arrives; do not prematurely fall back to Ollama.
+        assert request.extensions["timeout"]["read"] == 90
         seen_body.update(__import__("json").loads(request.content))
         return httpx.Response(
             200,

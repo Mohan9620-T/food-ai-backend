@@ -5,6 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from app.config import settings
 from app.schemas.chat import ChatHistoryMessage
 from app.services.chat_document_service import ChatDocumentService
@@ -35,6 +37,8 @@ from app.services.document.extraction_models import (
     GeneratedSectionContent,
     StructuredDocumentContent,
 )
+from app.services.spreadsheet.row_append import AppendRowsRequest, WorkbookRowAppender
+from app.services.spreadsheet.row_selection import RowSelection, WorkbookRowSelector
 
 
 @dataclass(frozen=True)
@@ -99,6 +103,8 @@ class DocumentPipelineService:
             DocumentOperation.MODIFY_PDF_PAGES,
             DocumentOperation.MERGE_PDF,
             DocumentOperation.FILTER_AND_SORT_WORKBOOK,
+            DocumentOperation.EXTRACT_MATCHING_ROWS,
+            DocumentOperation.APPEND_WORKBOOK_ROWS,
         }
     )
     _TEXT_OPERATIONS = frozenset(
@@ -345,7 +351,36 @@ class DocumentPipelineService:
             )
         self.validator.validate(selected.file_data, source_type)
 
-        if step.intent.operation == DocumentOperation.CONVERT_DOCUMENT:
+        if step.intent.operation == DocumentOperation.EXTRACT_MATCHING_ROWS:
+            selection = RowSelection.model_validate(step.intent.parameters)
+            result = WorkbookRowSelector().select(selected.file_data, selection)
+            generated = GeneratedDocument(
+                file_data=result.file_data,
+                filename=DocumentGenerationService.safe_filename(
+                    f"{Path(selected.filename).stem}-selected-rows", DocumentType.XLSX
+                ),
+                content_type=DocumentGenerationService.MIME_TYPES[DocumentType.XLSX],
+                document_type=DocumentType.XLSX,
+                fidelity=Fidelity.HIGH,
+                fidelity_note="Selected row values and column order preserved in a new workbook.",
+            )
+            summary = result.summary
+        elif step.intent.operation == DocumentOperation.APPEND_WORKBOOK_ROWS:
+            data, appended = WorkbookRowAppender().append(
+                selected.file_data, AppendRowsRequest.model_validate(step.intent.parameters)
+            )
+            generated = GeneratedDocument(
+                file_data=data,
+                filename=DocumentGenerationService.safe_filename(
+                    f"{Path(selected.filename).stem}-updated", DocumentType.XLSX
+                ),
+                content_type=DocumentGenerationService.MIME_TYPES[DocumentType.XLSX],
+                document_type=DocumentType.XLSX,
+                fidelity=Fidelity.HIGH,
+                fidelity_note="New rows added to the original workbook; existing records and formulas preserved.",
+            )
+            summary = appended.summary
+        elif step.intent.operation == DocumentOperation.CONVERT_DOCUMENT:
             assert step.intent.output_type is not None
             generated = self.conversion_service.convert(
                 selected.file_data, selected.filename, step.intent.output_type
@@ -653,6 +688,20 @@ class DocumentPipelineService:
                 "The document plan contains unsupported parameters."
             )
         parameters = dict(requested.parameters)
+        if requested.operation == DocumentOperation.APPEND_WORKBOOK_ROWS:
+            try:
+                return AppendRowsRequest.model_validate(parameters).model_dump(exclude_none=True)
+            except ValidationError as error:
+                raise InvalidDocumentParametersError(
+                    "Paste the new rows to add and optionally name the worksheet."
+                ) from error
+        if requested.operation == DocumentOperation.EXTRACT_MATCHING_ROWS:
+            try:
+                parameters = RowSelection.model_validate(parameters).model_dump(exclude_none=True)
+            except ValidationError as error:
+                raise InvalidDocumentParametersError(
+                    "Row selection requires 1 to 200 exact ID strings and optional column/sheet names."
+                ) from error
         if requested.operation == DocumentOperation.FILTER_COLUMN:
             column = parameters.get("column")
             if not isinstance(column, str) or not column.strip():
@@ -748,6 +797,14 @@ class DocumentPipelineService:
             )
         if operation == DocumentOperation.MERGE_PDF:
             return "merged_updated.pdf"
+        if operation == DocumentOperation.EXTRACT_MATCHING_ROWS:
+            return DocumentGenerationService.safe_filename(
+                f"{Path(current_filename).stem}-selected-rows", output_type
+            )
+        if operation == DocumentOperation.APPEND_WORKBOOK_ROWS:
+            return DocumentGenerationService.safe_filename(
+                f"{Path(current_filename).stem}-updated", output_type
+            )
         stem = Path(current_filename).stem or "document"
         return DocumentGenerationService.safe_filename(f"{stem}-pipeline", output_type)
 
@@ -776,6 +833,10 @@ class DocumentPipelineService:
             return f"Extract the tables from {source} to Excel"
         if operation == DocumentOperation.FILTER_COLUMN:
             return f"Add a filter to the {parameters['column']} column"
+        if operation == DocumentOperation.EXTRACT_MATCHING_ROWS:
+            return request_instruction or "Extract complete rows matching the requested IDs"
+        if operation == DocumentOperation.APPEND_WORKBOOK_ROWS:
+            return request_instruction or "Append the supplied rows to the workbook"
         if operation == DocumentOperation.SPLIT_BY_CATEGORY:
             return "Split the workbook into one sheet per category"
         if operation == DocumentOperation.EXPAND_DISH_BY_DIETARY_CATEGORY:

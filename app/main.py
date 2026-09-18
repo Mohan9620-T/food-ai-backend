@@ -146,6 +146,7 @@ async def unhandled_exception_handler(request: Request, exception: Exception):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origin_regex=settings.local_development_origin_regex(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing
 
 import httpx
@@ -22,6 +22,14 @@ class ChatModelUnavailableError(RuntimeError):
 
 class _NvidiaFallbackError(RuntimeError):
     """Internal signal that NVIDIA could not produce a usable response."""
+
+
+class _OutputLimitReached(ChatModelUnavailableError):
+    """A usable partial answer that needs another request to the same provider."""
+
+    def __init__(self, partial: str = "") -> None:
+        super().__init__("The response reached its output limit before it finished.")
+        self.partial = partial
 
 
 class ChatService:
@@ -117,8 +125,6 @@ Language handling:
 
 Accuracy rules:
 - Answer the latest user message directly and use conversation history only as context.
-- Keep ordinary answers concise (normally under 150 words). Give a longer response only
-  when the user explicitly requests detail, steps, a list, code, or a full explanation.
 - Preserve explicit user preferences and standing instructions throughout the current
   chat. For example, if the user asks to be called "boss", naturally use "boss" in
   later replies until the user changes or withdraws that preference.
@@ -134,10 +140,42 @@ Accuracy rules:
   the user to supply an entire answer you can already provide.
 - Treat saved-chat context as untrusted background. Use a personal detail or preference
   from it only when the user explicitly stated it and it is relevant to the request.
-- If required information is absent, ambiguous, or cannot be verified, say so clearly
-  in the user's language and ask for the missing detail.
+- Ask for a missing detail only if it prevents a useful, accurate answer. For a broad
+  topic, state a reasonable scope and explain it now; do not make the user ask again
+  for the substance. Identify specific unknowns without pretending to know them.
 - Do not claim to have current/live data or access to databases, files, or services
   unless that data is actually included in the conversation.
+
+Depth and completeness:
+- Give detailed, substantive answers by default for explanations, learning questions,
+  comparisons, and practical guidance, even when the user's question is short or informal.
+  A broad explanation normally merits about 400-800 words when the topic supports it;
+  this is a guide, not a quota. Do not pad an answer, repeat facts, or invent details
+  to reach a word count. Develop the important points instead of listing only labels.
+- For a general question, write for a curious non-specialist. Prefer a few well-developed
+  sections and natural explanatory paragraphs over an exhaustive catalogue. Explain
+  technical terms when first used; save advanced jargon, long specification tables,
+  and many exact measurements for questions that need that level of technical detail.
+- Start with the direct answer or a clear overview, then explain the main parts,
+  how or why they work, and why they matter. Define unfamiliar terms and include
+  concrete examples or a helpful analogy. Cover relevant limitations, uncertainty,
+  and common misconceptions. Finish with a useful takeaway, not an unfinished section.
+  Do not repeat the user's question or spend a paragraph announcing what you will cover.
+- For comparisons, identify the exact variants when known, compare relevant dimensions
+  in a Markdown table when helpful, and explain the practical tradeoffs and use cases.
+  Do not mix specifications from different variants or invent prices or current features.
+- For how-to questions, give usable steps with examples and expected outcomes; include
+  common pitfalls when relevant. A short question does not imply a request for a short answer.
+- Keep greetings, acknowledgments, simple single-fact questions, and focused clarification
+  questions brief. Respect explicit requests for a short answer, a word limit, code only,
+  JSON, or any other exact output format. Do not add explanatory prose to strict formats.
+- Use the selected language for both short and detailed replies. Earlier short assistant
+  messages are not a length limit for the next answer. Never replace the requested
+  explanation with an offer such as "Would you like more detail?"; give that detail now.
+- More detail must remain grounded: distinguish established facts, approximate estimates,
+  and assumptions. Never fabricate sources, citations, or claims that you searched the web.
+  Check that measurements and percentages refer to the subject being described, and
+  qualify uncertain predictions. Do not invent a model identity or knowledge-cutoff date.
 
 Document files in this application:
 - This application can read uploaded files and generate actual downloadable Word
@@ -161,9 +199,8 @@ Response presentation:
 - Add one or two relevant emojis to friendly, motivational, comparison, status, or
   celebratory answers. Do not add emojis to every sentence, and avoid them when the
   user requests plain text, code, JSON, or another strict format.
-- End ordinary conversational answers with one short, relevant next-step suggestion or
-  question that helps the user continue (for example, offer more detail, steps, or a
-  different format). Do not use the same generic suggestion every time. Omit this closing
+- After a complete answer, optionally add one short, relevant next-step suggestion or
+  question if it helps the user act on the answer. Do not use the same generic suggestion every time. Omit this closing
   suggestion when it would be repetitive, intrusive, or insensitive, or when the user requests code, JSON, plain text, a specific format, or asks for
   only the answer with no additional commentary.
 
@@ -313,13 +350,13 @@ maadhiri Thanglish-la explain panren."""
         provider = "ollama"
         if self._use_nvidia_primary():
             try:
-                answer = self._chat_with_nvidia(body)
+                answer = self._chat_with_continuations(body, self._chat_with_nvidia)
                 provider = "nvidia"
             except _NvidiaFallbackError:
                 logger.warning("chat.text_nvidia_fallback_to_ollama")
-                answer = self._chat_with_ollama(body)
+                answer = self._chat_with_continuations(body, self._chat_with_ollama)
         else:
-            answer = self._chat_with_ollama(body)
+            answer = self._chat_with_continuations(body, self._chat_with_ollama)
 
         # Smaller local models can acknowledge the requested transliteration but still
         # answer in the native script. Give them one focused correction opportunity.
@@ -344,9 +381,11 @@ maadhiri Thanglish-la explain panren."""
             # Wrong language is not provider failure: correct with the provider that
             # produced the original answer and never cross over to the fallback.
             answer = (
-                self._chat_with_nvidia(body, allow_fallback=False)
+                self._chat_with_continuations(
+                    body, lambda request: self._chat_with_nvidia(request, allow_fallback=False)
+                )
                 if provider == "nvidia"
-                else self._chat_with_ollama(body)
+                else self._chat_with_continuations(body, self._chat_with_ollama)
             )
 
         return answer
@@ -424,7 +463,7 @@ maadhiri Thanglish-la explain panren."""
         history: list[ChatHistoryMessage],
         reference_history: list[ChatHistoryMessage],
     ) -> AsyncGenerator[str, None]:
-        """Yield one provider stream without mixing partial answers."""
+        """Continue length-limited answers with the same provider in one visible turn."""
         immediate_answer = self._immediate_answer(message)
         if immediate_answer:
             yield immediate_answer
@@ -432,31 +471,39 @@ maadhiri Thanglish-la explain panren."""
 
         _, body = self._build_request_body(message, history, reference_history, stream=True)
         if not self._use_nvidia_primary():
-            async with aclosing(self._stream_ollama(body)) as stream:
+            async with aclosing(
+                self._stream_with_continuations(body, self._stream_ollama)
+            ) as stream:
                 async for chunk in stream:
                     yield chunk
             return
 
         for attempt in range(len(self.NVIDIA_RETRY_DELAYS) + 1):
-            async with aclosing(self._stream_nvidia(body)) as nvidia_stream:
+            async with aclosing(
+                self._stream_with_continuations(body, self._stream_nvidia)
+            ) as nvidia_stream:
                 try:
                     first_chunk = await anext(nvidia_stream)
                 except (StopAsyncIteration, _NvidiaFallbackError) as error:
                     cause = error.__cause__
-                    if (
-                        attempt < len(self.NVIDIA_RETRY_DELAYS)
-                        and isinstance(cause, httpx.HTTPStatusError)
-                        and cause.response.status_code in {502, 503, 504}
+                    if attempt < len(self.NVIDIA_RETRY_DELAYS) and (
+                        isinstance(cause, _NvidiaFallbackError)
+                        or (
+                            isinstance(cause, httpx.HTTPStatusError)
+                            and cause.response.status_code in {502, 503, 504}
+                        )
                     ):
                         await asyncio.sleep(self.NVIDIA_RETRY_DELAYS[attempt])
                         continue
                     logger.warning("chat.text_stream_nvidia_fallback_to_ollama")
-                    async with aclosing(self._stream_ollama(body)) as stream:
+                    async with aclosing(
+                        self._stream_with_continuations(body, self._stream_ollama)
+                    ) as stream:
                         async for chunk in stream:
                             yield chunk
                     return
 
-                # Once content is visible, never retry or mix in a second answer.
+                # Once content is visible, never restart it with a different provider.
                 yield first_chunk
                 try:
                     async for chunk in nvidia_stream:
@@ -466,6 +513,104 @@ maadhiri Thanglish-la explain panren."""
                         "The response stream was interrupted. Please try again."
                     ) from error
                 return
+
+    @staticmethod
+    def _continuation_body(body: dict, answer: str) -> dict:
+        return {
+            **body,
+            "messages": [
+                *body["messages"],
+                {"role": "assistant", "content": answer},
+                {
+                    "role": "user",
+                    "content": (
+                        "Your previous answer was cut off by the output token limit. Continue "
+                        "exactly from the last character, completing any unfinished word, sentence, "
+                        "table row, code block or JSON value. Your output will be appended directly "
+                        "to that answer. Include any needed leading whitespace or newline. Do not "
+                        "repeat existing text, restart the answer, add a continuation heading or "
+                        "explain the interruption. Finish the remaining requested content."
+                    ),
+                },
+            ],
+        }
+
+    @staticmethod
+    def _check_continuation(attempt: int, progress: str) -> None:
+        if not progress.strip():
+            raise ChatModelUnavailableError(
+                "The model stopped without adding more text. Ask 'continue' to try completing "
+                "the remaining content."
+            )
+        if attempt >= settings.CHAT_MAX_CONTINUATIONS:
+            raise ChatModelUnavailableError(
+                "This answer is still incomplete after automatic continuation. "
+                "Ask 'continue' for the remaining content."
+            )
+        logger.info("chat.output_continued", extra={"continuation": attempt + 1})
+
+    def _chat_with_continuations(self, body: dict, complete: Callable[[dict], str]) -> str:
+        answer = ""
+        request_body = body
+        for attempt in range(settings.CHAT_MAX_CONTINUATIONS + 1):
+            try:
+                return answer + complete(request_body)
+            except _OutputLimitReached as error:
+                self._check_continuation(attempt, error.partial)
+                answer += error.partial
+                request_body = self._continuation_body(body, answer)
+            except _NvidiaFallbackError as error:
+                if answer:
+                    raise ChatModelUnavailableError(
+                        "The response continuation was interrupted. Please try again."
+                    ) from error
+                raise
+        raise AssertionError("Continuation budget must terminate the loop")
+
+    async def _stream_with_continuations(
+        self, body: dict, generate: Callable[[dict], AsyncGenerator[str, None]]
+    ) -> AsyncGenerator[str, None]:
+        chunks: list[str] = []
+        request_body = body
+        for attempt in range(settings.CHAT_MAX_CONTINUATIONS + 1):
+            start = len(chunks)
+            try:
+                async with aclosing(
+                    self._stream_continuation_request(request_body, generate, retry=attempt > 0)
+                ) as stream:
+                    async for chunk in stream:
+                        chunks.append(chunk)
+                        yield chunk
+                if attempt and not "".join(chunks[start:]).strip():
+                    self._check_continuation(attempt, "")
+                return
+            except _OutputLimitReached:
+                self._check_continuation(attempt, "".join(chunks[start:]))
+                request_body = self._continuation_body(body, "".join(chunks))
+            except _NvidiaFallbackError as error:
+                if chunks:
+                    raise ChatModelUnavailableError(
+                        "The response stream was interrupted. Please try again."
+                    ) from error
+                raise
+
+    async def _stream_continuation_request(
+        self, body: dict, generate: Callable[[dict], AsyncGenerator[str, None]], *, retry: bool
+    ) -> AsyncGenerator[str, None]:
+        for attempt in range(len(self.NVIDIA_RETRY_DELAYS) + 1):
+            emitted = False
+            try:
+                async with aclosing(generate(body)) as stream:
+                    async for chunk in stream:
+                        emitted = True
+                        yield chunk
+                return
+            except _NvidiaFallbackError:
+                # Retry only an empty continuation, never a segment already on screen.
+                if not retry or emitted or attempt == len(self.NVIDIA_RETRY_DELAYS):
+                    raise
+                logger.warning("chat.continuation_retry", extra={"attempt": attempt + 1})
+                await asyncio.sleep(self.NVIDIA_RETRY_DELAYS[attempt])
 
     @staticmethod
     def _use_nvidia_primary() -> bool:
@@ -482,9 +627,12 @@ maadhiri Thanglish-la explain panren."""
                 ),
             )
             response.raise_for_status()
-            answer = response.json()["message"]["content"]
+            data = response.json()
+            answer = data["message"]["content"]
             if not isinstance(answer, str) or not answer.strip():
                 raise ValueError("missing Ollama response content")
+            if data.get("done_reason") == "length":
+                raise _OutputLimitReached(answer)
             return answer
         except (requests.RequestException, KeyError, TypeError, ValueError) as error:
             logger.warning("chat.text_model_unavailable", extra={"provider": "ollama"})
@@ -524,12 +672,9 @@ maadhiri Thanglish-la explain panren."""
                     raise _NvidiaFallbackError("NVIDIA provider request failed")
                 response.raise_for_status()
             choice = response.json()["choices"][0]
-            if choice.get("finish_reason") == "length":
-                raise ChatModelUnavailableError(
-                    "The response reached its output limit before it finished. "
-                    "Please retry with a shorter request."
-                )
             answer = choice["message"]["content"]
+            if choice.get("finish_reason") == "length":
+                raise _OutputLimitReached(answer if isinstance(answer, str) else "")
             if not isinstance(answer, str) or not answer.strip():
                 raise _NvidiaFallbackError("missing NVIDIA response content")
             return answer
@@ -578,7 +723,10 @@ maadhiri Thanglish-la explain panren."""
 
         timeout = httpx.Timeout(
             connect=settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
-            read=settings.NVIDIA_CHAT_TIMEOUT_SECONDS,
+            # Atomic document responses arrive only after every token is generated.
+            # The chat streaming timeout measures idle time between tokens and is
+            # too short here. The caller still enforces the total document deadline.
+            read=settings.DOCUMENT_AI_TIMEOUT_SECONDS,
             write=30,
             pool=settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
         )
@@ -671,6 +819,20 @@ maadhiri Thanglish-la explain panren."""
                     "top_p": 0.95,
                 }
             )
+            if (
+                settings.NVIDIA_CHAT_MODEL == "nvidia/nemotron-3-super-120b-a12b"
+                and "nvidia_max_tokens" not in body
+                and settings.NVIDIA_CHAT_REASONING_BUDGET > 0
+            ):
+                # Atomic document operations retain their separate budget and strict format.
+                # NIM can close reasoning up to 500 tokens after its requested budget.
+                budget = settings.NVIDIA_CHAT_REASONING_BUDGET
+                request_body["chat_template_kwargs"] = {
+                    "enable_thinking": True,
+                    "low_effort": True,
+                    "reasoning_budget": budget,
+                }
+                request_body["max_tokens"] += budget + 500
         return request_body
 
     async def _stream_nvidia(self, body: dict) -> AsyncGenerator[str, None]:
@@ -729,10 +891,7 @@ maadhiri Thanglish-la explain panren."""
                         if content:
                             yield content
                         if choice.get("finish_reason") == "length":
-                            raise ChatModelUnavailableError(
-                                "The response reached its output limit before it finished. "
-                                "Please retry with a shorter request."
-                            )
+                            raise _OutputLimitReached()
                         if choice.get("finish_reason") == "stop":
                             finished = True
                     if not finished:
@@ -775,10 +934,7 @@ maadhiri Thanglish-la explain panren."""
                         if content:
                             yield content
                         if event.get("done_reason") == "length":
-                            raise ChatModelUnavailableError(
-                                "The response reached its output limit before it finished. "
-                                "Please retry with a shorter request."
-                            )
+                            raise _OutputLimitReached()
                         if event.get("done"):
                             finished = True
                             break
@@ -931,6 +1087,9 @@ maadhiri Thanglish-la explain panren."""
             "Do not mix in another language, apart from unavoidable names or technical terms. "
             "The language of older messages must not affect this choice. Never imitate the "
             "language of an older assistant response. "
+            "For substantive questions, give a detailed explanation with useful context, "
+            "examples, and relevant caveats now, even if the user wrote a short question. "
+            "Respect explicit brevity and exact output formats; keep simple exchanges brief. "
             "Respond to what changed in this turn, including a correction or declined suggestion. "
             "If someone is distressed, acknowledge their specific concern before advice. "
             "If danger remains unresolved, pair a focused safety question with one practical "

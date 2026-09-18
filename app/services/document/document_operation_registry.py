@@ -48,6 +48,8 @@ class DocumentOperation(str, Enum):
     MODIFY_PDF_PAGES = "modify_pdf_pages"
     MERGE_PDF = "merge_pdf"
     FILTER_AND_SORT_WORKBOOK = "filter_and_sort_workbook"
+    EXTRACT_MATCHING_ROWS = "extract_matching_rows"
+    APPEND_WORKBOOK_ROWS = "append_workbook_rows"
 
 
 @dataclass(frozen=True)
@@ -237,6 +239,26 @@ class DocumentOperationRegistry:
                     spreadsheet,
                     required_parameters=frozenset({"edits"}),
                     expected_fidelity=Fidelity.FULL,
+                ),
+                DocumentOperationDefinition(
+                    DocumentOperation.EXTRACT_MATCHING_ROWS,
+                    ("extract matching rows", "select rows by ids"),
+                    True,
+                    spreadsheet,
+                    spreadsheet,
+                    required_parameters=frozenset({"ids"}),
+                    optional_parameters=frozenset({"column", "sheet_name"}),
+                    expected_fidelity=Fidelity.HIGH,
+                ),
+                DocumentOperationDefinition(
+                    DocumentOperation.APPEND_WORKBOOK_ROWS,
+                    ("append workbook rows", "add new rows", "add new data"),
+                    True,
+                    spreadsheet,
+                    spreadsheet,
+                    required_parameters=frozenset({"data"}),
+                    optional_parameters=frozenset({"sheet_name"}),
+                    expected_fidelity=Fidelity.HIGH,
                 ),
             )
         }

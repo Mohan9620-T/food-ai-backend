@@ -1318,10 +1318,12 @@ class ChatDocumentService:
                 "itself is too garbled to tell what is being asked. "
             )
         prompt = (
-            "Create document-ready content. Be thorough and detailed, not a short summary: "
-            "cover the topic completely with concrete specifics, examples, and sub-points under "
-            "each section rather than one line per idea. Prefer several well-developed sections "
-            "over a handful of sparse paragraphs when the topic supports it. "
+            "Create document-ready content. Give real depth on each point you include — concrete "
+            "specifics, examples, and sub-points instead of a one-line summary — but stay within "
+            "a length that finishes cleanly: pick the handful of sections that matter most for "
+            "this request rather than trying to cover every possible subtopic of a broad theme. "
+            "A complete, well-developed document beats a longer one that gets cut off before the "
+            "JSON object closes. "
             "Return ONLY one JSON object matching this exact schema: "
             '{"title":"string","assumptions":["string"],"paragraphs":["string"],'
             '"bullet_lists":[["string"]],"tables":[{"title":"string",'
@@ -1479,9 +1481,10 @@ class ChatDocumentService:
                 "Your uploaded files are still saved."
             ) from error
         except ChatModelUnavailableError as error:
+            # Forward the underlying reason (e.g. an output-limit or provider error) instead
+            # of a generic message, so the user knows what actually went wrong and how to fix it.
             raise ChatModelUnavailableError(
-                "Document AI generation could not finish. Please retry building the file shortly. "
-                "Your uploaded files are still saved."
+                f"{error} Your uploaded files are still saved."
             ) from error
         if not content.strip():
             raise ChatModelUnavailableError(

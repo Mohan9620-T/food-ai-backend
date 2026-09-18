@@ -28,8 +28,10 @@ from app.schemas.chat_session import (
 from app.services.chat_service import ChatModelUnavailableError, ChatService
 from app.services.chat_vision_service import ChatVisionService
 from app.services.document.document_references import matches_document_topic, references_document
+from app.services.document.exceptions import InvalidDocumentError
 from app.services.image_parser_service import VisionModelUnavailableError
 from app.services.image_validation import InvalidImageError, validate_image_content
+from app.services.spreadsheet.workbook_lookup_service import prepare_workbook_lookup
 from app.utils.auth_dependency import get_current_user
 
 router = APIRouter(prefix="/chat", tags=["AI Chat"])
@@ -360,12 +362,18 @@ def chat(
     history = _get_persisted_history(db, session.id)
 
     try:
-        document_references = _document_reference_history(db, session.id, request.message)
-        answer = service.chat(
-            request.message,
-            history,
-            [*request.reference_history, *document_references],
-        )
+        lookup = prepare_workbook_lookup(db, session.id, request.message)
+        if lookup is not None:
+            answer = lookup.answer()
+        else:
+            document_references = _document_reference_history(db, session.id, request.message)
+            answer = service.chat(
+                request.message,
+                history,
+                [*request.reference_history, *document_references],
+            )
+    except InvalidDocumentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     except ChatModelUnavailableError as error:
         logger.warning(
             "chat.text_model_unavailable",
@@ -505,6 +513,10 @@ async def stream_chat(
     session = _get_or_create_chat_session(db, user_id, session_id, payload.message)
 
     history = _get_persisted_history(db, session.id)
+    try:
+        lookup = prepare_workbook_lookup(db, session.id, payload.message)
+    except InvalidDocumentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     document_references = _document_reference_history(db, session.id, payload.message)
     image_turns = repository.get_image_turns(db, session.id)
     referenced_image = _select_referenced_image(payload.message, image_turns)
@@ -547,7 +559,11 @@ async def stream_chat(
 
     async def produce_response():
         chunks: list[str] = []
-        if referenced_image is not None:
+        if lookup is not None:
+            answer = await asyncio.to_thread(lookup.answer)
+            chunks.append(answer)
+            await events.put({"type": "token", "content": answer})
+        elif referenced_image is not None:
             try:
                 answer = await asyncio.to_thread(
                     vision_service.describe,

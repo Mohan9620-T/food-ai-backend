@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -44,6 +45,7 @@ from app.services.document.document_automation_service import (
     DocumentAutomationPlanningError,
     DocumentAutomationService,
 )
+from app.services.document.document_generation_service import DocumentGenerationService
 from app.services.document.document_intent_service import DocumentIntentError, DocumentIntentService
 from app.services.document.document_modification_service import (
     DocumentModificationService,
@@ -71,7 +73,10 @@ from app.services.document.extraction_models import (
 )
 from app.services.image_validation import InvalidImageError, validate_image_content
 from app.services.profile_service import ProfileService
+from app.services.spreadsheet.row_append import AppendRowsRequest, WorkbookRowAppender
+from app.services.spreadsheet.row_selection import RowSelection, SelectedRows, WorkbookRowSelector
 from app.services.spreadsheet.spreadsheet_preview_service import SpreadsheetPreviewService
+from app.services.spreadsheet.workbook_lookup_service import prepare_workbook_lookup
 from app.utils.auth_dependency import get_current_user
 
 router = APIRouter(prefix="/chat/documents", tags=["AI Chat Documents"])
@@ -161,6 +166,61 @@ def _completion_message(filenames: list[str], text_result: str | None) -> str:
     return f"Done — I created {joined}. All files are attached below."
 
 
+async def _save_selected_rows(
+    db: Session,
+    source: ChatDocumentAttachment,
+    instruction: str,
+    selected: SelectedRows,
+    selection: RowSelection,
+    bot_record: ChatMessageRecord | None = None,
+) -> ChatDocumentResponse:
+    filename = DocumentGenerationService.safe_filename(
+        f"{Path(str(source.filename)).stem}-selected-rows.xlsx", DocumentType.XLSX
+    )
+    response_text = (
+        selected.markdown() + "\n\nDownload the Excel file below for all matching rows and columns."
+    )
+    session_id = int(source.session_id)
+    extracted = await asyncio.to_thread(service.extract_document, selected.file_data, filename)
+    try:
+        if bot_record is None:
+            _, bot_record = repository.add_turn(
+                db, session_id, instruction, response_text, commit=False
+            )
+        else:
+            setattr(bot_record, "content", response_text)
+        attachment = repository.add_document_attachment(
+            db,
+            session_id=session_id,
+            message_id=int(bot_record.id),
+            filename=filename,
+            content_type=DOCUMENT_TYPES[".xlsx"],
+            file_data=selected.file_data,
+            kind="generated",
+            extracted=extracted,
+            structured_summary=selected.summary,
+            generation_metadata={
+                "instruction": instruction,
+                "source_document_ids": [int(source.id)],
+                "operation": "extract_matching_rows",
+                "parameters": selection.model_dump(exclude_none=True),
+            },
+        )
+        db.commit()
+        db.refresh(attachment)
+    except Exception:
+        db.rollback()
+        raise
+    return ChatDocumentResponse(
+        response=response_text,
+        session_id=session_id,
+        attachment=attachment,
+        analysis_status="complete",
+        fidelity=Fidelity.HIGH.value,
+        fidelity_note="Selected row values and column order preserved in a new workbook.",
+    )
+
+
 @router.post(
     "",
     response_model=ChatDocumentResponse,
@@ -243,6 +303,19 @@ async def upload_document(
             extracted = await asyncio.to_thread(service.extract_document, file_data, filename)
             response_fidelity = pipeline_service.validator.fidelity_for_extraction(extracted)
         raw_text = extracted.text
+        append_requested = (
+            analyze and extension == ".xlsx" and AppendRowsRequest.is_request(message or "")
+        )
+        selection = (
+            RowSelection.from_instruction(message or "", workbook_context=True)
+            if analyze and extension == ".xlsx" and not append_requested
+            else None
+        )
+        selected_rows = (
+            await asyncio.to_thread(WorkbookRowSelector().select, file_data, selection)
+            if selection is not None
+            else None
+        )
         row_count_response = (
             service.spreadsheet_row_count_response(extracted, filename)
             if analyze and service.is_spreadsheet_row_count_request(message)
@@ -251,7 +324,11 @@ async def upload_document(
         # A save-only upload must never interpret an instruction as an edit.
         # The composer sends file actions to /automate after the source is saved.
         table_to_excel_requested = analyze and intent_service.is_table_to_excel_request(message)
-        operation = service.spreadsheet_operation(message) if analyze else None
+        operation = (
+            service.spreadsheet_operation(message)
+            if analyze and selection is None and not append_requested
+            else None
+        )
         if (
             operation == SpreadsheetOperation.EXPAND_DISH_BY_DIETARY_CATEGORY
             and extension != ".xlsx"
@@ -270,8 +347,32 @@ async def upload_document(
         )
         modification_output: ModifiedDocument | None = None
         clarification: str | None = None
+        if append_requested:
+            append_request = AppendRowsRequest.from_instruction(message or "")
+            if append_request is None:
+                clarification = DocumentAutomationService.APPEND_NEEDS_DATA
+            else:
+                try:
+                    updated, appended = await asyncio.to_thread(
+                        WorkbookRowAppender().append, file_data, append_request
+                    )
+                    modification_output = ModifiedDocument(
+                        file_data=updated,
+                        filename=DocumentGenerationService.safe_filename(
+                            f"{Path(filename).stem}-updated", DocumentType.XLSX
+                        ),
+                        content_type=DOCUMENT_TYPES[".xlsx"],
+                        document_type=DocumentType.XLSX,
+                        fidelity=Fidelity.HIGH,
+                        summary=appended.summary,
+                        fidelity_note="New rows added; existing records and formulas preserved.",
+                    )
+                except InvalidDocumentError as error:
+                    clarification = str(error)
         if (
             analyze
+            and not append_requested
+            and selection is None
             and spreadsheet_output is None
             and table_to_excel_output is None
             and intent_service.is_modification_request(message, filename)
@@ -287,12 +388,17 @@ async def upload_document(
                     DocumentEdit.model_validate(item)
                     for item in cast(list[object], step.parameters.get("edits", []))
                 )
-                modification_output = await asyncio.to_thread(
-                    modification_service.modify, file_data, filename, edits
-                )
+                if not edits:
+                    clarification = (
+                        "Describe the cells or content to change and provide the new values."
+                    )
+                else:
+                    modification_output = await asyncio.to_thread(
+                        modification_service.modify, file_data, filename, edits
+                    )
     except DocumentIntentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    except InvalidDocumentError as error:
+    except (InvalidDocumentError, ValidationError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except DocumentProcessingUnavailableError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
@@ -317,6 +423,10 @@ async def upload_document(
         raw_text=raw_text,
         extracted=extracted if not (image_upload and not analyze) else None,
     )
+    if selected_rows is not None and selection is not None:
+        return await _save_selected_rows(
+            db, attachment, user_text, selected_rows, selection, bot_record
+        )
     response_text = saved_notice
     analysis_status: Literal["complete", "unavailable", "skipped"] = "skipped"
     response_attachment = attachment
@@ -493,7 +603,13 @@ async def upload_document(
             analysis_status = "complete"
         except ChatModelUnavailableError:
             analysis_status = "unavailable"
-            preview = "\n".join(f"    {line}" for line in raw_text[:6000].splitlines())
+            preview_text = raw_text[:6000]
+            # A plain 4-space indent is not a fenced code block to every renderer;
+            # use a real fence (widened if the extracted text itself contains one) so
+            # the columns render in a monospace block instead of misaligning in prose.
+            fence = "`" * 3
+            while fence in preview_text:
+                fence += "`"
             preview_label = (
                 f"Extracted text preview (first 6,000 of {len(raw_text):,} characters):"
                 if len(raw_text) > 6000
@@ -503,7 +619,7 @@ async def upload_document(
                 f"{saved_notice}\n\nAI analysis is currently unavailable. "
                 "The text below was extracted from your file; it is not an AI answer or summary. "
                 "You do not need to upload the file again.\n\n"
-                f"{preview_label}\n\n{preview}"
+                f"{preview_label}\n\n{fence}\n{preview_text}\n{fence}"
             )
             logger.warning(
                 "chat.document_analysis_unavailable",
@@ -550,6 +666,15 @@ async def update_session_spreadsheet(
     session = repository.get_session(db, payload.session_id, user_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
+    try:
+        lookup = prepare_workbook_lookup(db, payload.session_id, payload.instruction)
+        if lookup is not None:
+            selected = await asyncio.to_thread(lookup.select)
+            return await _save_selected_rows(
+                db, lookup.source, payload.instruction, selected, lookup.selection
+            )
+    except InvalidDocumentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     operation = service.spreadsheet_operation(payload.instruction)
     row_count_requested = service.is_spreadsheet_row_count_request(payload.instruction)
     if (
@@ -1058,9 +1183,13 @@ async def automate_document(
 
         request_instruction = payload.instruction
         source_document_id = payload.source_document_id
-        if source_document_id is None and (
-            references_image(request_instruction)
-            or references_document(request_instruction, creation=True)
+        if (
+            payload.source_mode == "auto"
+            and source_document_id is None
+            and (
+                references_image(request_instruction)
+                or references_document(request_instruction, creation=True)
+            )
         ):
             repository.ensure_image_document_sources(db, payload.session_id)
         documents = repository.get_documents_for_user(db, payload.session_id, user_id)
@@ -1105,6 +1234,7 @@ async def automate_document(
                     available_documents,
                     explicit_source=source_document_id is not None,
                     conversation_history=history,
+                    source_mode=payload.source_mode,
                 ),
                 timeout=settings.DOCUMENT_AI_TIMEOUT_SECONDS,
             )
@@ -1139,14 +1269,44 @@ async def automate_document(
                 status="clarification_required",
                 clarification=ClarificationQuestionOut(
                     question=question, options=list(plan.clarification_options)
-                )
-                if plan.clarification_options
-                else None,
+                ),
             )
             return _save_automation_response(db, payload, response_payload)
 
+        append_review = None
+        for step in plan.steps:
+            if step.intent.operation != DocumentOperation.APPEND_WORKBOOK_ROWS:
+                continue
+            source = next(
+                (doc for doc in reversed(documents) if str(doc.filename) in step.source_filenames),
+                selected_source,
+            )
+            if source is None:
+                continue
+            try:
+                resolved_append = await asyncio.to_thread(
+                    WorkbookRowAppender().resolve,
+                    cast(bytes, source.file_data),
+                    AppendRowsRequest.model_validate(step.intent.parameters),
+                )
+                append_review = (
+                    f"Review before building: add {len(resolved_append.rows)} new rows to "
+                    f"'{resolved_append.sheet_name}' in {source.filename}, producing an updated XLSX. "
+                    "Existing records and formulas will be preserved. No file has been built yet."
+                )
+            except InvalidDocumentError as error:
+                return _save_automation_response(
+                    db,
+                    payload,
+                    ChatDocumentAutomationResponse(
+                        response=str(error),
+                        session_id=payload.session_id,
+                        status="clarification_required",
+                    ),
+                )
+
         if payload.confirm is not True and any(step.produces_document for step in plan.steps):
-            summary = automation_service.summarize_plan(plan)
+            summary = append_review or automation_service.summarize_plan(plan)
             # Repeated previews reuse the persisted review, including its choices.
             if (
                 len(history) >= 2
@@ -1192,6 +1352,7 @@ async def automate_document(
         fidelity_results: list[tuple[str, str, str | None]] = []
         failure_reason = None
         failed_position = None
+        completion_details: list[str] = []
 
         def persist_extraction(source: PipelineDocument, extracted: ExtractedDocument) -> None:
             if source.document_id is not None:
@@ -1337,6 +1498,12 @@ async def automate_document(
                     )
                 )
 
+                if step.intent.operation in {
+                    DocumentOperation.EXTRACT_MATCHING_ROWS,
+                    DocumentOperation.APPEND_WORKBOOK_ROWS,
+                }:
+                    completion_details.append(result.summary)
+
                 response_steps.append(
                     ChatDocumentAutomationStepOut(
                         position=step.position,
@@ -1426,6 +1593,8 @@ async def automate_document(
 
         filenames = [str(attachment.filename) for attachment in completed_attachments]
         response = _completion_message(filenames, context_texts[-1] if context_texts else None)
+        if completion_details:
+            response += " " + " ".join(completion_details)
         response += _fidelity_message(fidelity_results)
         if completed_records:
             setattr(completed_records[-1], "is_internal", False)

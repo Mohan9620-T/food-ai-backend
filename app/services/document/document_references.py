@@ -9,6 +9,18 @@ def references_image(message: str) -> bool:
     return bool(re.search(r"\b(?:image|photo|picture|screenshot)\b", instruction))
 
 
+def requests_new_document(message: str, filenames: Iterable[str] = ()) -> bool:
+    """A fresh creation request must not inherit an earlier wizard's source/answers."""
+    return bool(
+        re.search(
+            r"\b(?:create|generate|make|build|prepare|draft|write)\s+(?:(?:a|an|the|brand)\s+)*new\b"
+            r"|\bfrom\s+scratch\b",
+            message,
+            re.I,
+        )
+    ) and not references_document(message, filenames, creation=True)
+
+
 def matches_document_topic(message: str, text: str) -> bool:
     """Retain natural follow-ups such as 'What is the oats revenue?'."""
     stop_words = set(

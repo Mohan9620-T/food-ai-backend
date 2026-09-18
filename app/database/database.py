@@ -9,7 +9,9 @@ from app.config.settings import DATABASE_URL
 connect_args = (
     {"connect_timeout": 5} if make_url(DATABASE_URL).get_backend_name() == "postgresql" else {}
 )
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+# Docker/PostgreSQL can restart while Uvicorn stays running. Validate pooled
+# connections before reuse so the next request does not receive a dead socket.
+engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

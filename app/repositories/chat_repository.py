@@ -1,9 +1,10 @@
+import re
 from datetime import datetime, timezone
 from typing import cast
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import QueryableAttribute, Session, load_only
 
 from app.models.chat import ChatDocumentAttachment, ChatMessageRecord, ChatSession
 from app.schemas.chat import (
@@ -11,6 +12,7 @@ from app.schemas.chat import (
     ChatDocumentAutomationResponse,
     ChatDocumentAutomationState,
 )
+from app.services.document.document_references import requests_new_document
 from app.services.document.extraction_models import ExtractedDocument
 
 
@@ -43,6 +45,14 @@ class ChatRepository:
             .first()
         )
         prior = cast(dict | None, previous.automation) if previous is not None else None
+        if (
+            prior
+            and not request.confirm
+            and request.source_mode != "description"
+            and request.instruction != prior.get("instruction")
+            and requests_new_document(request.instruction)
+        ):
+            prior = None
         if prior and prior.get("response", {}).get("status") not in {
             "clarification_required",
             "ready_for_review",
@@ -55,12 +65,20 @@ class ChatRepository:
             and prior["response"]["status"] == "clarification_required"
         ):
             choices.append(
-                {"question": prior["response"]["response"], "answer": request.instruction}
+                {
+                    "question": prior["response"]["response"],
+                    "answer": (
+                        "Create from written requirements without uploading."
+                        if request.source_mode == "description"
+                        else request.instruction
+                    ),
+                }
             )
         state = ChatDocumentAutomationState(
             instruction=request.instruction,
             request_instruction=prior["request_instruction"] if prior else request.instruction,
             source_document_id=request.source_document_id,
+            source_mode=request.source_mode,
             confirmed=request.confirm,
             choices=choices,
             response=response,
@@ -546,6 +564,40 @@ class ChatRepository:
             for row in reversed(rows)
             if str(row.raw_text or "").strip()
         ]
+
+    def get_row_selection_source(
+        self, db: Session, session_id: int, instruction: str
+    ) -> ChatDocumentAttachment | None:
+        """New lookups search the original upload, unless an output is requested."""
+        documents = (
+            db.query(ChatDocumentAttachment)
+            .options(
+                load_only(
+                    cast(QueryableAttribute, ChatDocumentAttachment.id),
+                    cast(QueryableAttribute, ChatDocumentAttachment.filename),
+                    cast(QueryableAttribute, ChatDocumentAttachment.kind),
+                )
+            )
+            .filter(
+                ChatDocumentAttachment.session_id == session_id,
+                ChatDocumentAttachment.filename.ilike("%.xlsx"),
+            )
+            .order_by(ChatDocumentAttachment.created_at.desc(), ChatDocumentAttachment.id.desc())
+            .all()
+        )
+        named = [doc for doc in documents if str(doc.filename).casefold() in instruction.casefold()]
+        if named:
+            return named[0]
+        if re.search(
+            r"\b(?:from|in|using|of)\s+(?:(?:the|this|that)\s+)?(?:generated|filtered|result|output)\s+(?:excel|file|workbook|spreadsheet)\b",
+            instruction,
+            re.I,
+        ):
+            return next((doc for doc in documents if doc.kind == "generated"), None)
+        return next(
+            (doc for doc in documents if doc.kind == "uploaded"),
+            documents[0] if documents else None,
+        )
 
     def get_spreadsheet_operation_source(
         self, db: Session, session_id: int

@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.utils.document_clarification import spreadsheet_layout_question
+
 
 class ChatHistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
@@ -119,6 +121,7 @@ class ChatDocumentAutomationRequest(BaseModel):
     session_id: int = Field(gt=0)
     instruction: str = Field(min_length=1, max_length=4000)
     source_document_id: int | None = Field(default=None, gt=0)
+    source_mode: Literal["auto", "description"] = "auto"
     confirm: bool = False
 
     @model_validator(mode="after")
@@ -126,6 +129,8 @@ class ChatDocumentAutomationRequest(BaseModel):
         self.instruction = self.instruction.strip()
         if not self.instruction:
             raise ValueError("Describe the document result you want.")
+        if self.source_mode == "description" and self.source_document_id is not None:
+            raise ValueError("Choose written requirements or a source document, not both.")
         return self
 
 
@@ -166,6 +171,13 @@ class ChatDocumentAutomationResponse(BaseModel):
     latest_document_id: int | None = None
     steps: list[ChatDocumentAutomationStepOut] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def include_clarification_question(self):
+        # Open questions and older saved turns must expose the same composer contract.
+        if self.status == "clarification_required" and self.clarification is None:
+            self.clarification = ClarificationQuestionOut(question=self.response)
+        return self
+
 
 class DocumentHistoryChoice(BaseModel):
     question: str
@@ -176,6 +188,36 @@ class ChatDocumentAutomationState(BaseModel):
     instruction: str
     request_instruction: str
     source_document_id: int | None = None
+    source_mode: Literal["auto", "description"] = "auto"
     confirmed: bool = False
     choices: list[DocumentHistoryChoice] = Field(default_factory=list)
     response: ChatDocumentAutomationResponse
+
+    @model_validator(mode="after")
+    def restore_layout_choices(self):
+        clarification = self.response.clarification
+        context = " ".join(
+            [
+                self.request_instruction,
+                self.response.response,
+                *(choice.question for choice in self.choices),
+            ]
+        ).casefold()
+        if (
+            self.response.status == "clarification_required"
+            and clarification is not None
+            and not clarification.options
+            and any(word in context for word in ("excel", "xlsx", "spreadsheet"))
+        ):
+            layout = spreadsheet_layout_question(self.request_instruction)
+            if layout is not None:
+                self.response.clarification = ClarificationQuestionOut(
+                    question=layout.question,
+                    options=[
+                        ClarificationOption(
+                            id=option.id, label=option.label, description=option.description
+                        )
+                        for option in layout.options
+                    ],
+                )
+        return self

@@ -20,6 +20,9 @@ from app.services.document.document_pipeline_service import (
     StructuredPipelineStep,
 )
 from app.services.document.document_references import references_document, references_image
+from app.services.spreadsheet.row_append import AppendRowsRequest
+from app.services.spreadsheet.row_selection import RowSelection
+from app.utils.document_clarification import spreadsheet_layout_question
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,13 @@ class DocumentAutomationService:
         r"spreadsheet|workbook|table|content)\b",
         re.IGNORECASE,
     )
+    _LAYOUT_REFERENCE = re.compile(r"\b(?:pattern|layout|style|design|reference|example)\b", re.I)
+    APPEND_NEEDS_DATA = (
+        "Paste the new rows to add, copied from Excel, or use a table/JSON with column headers."
+    )
+    _SOURCE_DATA_REQUEST = re.compile(
+        r"\b(?:extract|transcribe|ocr|count|read|copy|reproduce|exactly|identical)\b", re.I
+    )
 
     def __init__(
         self,
@@ -124,7 +134,42 @@ class DocumentAutomationService:
         *,
         explicit_source: bool = False,
         conversation_history: list[ChatHistoryMessage] | None = None,
+        source_mode: Literal["auto", "description"] = "auto",
     ) -> DocumentAutomationPlan:
+        append_instruction = instruction
+        history = conversation_history or []
+        if (
+            history
+            and history[-1].role == "assistant"
+            and (
+                history[-1].content == self.APPEND_NEEDS_DATA
+                or history[-1].content.startswith("Review before building: add ")
+            )
+        ):
+            previous = next(
+                (
+                    item.content
+                    for item in reversed(history[:-1])
+                    if item.role == "user" and AppendRowsRequest.is_request(item.content)
+                ),
+                None,
+            )
+            if previous and not AppendRowsRequest.is_request(instruction):
+                append_instruction = previous.splitlines()[0] + "\n" + instruction
+        if AppendRowsRequest.is_request(append_instruction) and (
+            any(doc.document_type == DocumentType.XLSX for doc in documents)
+            or re.search(
+                r"\b(?:excel|xlsx|workbook|spreadsheet|worksheet|sheet)\b", append_instruction, re.I
+            )
+        ):
+            return self._plan_row_append(
+                append_instruction,
+                () if source_mode == "description" else documents,
+                explicit_source=explicit_source,
+            )
+        layout_question = self._clarify_spreadsheet_layout(instruction, history)
+        if layout_question is not None:
+            return layout_question
         source_instruction = instruction
         if len(instruction.split()) <= 8 and not references_document(instruction):
             source_instruction = (
@@ -142,9 +187,57 @@ class DocumentAutomationService:
                 if not self.pipeline_service.intent_service.is_creation_request(instruction)
                 else instruction
             )
+        try:
+            selection = RowSelection.from_instruction(
+                instruction,
+                workbook_context=any(doc.document_type == DocumentType.XLSX for doc in documents),
+            )
+            if selection is not None:
+                source_instruction = instruction
+            else:
+                selection = RowSelection.from_instruction(source_instruction)
+        except ValidationError as error:
+            raise DocumentAutomationPlanningError(
+                "Specify at most 200 nonempty IDs, each at most 128 characters."
+            ) from error
+        if selection is not None:
+            return self._plan_row_selection(
+                source_instruction,
+                () if source_mode == "description" else documents,
+                selection,
+                explicit_source=explicit_source,
+            )
+        creation = self.pipeline_service.intent_service.is_creation_request(source_instruction)
+        # A missing layout example is optional for a new, described document.
+        # Actual image transcription/extraction still requires the source, regardless of length.
+        optional_layout = (
+            creation
+            and not explicit_source
+            and references_image(source_instruction)
+            and self._LAYOUT_REFERENCE.search(source_instruction) is not None
+            and self._SOURCE_DATA_REQUEST.search(source_instruction) is None
+            and not any(document.document_type == DocumentType.IMAGE for document in documents)
+            and self._has_written_requirements(source_instruction)
+        )
+        selected_layout = not explicit_source and any(
+            instruction.strip() == option.label
+            for message in history
+            if message.role == "user"
+            if (layout := spreadsheet_layout_question(message.content)) is not None
+            for option in layout.options
+        )
+        description_only = source_mode == "description" or optional_layout or selected_layout
+        if description_only:
+            documents = ()
+            explicit_source = False
+            instruction += (
+                "\nCreate from the written requirements only, without using uploaded files or images. "
+                "Use a standard layout because no reference is being used. Do not invent source "
+                "records or claim to have read an attachment. Leave unavailable business data blank."
+            )
         if (
             not explicit_source
-            and self.pipeline_service.intent_service.is_creation_request(source_instruction)
+            and creation
             and not references_document(
                 source_instruction, (document.filename for document in documents), creation=True
             )
@@ -152,8 +245,14 @@ class DocumentAutomationService:
             # The requested output format does not select an old attachment.
             # A new subject can be written from general knowledge in this chat.
             documents = ()
+        source_free_creation = description_only or (
+            creation
+            and not documents
+            and not references_document(source_instruction, creation=True)
+        )
         if (
-            references_image(instruction)
+            not description_only
+            and references_image(instruction)
             and references_document(instruction, creation=True)
             and not any(document.document_type == DocumentType.IMAGE for document in documents)
         ):
@@ -163,6 +262,9 @@ class DocumentAutomationService:
             documents,
             explicit_source=explicit_source,
             conversation_history=conversation_history or [],
+            allow_without_source=description_only
+            and self._has_written_requirements(source_instruction),
+            ignore_image_type=description_only,
         )
         if direct_plan is not None:
             return direct_plan
@@ -184,11 +286,35 @@ class DocumentAutomationService:
             return direct_question
 
         prompt = self._planning_prompt(instruction, documents, conversation_history or [])
+        if source_free_creation:
+            prompt += (
+                "\nThis is creation from written requirements. No upload is required or selected. "
+                "Do not ask for an image, file, existing document or source data. Ask only about "
+                "missing content, scope or output format; otherwise plan create_document with "
+                "input_file null. Ignore obsolete requests to upload in earlier assistant turns."
+            )
         response = self.chat_service.chat(
             prompt, history=conversation_history or [], reference_history=[]
         )
         envelope = self._parse_envelope(response)
         if envelope.status == "clarification_required":
+            if source_free_creation and re.search(
+                r"\b(?:upload|attach|provide|share)\b.*\b(?:image|file|document|source)\b",
+                envelope.clarifying_question or "",
+                re.I,
+            ):
+                # A model must not turn creation into a mandatory upload flow.
+                fallback = self._plan_unambiguous_creation(
+                    instruction,
+                    (),
+                    explicit_source=False,
+                    conversation_history=conversation_history or [],
+                    allow_without_source=self._has_written_requirements(source_instruction),
+                    ignore_image_type=description_only,
+                )
+                return fallback or self._clarification(
+                    "What should the new document contain, and which file format would you like?"
+                )
             return DocumentAutomationPlan(
                 status="clarification_required",
                 clarifying_question=str(envelope.clarifying_question).strip(),
@@ -260,6 +386,138 @@ class DocumentAutomationService:
         )
         return DocumentAutomationPlan(status="ready", clarifying_question=None, steps=steps)
 
+    def _clarify_spreadsheet_layout(
+        self, instruction: str, history: list[ChatHistoryMessage]
+    ) -> DocumentAutomationPlan | None:
+        """Offer explicit interpretations of ambiguous Header/Column answers."""
+        context = "\n".join(item.content for item in history[-8:])
+        if not re.search(r"\b(?:excel|xlsx|spreadsheet)\b", context, re.I):
+            return None
+        source = instruction
+        acknowledgement = instruction.strip().casefold().rstrip(".!?") in {
+            "yes",
+            "ok",
+            "okay",
+            "sure",
+            "yeah",
+        }
+        if acknowledgement:
+            if (
+                not history
+                or history[-1].role != "assistant"
+                or "?" not in history[-1].content
+                or not re.search(r"\b(?:headers?|columns?|layout)\b", history[-1].content, re.I)
+            ):
+                return None
+            source = next(
+                (
+                    item.content
+                    for item in reversed(history)
+                    if item.role == "user" and re.search(r"(?im)^header\s*[-:]", item.content)
+                ),
+                "",
+            )
+        layout = spreadsheet_layout_question(source)
+        if layout is None:
+            return None
+        prefix = f'"{instruction.strip()}" does not select a layout. ' if acknowledgement else ""
+        return self._clarification(
+            prefix + layout.question,
+            options=tuple(
+                ClarificationOption(
+                    id=option.id, label=option.label, description=option.description
+                )
+                for option in layout.options
+            ),
+        )
+
+    def _plan_row_append(
+        self, instruction: str, documents: tuple[AvailableDocument, ...], *, explicit_source: bool
+    ) -> DocumentAutomationPlan:
+        spreadsheets = tuple(doc for doc in documents if doc.document_type == DocumentType.XLSX)
+        if not spreadsheets:
+            return self._clarification("Upload the Excel workbook you want to add rows to.")
+        request = AppendRowsRequest.from_instruction(instruction)
+        if request is None:
+            return self._clarification(self.APPEND_NEEDS_DATA)
+        source = next((doc for doc in spreadsheets if doc.is_latest), spreadsheets[-1])
+        named = next(
+            (doc for doc in spreadsheets if doc.filename.casefold() in instruction.casefold()), None
+        )
+        if named is not None and not explicit_source:
+            source = named
+        steps = self.pipeline_service.plan_structured(
+            (
+                StructuredPipelineStep(
+                    document_type=DocumentType.XLSX,
+                    operation=DocumentOperation.APPEND_WORKBOOK_ROWS,
+                    input_file=source.filename,
+                    output_type=DocumentType.XLSX,
+                    parameters=request.model_dump(exclude_none=True),
+                ),
+            ),
+            input_filename=source.filename,
+            request_instruction=instruction,
+        )
+        return DocumentAutomationPlan(status="ready", clarifying_question=None, steps=steps)
+
+    def _plan_row_selection(
+        self,
+        instruction: str,
+        documents: tuple[AvailableDocument, ...],
+        selection: RowSelection,
+        *,
+        explicit_source: bool,
+    ) -> DocumentAutomationPlan:
+        if not explicit_source:
+            spreadsheets = tuple(doc for doc in documents if doc.document_type == DocumentType.XLSX)
+            named = tuple(
+                doc for doc in spreadsheets if doc.filename.casefold() in instruction.casefold()
+            )
+            if named:
+                documents = named
+            elif re.search(
+                r"\b(?:from|in|using|of)\s+(?:(?:the|this|that)\s+)?(?:generated|filtered|result|output)\s+(?:excel|file|workbook|spreadsheet)\b",
+                instruction,
+                re.I,
+            ):
+                documents = tuple(doc for doc in spreadsheets if doc.kind == "generated")[-1:]
+            else:
+                documents = (
+                    tuple(doc for doc in spreadsheets if doc.kind == "uploaded")[-1:]
+                    or spreadsheets[-1:]
+                )
+        if not documents:
+            return self._clarification(
+                "Please upload the Excel workbook containing the records to filter."
+            )
+        resolved = self._resolve_input_reference(
+            None,
+            instruction,
+            documents,
+            {document.filename.casefold(): document.filename for document in documents},
+            index=0,
+            explicit_source=explicit_source,
+            multi_input=False,
+        )
+        if isinstance(resolved, str) and resolved.startswith("clarify:"):
+            return self._clarification(resolved.removeprefix("clarify:"))
+        default = next((document for document in documents if document.is_latest), documents[-1])
+        steps = self.pipeline_service.plan_structured(
+            (
+                StructuredPipelineStep(
+                    document_type=DocumentType.XLSX,
+                    operation=DocumentOperation.EXTRACT_MATCHING_ROWS,
+                    input_file=resolved,
+                    output_type=DocumentType.XLSX,
+                    parameters=selection.model_dump(exclude_none=True),
+                ),
+            ),
+            input_filename=default.filename,
+            request_instruction=instruction,
+        )
+        return DocumentAutomationPlan(status="ready", clarifying_question=None, steps=steps)
+
     def _plan_unambiguous_question(
         self,
         instruction: str,
@@ -323,14 +581,20 @@ class DocumentAutomationService:
         *,
         explicit_source: bool,
         conversation_history: list[ChatHistoryMessage],
+        allow_without_source: bool = False,
+        ignore_image_type: bool = False,
     ) -> DocumentAutomationPlan | None:
         """Build a registry-validated plan for a simple, explicit create request.
 
         This keeps common requests deterministic while leaving edits, conversions,
         ambiguous targets, and multi-step workflows to the model planner.
         """
-        if not documents and not re.search(
-            r"\b\d{4}\s*(?:to|through|until|-|–)\s*\d{4}\b", instruction, re.IGNORECASE
+        if (
+            not documents
+            and not allow_without_source
+            and not re.search(
+                r"\b\d{4}\s*(?:to|through|until|-|–)\s*\d{4}\b", instruction, re.IGNORECASE
+            )
         ):
             # Let the semantic planner assess missing details. A creation request
             # with an explicit date range and target has enough scope to review.
@@ -342,7 +606,7 @@ class DocumentAutomationService:
             instruction
         )
         image_source = any(document.document_type == DocumentType.IMAGE for document in documents)
-        if image_source:
+        if image_source or ignore_image_type:
             output_types = [kind for kind in output_types if kind != DocumentType.IMAGE]
         selected = next(
             (document for document in documents if document.is_latest),
@@ -459,6 +723,16 @@ class DocumentAutomationService:
             request_instruction=instruction,
         )
         return DocumentAutomationPlan(status="ready", clarifying_question=None, steps=steps)
+
+    @staticmethod
+    def _has_written_requirements(instruction: str) -> bool:
+        return bool(
+            re.search(
+                r"\b(?:about|for|with|include|including|containing|columns?|sheets?|blank|empty)\b",
+                instruction,
+                re.I,
+            )
+        )
 
     def _plan_unambiguous_conversion(
         self,
@@ -652,6 +926,10 @@ class DocumentAutomationService:
         for step in plan.steps:
             source = ", ".join(step.source_filenames) or "the conversation content"
             operation = step.intent.operation.value.replace("_", " ")
+            if step.intent.operation == DocumentOperation.EXTRACT_MATCHING_ROWS:
+                ids = ", ".join(RowSelection.model_validate(step.intent.parameters).ids)
+                scope = step.intent.parameters.get("sheet_name") or "all worksheets"
+                operation = f"extract complete rows for IDs {ids} from {scope}"
             output = step.intent.output_type.value if step.intent.output_type else "text response"
             filename = step.intent.parameters.get("filename")
             target = f"{filename} ({output.upper()})" if filename else output.upper()
@@ -749,6 +1027,13 @@ class DocumentAutomationService:
             "or contain ONLY title and filename; NEVER put content, columns, rows, dietary choices, "
             "currency, assumptions or user answers in parameters. The original instruction and "
             "confirmed answers are already passed to content generation. "
+            "To select existing Excel records by ID, use extract_matching_rows with parameters "
+            "ids (a list of exact ID strings), optionally column (the exact header) and sheet_name. "
+            "It searches all sheets by default and copies complete matching rows without AI "
+            "rewriting. Never use create_document to retype or filter existing spreadsheet rows. "
+            "To append supplied records to an existing workbook, use append_workbook_rows with "
+            "data containing the user's exact pasted rows (TSV, CSV, table or JSON), optionally sheet_name. "
+            "Never regenerate the existing workbook to add records. "
             "A new topic is independent of earlier uploads unless the user refers to a source. "
             "With no available files, use create_document with input_file null to write from "
             "general knowledge and the latest requirements. A request to create a file must "
@@ -761,7 +1046,10 @@ class DocumentAutomationService:
             "single best one recommended: true. Otherwise omit clarification_options and ask a "
             "plain open-ended question. Return status clarification_required and steps [] while "
             "ANY essential detail remains unanswered. Use conversation history to resolve answers "
-            "and retain earlier choices. Do not repeat answered questions. A review summary is "
+            "and retain earlier choices. Do not repeat answered questions. A bare yes/ok does not supply missing headers or data; "
+            "explain the missing value and offer concrete interpretations or a headers-only "
+            "blank template choice when useful. Do not repeat the same open question verbatim. "
+            "Honor a chosen headers-only/blank-rows option without inventing sample records. A review summary is "
             "not a new user request. Repeating the same instruction after a review must produce "
             "the same steps unless the user changed the requirements. Never treat confirmation "
             "as an answer to missing details. Once all details are known return status ready. "

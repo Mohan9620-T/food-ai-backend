@@ -112,6 +112,43 @@ def test_question_answer_review_replay_and_confirm_generate_once(client, db_sess
     assert attachment["provenance"] == "general_knowledge"
 
 
+def test_new_request_does_not_inherit_an_unfinished_wizard(client, build_setup):
+    headers, sid, generate, model = build_setup
+    model.side_effect = [json.dumps(question()), json.dumps(ready())]
+    call(client, headers, sid)
+    instruction = "Create a new Excel with an inventory table"
+    assert call(client, headers, sid, instruction)["status"] == "ready_for_review"
+    saved = client.get(f"/chat/sessions/{sid}", headers=headers).json()["messages"][-1][
+        "automation"
+    ]
+    assert saved["request_instruction"] == instruction
+    assert saved["choices"] == []
+    generate.assert_not_awaited()
+
+
+def test_skip_upload_survives_history_reload_and_build(client, build_setup):
+    headers, sid, generate, model = build_setup
+    instruction = "Create a new Excel from this image with Item and Quantity columns"
+    assert call(client, headers, sid, instruction)["status"] == "clarification_required"
+    review = call(client, headers, sid, instruction, source_mode="description")
+    assert review["status"] == "ready_for_review"
+    generate.assert_not_awaited()
+    model.assert_not_called()
+    saved = client.get(f"/chat/sessions/{sid}", headers=headers).json()["messages"][-1][
+        "automation"
+    ]
+    assert saved["source_mode"] == "description"
+    assert saved["source_document_id"] is None
+    assert saved["choices"][-1]["answer"] == "Create from written requirements without uploading."
+    result = call(
+        client, headers, sid, saved["instruction"], source_mode=saved["source_mode"], confirm=True
+    )
+    assert result["status"] == "done"
+    assert result["attachments"][0]["source_document_ids"] == []
+    generate.assert_awaited_once()
+    assert generate.call_args.kwargs["documents"] == []
+
+
 def test_confirm_cannot_skip_remaining_questions_or_new_ambiguity(client, build_setup):
     headers, sid, generate, model = build_setup
     model.side_effect = [
@@ -135,8 +172,44 @@ def test_plain_question_stays_compatible(client, build_setup):
     model.return_value = json.dumps(question("What should I title this file?", False))
     result = call(client, headers, sid)
     assert result["response"] == "What should I title this file?"
-    assert result["clarification"] is None
+    assert result["clarification"] == {
+        "question": result["response"],
+        "options": [],
+        "allow_other": True,
+    }
     generate.assert_not_awaited()
+
+
+def test_history_endpoint_restores_choices_for_a_legacy_layout_question(
+    client, db_session, build_setup
+):
+    headers, sid, _, _ = build_setup
+    text = 'What text should appear under the column "Install"?'
+    record = ChatMessageRecord(
+        session_id=sid,
+        sender="bot",
+        content=text,
+        automation={
+            "instruction": "yes",
+            "request_instruction": "Header - Uninstall\nColumn - Install",
+            "choices": [{"question": "Which Excel columns?", "answer": "yes"}],
+            "response": {
+                "session_id": sid,
+                "status": "clarification_required",
+                "response": text,
+                "clarification": None,
+            },
+        },
+    )
+    db_session.add(record)
+    db_session.commit()
+    response = client.get(f"/chat/sessions/{sid}", headers=headers)
+    assert response.status_code == 200
+    saved = response.json()["messages"][-1]
+    assert saved["content"] == text
+    assert len(saved["automation"]["response"]["clarification"]["options"]) == 3
+    db_session.refresh(record)
+    assert record.automation["response"]["clarification"] is None
 
 
 def test_default_gate_and_explicit_source_use_existing_pipeline(client, build_setup):

@@ -69,7 +69,7 @@ use the documented default or disable the associated integration when empty.
 
 | Variable | Requirement | Purpose / default |
 | --- | --- | --- |
-| `DB_HOST` | Required | PostgreSQL hostname; use `localhost` for local Uvicorn and `postgres` inside Compose. |
+| `DB_HOST` | Required | PostgreSQL hostname; use `127.0.0.1` for local Uvicorn and `postgres` inside Compose. The local Compose port is bound to IPv4 only. |
 | `DB_PORT` | Required | PostgreSQL port; normally `5432`. |
 | `DB_NAME` | Required | PostgreSQL database name. |
 | `DB_USER` | Required | PostgreSQL user name. |
@@ -90,7 +90,7 @@ use the documented default or disable the associated integration when empty.
 | `OLLAMA_TIMEOUT_SECONDS` | Optional | Text-model request timeout; default `300`. |
 | `OLLAMA_KEEP_ALIVE` | Optional | How long Ollama keeps a loaded model resident; default `1h`. |
 | `OLLAMA_CHAT_THINK` | Optional | Enables Qwen reasoning mode; default `false` for faster chat. |
-| `OLLAMA_CHAT_MAX_TOKENS` | Optional | Maximum generated text-chat tokens; default `768`. |
+| `OLLAMA_CHAT_MAX_TOKENS` | Optional | Output tokens per local text-chat request; default `2048` so the fallback can give substantive explanations. |
 | `OLLAMA_VISION_MODEL` | Optional | Meal-image vision model; default `qwen3-vl:4b`. |
 | `OLLAMA_VISION_TIMEOUT_SECONDS` | Optional | Meal-image request timeout; default `660`. |
 | `OLLAMA_VISION_MAX_DIMENSION` | Optional | Longest image edge sent to Ollama; default `1024`. Stored originals are unchanged. |
@@ -103,7 +103,7 @@ use the documented default or disable the associated integration when empty.
 | `NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA text connection timeout; default `5`. |
 | `NVIDIA_CHAT_TIMEOUT_SECONDS` | Optional | NVIDIA text response-read timeout; default `30`. |
 | `DOCUMENT_AI_TIMEOUT_SECONDS` | Optional | Total deadline for each document AI operation, including provider fallback and all tokens; default `90`. Keep this greater than the NVIDIA timeout so the one Ollama fallback can run. Does not affect ordinary chat or direct text export. |
-| `DOCUMENT_AI_MAX_TOKENS` | Optional | Output budget for document Q&A and planning; default `2048`. Ordinary chat keeps its own smaller budget. |
+| `DOCUMENT_AI_MAX_TOKENS` | Optional | Output budget for document Q&A and planning; default `2048`. Ordinary chat uses its independent provider budgets. |
 | `DOCUMENT_GENERATION_MAX_TOKENS` | Optional | Output budget for complete generated document structures; default `8192`, capped at `16384`. An invalid structure gets at most one correction attempt, with a separate document AI deadline. |
 | `DOCUMENT_PLAN_CONFIDENCE_THRESHOLD` | Optional | Minimum confidence accepted for semantic document plans before the assistant asks for clarification; default `0.65`. |
 | `DOCUMENT_PIPELINE_MAX_STEPS` | Optional | Maximum validated operations in one natural-language document pipeline; default `8`, range `1`–`20`. |
@@ -112,7 +112,9 @@ use the documented default or disable the associated integration when empty.
 | `DOCUMENT_OOXML_MAX_TOTAL_RATIO` | Optional | Maximum total decompressed-to-upload size ratio for OOXML archives; default `100`. |
 | `DOCUMENT_OOXML_MAX_ENTRY_RATIO` | Optional | Maximum decompressed-to-compressed size ratio for one OOXML entry; default `200`. |
 | `DOCUMENT_OOXML_MAX_ENTRIES` | Optional | Maximum number of entries in an OOXML archive; default `5000`. |
-| `NVIDIA_CHAT_MAX_TOKENS` | Optional | NVIDIA text output budget; default `1024`, independent of Ollama's limit. Nemotron 3 chat disables thinking to reserve this budget for the answer. |
+| `NVIDIA_CHAT_MAX_TOKENS` | Optional | NVIDIA text-chat answer allowance per request; default `4096`, independent of Ollama's limit. When reasoning is enabled, its budget and a 500-token closing allowance are added to this limit. |
+| `NVIDIA_CHAT_REASONING_BUDGET` | Optional | Brief reasoning for `nvidia/nemotron-3-super-120b-a12b` text chat; default `1024`, range `0`-`8192`. Uses low-effort reasoning; `0` disables it. Other models and atomic document requests retain their existing settings. Reasoning is not displayed or saved in chat history. |
+| `CHAT_MAX_CONTINUATIONS` | Optional | Extra requests to the same provider when a text response reaches its token limit; default `3`, range `0`–`8`. Text continues in the same message. A remaining interruption is reported honestly. Atomic document generation retains its separate token budget. |
 | `NVIDIA_TEST_CHAT_MODEL` | Optional | NVIDIA model used only by `/nvidia-chat`; defaults to `nvidia/nemotron-3-ultra-550b-a55b`. |
 | `NVIDIA_CHAT_VISION_MODEL` | Optional | NVIDIA image-chat model; defaults to `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`. |
 | `NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA vision connection timeout; default `5`. |
@@ -124,12 +126,29 @@ use the documented default or disable the associated integration when empty.
 | `USDA_API_KEY` | Optional | USDA FoodData Central key; nutrition matches are unavailable when empty. |
 | `USDA_API_URL` | Optional | USDA API base URL; default `https://api.nal.usda.gov/fdc/v1`. |
 | `USDA_TIMEOUT_SECONDS` | Optional | USDA request timeout; default `15`. |
-| `ALLOWED_ORIGINS` | Optional | Comma-separated browser origins allowed by CORS; default `http://localhost:4200`. |
+| `ALLOWED_ORIGINS` | Optional | Comma-separated browser origins allowed by CORS; default `http://localhost:4200`. In `APP_ENVIRONMENT=development`, HTTP(S) origins on `localhost`, `127.0.0.1`, and `[::1]` are also allowed on any port. All other environments use only the configured origins. |
 | `LOGIN_RATE_LIMIT` | Optional | Login limit in SlowAPI format; default `5/minute`. |
 | `REGISTER_RATE_LIMIT` | Optional | Registration limit; default `5/minute`. |
 | `MEAL_CREATE_RATE_LIMIT` | Optional | Meal-creation limit; default `10/minute`. |
 | `CHAT_VISION_RATE_LIMIT` | Optional | Image-chat limit; default `2/minute`. |
 | `MIGRATION_CHECK_ENABLED` | Optional | Enables the startup warning for pending Alembic migrations; default `true`. |
+
+### Chat response detail
+
+Text chat gives substantive explanations by default, with context, examples, useful
+headings, and relevant caveats. Broad topics typically receive 400-800 words when
+there is enough useful material; this is guidance, not a required length. Comparisons
+can include tables and practical tradeoffs. Greetings, simple facts, and explicit
+requests for brief replies or strict formats remain short.
+
+The same instructions reach NVIDIA and the Ollama fallback in the existing request;
+there is no extra expansion call. Nemotron 3 Super uses bounded low-effort reasoning
+with an additional token allowance to preserve room for the answer, following
+[NVIDIA's model guidance](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard)
+and [NIM budget controls](https://docs.nvidia.com/nim/large-language-models/1.15.0/thinking-budget-control.html).
+Text chat retains automatic continuation when a
+provider reaches its output limit. Changing response depth does not add web search:
+the assistant must not invent sources or claim to have verified live information.
 
 ## Project structure
 
@@ -206,7 +225,15 @@ API accepts requests from.
    your Linux package manager). If the executable is missing, image chat continues
    with vision-only analysis and logs a warning; the application does not fail.
 
-4. Create the \`FoodAI_DB\` database in PostgreSQL (via pgAdmin or \`psql\`).
+4. Start PostgreSQL and wait until it is ready. With Docker Desktop running:
+   ```powershell
+   docker compose up -d --wait --wait-timeout 60 postgres
+   ```
+   The Compose service creates the database named by `DB_NAME` on its first run
+   and retains it in the existing `postgres_data` volume. For local Uvicorn, set
+   `DB_HOST=127.0.0.1` and `DB_PORT=5432` in `.env`; `localhost` can resolve to
+   IPv6, which this Compose port does not expose. If you use a separately managed
+   PostgreSQL server, start that server and create the configured database there.
 
 5. Apply all database migrations. This is required before starting the API:
    \`\`\`
@@ -228,6 +255,13 @@ API accepts requests from.
    \`\`\`
 
    API docs available at \`http://127.0.0.1:8000/docs\`.
+
+   `database_migration_check_failed` with connection refused/timeout means the API
+   could not reach PostgreSQL at startup. Check `docker compose ps postgres`, then
+   repeat step 4 before migrations or starting Uvicorn. Verify database availability
+   through `http://127.0.0.1:8000/health/ready`; `/health` only checks the API process.
+   Database connection attempts (including Alembic) time out after 5 seconds;
+   pooled API connections are checked before reuse after a database restart.
 
 ## Docker Compose deployment
 
@@ -304,9 +338,10 @@ npm install
 npm start
 \`\`\`
 
-App available at \`http://localhost:4200\`. Make sure `ALLOWED_ORIGINS` in this
-API's `.env` includes `http://localhost:4200` (the default) so the browser can
-reach the backend during local development.
+App available at `http://localhost:4200`, or the URL printed by Angular if that
+port is already in use. With `APP_ENVIRONMENT=development`, the API accepts
+HTTP(S) loopback origins on any port, including `http://localhost:55035`.
+For production or staging, add the exact frontend origin to `ALLOWED_ORIGINS`.
 
 ## Chat document import
 
@@ -387,6 +422,31 @@ reach the backend during local development.
   recorded in the [Phase 6 report](docs/universal-document-phase6.md).
 - DOCX/PPTX-to-PDF conversion requires headless LibreOffice. The converter detects standard
   Windows installations and `soffice` on `PATH`; set `LIBREOFFICE_BINARY` for a custom location.
+- **Extract Excel records by ID:** upload an XLSX file and request, for example,
+  `Find the rows with IDs 24138, 24101, 24102 and create a new Excel file`.
+  Review and Build copies complete matching rows directly from the workbook, across
+  all sheets, including duplicates and blank cells. Column names/order, cell values
+  and cell formatting are preserved; the original upload stays unchanged. Missing
+  IDs are reported. This operation does not ask an AI to recreate spreadsheet data.
+  Specify `column "Dish ID"` or `sheet "Items"` to resolve ambiguous sources.
+  Formula cells are exported as their saved values; missing cached results require
+  calculating and saving the source in Excel before upload.
+  Data-only requests such as `Get data for 24908, 24697, 24702 and 19534` or
+  `Give me these 24908, 24697 IDs' row data only` display matching cell values
+  immediately and provide a filtered XLSX download. This works during upload and
+  as a follow-up, without AI availability or a Build step. New lookups search the
+  latest original uploaded workbook; name a generated workbook explicitly to search
+  that output instead. Explicit file-creation requests still use Review and Build.
+- **Add Excel records:** upload an XLSX workbook and write `Add new rows to sheet "Items"`,
+  followed on the next lines by rows copied from Excel, CSV, a Markdown table, or JSON records.
+  Include column headers when mapping only selected columns. Review and Build creates an
+  `-updated.xlsx` attachment, saves its data/history, and leaves the original upload unchanged.
+  Existing cells (including exact decimal values), formulas, styles, and other workbook parts
+  are preserved. Formula-only template rows are filled after the last existing record.
+  Missing rows or ambiguous sheet/column mappings ask for clarification instead of returning
+  an empty-edit 422 error. Appending supplied records does not depend on AI generation.
+  Each request supports up to 500 new rows; append operations do not update existing records
+  with the same code or invent values for omitted columns.
 - **Create files from images:** attach a JPEG, PNG, WebP, or GIF (up to 8 MB) and ask,
   for example, `Read this image and create an Excel sheet with item name and country name`.
   Review the plan, click **Build my document file**, then **View** or **Download** the result.
@@ -395,6 +455,12 @@ reach the backend during local development.
   through the composer while a document request is pending also resumes that request,
   including earlier format choices, without needing to repeat the prompt.
   Word and PDF use the same flow. Ordinary image questions still return a chat answer.
+  To create a new file from written requirements, no upload is required. A missing image
+  mentioned only as a layout example uses a standard layout. If an earlier request is
+  waiting for a source, choose **Create without uploading**, then review and Build.
+  This chooses `source_mode: "description"` on `/chat/documents/automate` and persists
+  that choice across reloads; do not combine it with `source_document_id`.
+  Extracting actual image data still requires an uploaded image.
   Images already sent in this chat can be used with `Create a Word document from this image`.
   Original image bytes and generated files are saved with the conversation.
   Image extraction is deferred until Build; `analyze=false` does not imply it has been read.

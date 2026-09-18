@@ -4,7 +4,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.config.settings import DATABASE_URL
-from app.database.database import Base
+from app.database.database import Base, connect_args
 from app.models.chat import ChatMessageRecord, ChatSession  # noqa: F401
 from app.models.diet_plan import DietPlan, DietPlanMeal, DietPlanMealItem  # noqa: F401
 from app.models.meal_log import MealLog, MealLogItem  # noqa: F401
@@ -38,6 +38,7 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)

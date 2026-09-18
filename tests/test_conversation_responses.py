@@ -79,14 +79,60 @@ def test_nvidia_output_budget_is_independent_of_local_model(monkeypatch, stream)
     assert hosted_body["messages"] == local_body["messages"]
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_nemotron_reasoning_preserves_the_text_answer_allowance(monkeypatch, stream):
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_MODEL", "nvidia/nemotron-3-super-120b-a12b")
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_MAX_TOKENS", 4096)
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_REASONING_BUDGET", 1024)
+    service = ChatService()
+    _, body = service._build_request_body("Explain galaxies", [], [], stream=stream)
+
+    hosted = service._nvidia_body(body, stream=stream)
+
+    assert hosted["max_tokens"] == 4096 + 1024 + 500
+    assert hosted["chat_template_kwargs"] == {
+        "enable_thinking": True,
+        "low_effort": True,
+        "reasoning_budget": 1024,
+    }
+    assert hosted["messages"] == body["messages"]
+
+
+def test_document_budget_does_not_enable_chat_reasoning(monkeypatch):
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_MODEL", "nvidia/nemotron-3-super-120b-a12b")
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_REASONING_BUDGET", 1024)
+    service = ChatService()
+    _, body = service._build_request_body("Return a JSON document plan", [], [], stream=False)
+    body["nvidia_max_tokens"] = 2048
+
+    hosted = service._nvidia_body(body, stream=False)
+
+    assert hosted["max_tokens"] == 2048
+    assert hosted["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_nemotron_reasoning_can_be_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_MODEL", "nvidia/nemotron-3-super-120b-a12b")
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_MAX_TOKENS", 4096)
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_REASONING_BUDGET", 0)
+    service = ChatService()
+    _, body = service._build_request_body("Explain galaxies", [], [], stream=True)
+
+    hosted = service._nvidia_body(body, stream=True)
+
+    assert hosted["max_tokens"] == 4096
+    assert hosted["chat_template_kwargs"] == {"enable_thinking": False}
+
+
 def test_nvidia_truncation_reports_incomplete_without_mixing_providers(monkeypatch):
+    monkeypatch.setattr(settings, "CHAT_MAX_CONTINUATIONS", 0)
     _install_nvidia_stream(
         monkeypatch,
         [_event("The first part. "), _event("Still writing", finish_reason="length"), "[DONE]"],
     )
     chunks = []
 
-    with pytest.raises(ChatModelUnavailableError, match="output limit"):
+    with pytest.raises(ChatModelUnavailableError, match="incomplete"):
         _collect_stream(chunks)
 
     assert "".join(chunks) == "The first part. Still writing"
@@ -134,6 +180,7 @@ def test_nvidia_invalid_content_after_tokens_is_interruption(monkeypatch):
 
 
 def test_synchronous_nvidia_does_not_accept_truncated_reply(monkeypatch):
+    monkeypatch.setattr(settings, "CHAT_MAX_CONTINUATIONS", 0)
     calls = []
 
     class Response:
@@ -152,7 +199,7 @@ def test_synchronous_nvidia_does_not_accept_truncated_reply(monkeypatch):
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "unit-test-key")
     monkeypatch.setattr("app.services.chat_service.requests.post", post)
 
-    with pytest.raises(ChatModelUnavailableError, match="output limit"):
+    with pytest.raises(ChatModelUnavailableError, match="incomplete"):
         ChatService().chat("Hello", [], [])
 
     assert calls == [f"{settings.NVIDIA_API_BASE_URL}/chat/completions"]
