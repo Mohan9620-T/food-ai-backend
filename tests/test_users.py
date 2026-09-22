@@ -68,7 +68,7 @@ def test_login_nonexistent_user_fails(client):
 def test_access_token_is_short_lived(client):
     from datetime import datetime, timezone
 
-    from jose import jwt
+    import jwt
 
     from app.utils.security import ALGORITHM, SECRET_KEY
 

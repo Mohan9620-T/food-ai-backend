@@ -117,7 +117,7 @@ def _register_and_login(client, email):
 
 
 def test_chat_reads_history_from_redis_cache_instead_of_postgres(client, monkeypatch, fake_client):
-    from jose import jwt
+    import jwt
 
     from app.services.chat_service import ChatService
     from app.utils.security import ALGORITHM, SECRET_KEY

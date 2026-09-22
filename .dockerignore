@@ -10,6 +10,14 @@ venv
 food-ai-ui
 tests
 docs
+test-results
+coverage
+htmlcov
+.coverage
+.mypy_cache
+.ruff_cache
+pytest-cache-files-*
+secrets
 *.log
 Dockerfile*
 docker-compose*.yml

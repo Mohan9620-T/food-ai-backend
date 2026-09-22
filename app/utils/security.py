@@ -3,7 +3,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
-from jose import JWTError, jwt
+import jwt
 
 from app.config.settings import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
@@ -38,7 +38,7 @@ def decode_access_token(token: str) -> dict | None:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload if payload.get("token_type") == "access" else None
-    except JWTError:
+    except jwt.InvalidTokenError:
         return None
 
 

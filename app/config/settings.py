@@ -1,8 +1,9 @@
 import os
 from pathlib import Path
-from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
+from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import ArgumentError
 
 load_dotenv()
 
@@ -23,17 +24,63 @@ def _read_secret(name: str, default: str | None = None) -> str | None:
     return secret
 
 
-DB_HOST = os.getenv("DB_HOST")
-# Falls back to Postgres's standard port so a missing DB_PORT degrades to a
-# valid connection string instead of embedding the literal text "None" (str(None))
-# into the URL, which crashes SQLAlchemy's parser rather than failing clearly.
-DB_PORT = os.getenv("DB_PORT") or "5432"
-DB_NAME = os.getenv("DB_NAME")
-DB_USER = os.getenv("DB_USER")
+def _database_setting(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value and value.lower() not in {"none", "null"}:
+            return value
+    return None
+
+
+def _database_url() -> str:
+    """Accept managed Postgres URLs without leaking credentials in setup errors."""
+    configured_url = _database_setting("DATABASE_URL")
+    if configured_url:
+        if "${{" in configured_url:
+            raise ValueError("DATABASE_URL contains an unresolved Railway service reference.")
+        if configured_url.startswith("postgres://"):
+            configured_url = "postgresql://" + configured_url[len("postgres://") :]
+        try:
+            parsed = make_url(configured_url)
+            if parsed.port is not None and not 1 <= parsed.port <= 65535:
+                raise ValueError("invalid port")
+        except (ArgumentError, ValueError):
+            raise ValueError(
+                "DATABASE_URL is invalid. Set it to the Postgres service's DATABASE_URL "
+                "reference in Railway; do not use a URL containing a missing/None port."
+            ) from None
+        return parsed.render_as_string(hide_password=False)
+
+    host = _database_setting("DB_HOST", "PGHOST")
+    name = _database_setting("DB_NAME", "PGDATABASE")
+    user = _database_setting("DB_USER", "PGUSER")
+    if not all((host, name, user)):
+        raise ValueError(
+            "Database configuration is missing. Set DATABASE_URL to the Railway Postgres "
+            "service reference, or provide DB_HOST, DB_NAME and DB_USER (or PGHOST, "
+            "PGDATABASE and PGUSER)."
+        )
+    raw_port = _database_setting("DB_PORT", "PGPORT") or "5432"
+    try:
+        port = int(raw_port)
+        if not 1 <= port <= 65535:
+            raise ValueError("invalid port")
+    except ValueError:
+        raise ValueError("DB_PORT/PGPORT must be a port number between 1 and 65535.") from None
+    password = _read_secret("DB_PASSWORD")
+    if password is None:
+        password = _read_secret("PGPASSWORD", "")
+    return URL.create(
+        "postgresql", username=user, password=password, host=host, port=port, database=name
+    ).render_as_string(hide_password=False)
+
+
+DB_HOST = _database_setting("DB_HOST", "PGHOST")
+DB_PORT = _database_setting("DB_PORT", "PGPORT") or "5432"
+DB_NAME = _database_setting("DB_NAME", "PGDATABASE")
+DB_USER = _database_setting("DB_USER", "PGUSER")
 DB_PASSWORD = _read_secret("DB_PASSWORD")
-DATABASE_URL = os.getenv("DATABASE_URL") or (
-    f"postgresql://{DB_USER}:{quote_plus(DB_PASSWORD or '')}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-)
+DATABASE_URL = _database_url()
 
 SMTP_HOST = os.getenv("SMTP_HOST")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))

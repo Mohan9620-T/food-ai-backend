@@ -8,6 +8,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     services:
+      chroma:
+        image: chromadb/chroma:1.5.9
+        ports:
+          - 8001:8000
       postgres:
         image: postgres:17
         env:

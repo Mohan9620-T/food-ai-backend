@@ -1,3 +1,4 @@
+import os
 from uuid import uuid4
 
 import chromadb
@@ -97,15 +98,20 @@ def test_semantic_chunks_skips_blank_blocks():
 
 @pytest.fixture
 def rag_enabled(monkeypatch):
-    # chromadb.EphemeralClient() instances share underlying process storage
-    # (confirmed: a second instance sees the first's collections), so give
-    # every test its own collection name via a unique prefix rather than
-    # relying on the client instance itself for isolation.
+    # Exercise the same HTTP-only SDK as production against the CI Chroma service.
+    # Each test owns a unique collection; existing application data is untouched.
     monkeypatch.setattr(settings, "ENABLE_SEMANTIC_RAG", True)
-    monkeypatch.setattr(settings, "CHROMA_COLLECTION_PREFIX", f"test_{uuid4().hex}")
-    client = chromadb.EphemeralClient()
+    prefix = f"test_{uuid4().hex}"
+    monkeypatch.setattr(settings, "CHROMA_COLLECTION_PREFIX", prefix)
+    client = chromadb.HttpClient(
+        host=os.getenv("TEST_CHROMA_HOST", "127.0.0.1"),
+        port=int(os.getenv("TEST_CHROMA_PORT", "8001")),
+    )
     monkeypatch.setattr(chroma_client, "get_chroma_client", lambda: client)
-    return client
+    yield client
+    for collection in client.list_collections():
+        if collection.name.startswith(prefix):
+            client.delete_collection(collection.name)
 
 
 def test_get_chroma_client_returns_none_when_disabled(monkeypatch):
@@ -353,7 +359,7 @@ def _upload(client, headers, filename, content, mime="text/plain"):
 
 
 def _user_id(client, token) -> int:
-    from jose import jwt
+    import jwt
 
     from app.utils.security import ALGORITHM, SECRET_KEY
 
