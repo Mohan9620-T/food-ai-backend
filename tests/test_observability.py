@@ -63,6 +63,39 @@ def test_readiness_returns_503_when_dependencies_are_unavailable(client, monkeyp
     }
 
 
+def test_readiness_ignores_ollama_when_not_required(client, monkeypatch):
+    connection = MagicMock()
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    monkeypatch.setattr(main.engine, "connect", MagicMock(return_value=context))
+    monkeypatch.setattr(
+        main.httpx, "get", MagicMock(side_effect=httpx.ConnectError("ollama offline"))
+    )
+    monkeypatch.setattr(settings, "OLLAMA_REQUIRED_FOR_READINESS", False)
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "Ready"
+    assert body["checks"]["ollama"] == "down"
+
+
+def test_readiness_still_gates_on_ollama_by_default(client, monkeypatch):
+    connection = MagicMock()
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    monkeypatch.setattr(main.engine, "connect", MagicMock(return_value=context))
+    monkeypatch.setattr(
+        main.httpx, "get", MagicMock(side_effect=httpx.ConnectError("ollama offline"))
+    )
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json()["checks"]["ollama"] == "down"
+
+
 def test_readiness_ignores_redis_when_cache_disabled(client, monkeypatch):
     connection = MagicMock()
     context = MagicMock()

@@ -24,7 +24,10 @@ def _read_secret(name: str, default: str | None = None) -> str | None:
 
 
 DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT")
+# Falls back to Postgres's standard port so a missing DB_PORT degrades to a
+# valid connection string instead of embedding the literal text "None" (str(None))
+# into the URL, which crashes SQLAlchemy's parser rather than failing clearly.
+DB_PORT = os.getenv("DB_PORT") or "5432"
 DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = _read_secret("DB_PASSWORD")
@@ -115,6 +118,15 @@ NVIDIA_VISION_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_VISION_TIMEOUT_SECONDS",
 NVIDIA_VISION_MAX_DIMENSION = int(os.getenv("NVIDIA_VISION_MAX_DIMENSION", "768"))
 NVIDIA_VISION_MAX_TOKENS = int(os.getenv("NVIDIA_VISION_MAX_TOKENS", "384"))
 CHAT_VISION_OCR_ENABLED = os.getenv("CHAT_VISION_OCR_ENABLED", "false").lower() == "true"
+
+# Ollama is a hard part of the default topology (local dev, Docker Compose) -
+# /health/ready reports it and gates readiness on it. For an NVIDIA-only
+# deployment that doesn't run Ollama at all (e.g. Railway without an Ollama
+# service), set this to false: its status is still reported for visibility,
+# it just no longer gates readiness. The NVIDIA->Ollama chat/vision failover
+# code itself is unaffected either way - it simply fails cleanly per-request
+# if Ollama is unreachable.
+OLLAMA_REQUIRED_FOR_READINESS = os.getenv("OLLAMA_REQUIRED_FOR_READINESS", "true").lower() == "true"
 USDA_API_KEY = os.getenv("USDA_API_KEY", "").strip()
 USDA_API_URL = os.getenv("USDA_API_URL", "https://api.nal.usda.gov/fdc/v1").rstrip("/")
 USDA_TIMEOUT_SECONDS = int(os.getenv("USDA_TIMEOUT_SECONDS", "15"))
@@ -144,8 +156,14 @@ CHROMA_TIMEOUT_SECONDS = float(os.getenv("CHROMA_TIMEOUT_SECONDS", "10"))
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "nvidia").strip().lower()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b").strip()
 OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text").strip()
+# 0.5 looked like a reasonable default on paper but was measured live against
+# nvidia/nemotron-3-embed-1b (M5 verification) and rejected true positives: a
+# near-verbatim matching chunk scored only ~0.47, while unrelated queries
+# scored ~0.01-0.05. 0.2 keeps a wide margin below real matches (~0.30-0.47)
+# and well above noise (~0.05) for this model; recalibrate if the embedding
+# model changes.
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
-RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.5"))
+RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.2"))
 RAG_MAX_CONTEXT_CHUNKS = int(os.getenv("RAG_MAX_CONTEXT_CHUNKS", "6"))
 RAG_MAX_CONTEXT_TOKENS = int(os.getenv("RAG_MAX_CONTEXT_TOKENS", "2000"))
 RAG_CHUNK_CHARS = int(os.getenv("RAG_CHUNK_CHARS", "800"))

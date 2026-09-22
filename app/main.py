@@ -102,7 +102,7 @@ def _ollama_health_url() -> str:
     responses={503: {"description": "PostgreSQL or Ollama is unavailable."}},
 )
 def readiness() -> JSONResponse:
-    """Check whether PostgreSQL and Ollama can accept application requests."""
+    """Check whether PostgreSQL (and, unless disabled, Ollama) can accept requests."""
     checks = {"database": "up", "ollama": "up"}
 
     try:
@@ -119,7 +119,13 @@ def readiness() -> JSONResponse:
         checks["ollama"] = "down"
         logger.warning("readiness_dependency_unavailable", extra={"dependency": "ollama"})
 
-    ready = all(value == "up" for value in checks.values())
+    # Ollama's status is always reported for visibility, but only gates
+    # readiness when it's actually part of this deployment's topology.
+    gating_checks = dict(checks)
+    if not settings.OLLAMA_REQUIRED_FOR_READINESS:
+        gating_checks.pop("ollama", None)
+
+    ready = all(value == "up" for value in gating_checks.values())
 
     # Redis is an optional cache: report its health for visibility, but never let
     # it being down or disabled affect overall readiness (chat degrades to Postgres).

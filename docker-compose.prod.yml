@@ -66,8 +66,12 @@ services:
       APP_ENVIRONMENT: production
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
       NVIDIA_API_BASE_URL: ${NVIDIA_API_BASE_URL:-https://integrate.api.nvidia.com/v1}
-      NVIDIA_CHAT_MODEL: ${NVIDIA_CHAT_MODEL:-deepseek-ai/deepseek-v4-pro-0813}
-      NVIDIA_CHAT_VISION_MODEL: ${NVIDIA_CHAT_VISION_MODEL:-meta/llama-3.2-90b-vision-instruct}
+      # Defaults reconciled with .env.example and verified live against the
+      # NVIDIA NIM /v1/models catalog (see chat history) - the prior chat
+      # default, deepseek-ai/deepseek-v4-pro-0813, does not exist there and
+      # would have made every NVIDIA chat call fail on a fresh deployment.
+      NVIDIA_CHAT_MODEL: ${NVIDIA_CHAT_MODEL:-nvidia/nemotron-3-super-120b-a12b}
+      NVIDIA_CHAT_VISION_MODEL: ${NVIDIA_CHAT_VISION_MODEL:-nvidia/nemotron-3-nano-omni-30b-a3b-reasoning}
       OLLAMA_URL: http://ollama:11434/api/chat
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
       OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen3-vl:4b}
