@@ -30,6 +30,10 @@ retries, and binds to Railway's `PORT`. `/health/ready` requires PostgreSQL; Oll
 is optional in this hosted NVIDIA configuration. Redis and semantic RAG stay off
 unless their services are explicitly configured.
 
+The container includes headless LibreOffice for Word, spreadsheet and presentation
+conversion to PDF, along with OCR and DejaVu fonts. CI installs the same conversion
+runtime so Linux tests exercise real office-to-PDF conversion.
+
 Uploads, generated files and conversation history are stored in PostgreSQL. Keep
 the Postgres volume and enable backups before relying on this deployment for
 important data.

@@ -99,27 +99,14 @@ def test_multisheet_xlsx_to_csv_is_rejected_instead_of_dropping_sheets():
 def test_libreoffice_conversion_uses_generated_pdf_and_validates_it(monkeypatch):
     pdf_bytes = PdfGenerator().generate("Converted office document")
 
-    class WorkspaceTemporaryDirectory:
-        def __init__(self, **kwargs):
-            pass
-
-        def __enter__(self):
-            return "C:/pipeline-test"
-
-        def __exit__(self, *args):
-            return False
-
     def run(command, **kwargs):
+        source = Path(command[-1])
+        assert source.read_bytes() == b"office bytes"
+        assert command[2].startswith("-env:UserInstallation=file://")
+        source.with_suffix(".pdf").write_bytes(pdf_bytes)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("app.services.conversion.document_conversion_service.subprocess.run", run)
-    monkeypatch.setattr(
-        "app.services.conversion.document_conversion_service.TemporaryDirectory",
-        WorkspaceTemporaryDirectory,
-    )
-    monkeypatch.setattr(Path, "write_bytes", lambda self, data: len(data))
-    monkeypatch.setattr(Path, "is_file", lambda self: True)
-    monkeypatch.setattr(Path, "read_bytes", lambda self: pdf_bytes)
     converted = LibreOfficeConverter(binary="soffice").convert_to_pdf(
         b"office bytes", "report.docx"
     )

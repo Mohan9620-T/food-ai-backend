@@ -42,6 +42,10 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Install document conversion runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libreoffice-writer libreoffice-calc libreoffice-impress fonts-dejavu-core
       - name: Install backend dependencies
         run: pip install -r requirements-dev.txt
       - name: Audit backend dependencies

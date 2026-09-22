@@ -27,6 +27,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install --no-install-recommends -y curl libpq5 tesseract-ocr \
+       libreoffice-writer libreoffice-calc libreoffice-impress fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/* \
     && addgroup --system app \
     && adduser --system --ingroup app app
