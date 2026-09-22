@@ -317,7 +317,10 @@ class DocumentIntentService:
     def _semantic_plan(self, instruction: str, input_file: str | None) -> OperationPlan:
         chat_service = self.document_service.chat_service
         response = chat_service.chat(
-            self._planning_prompt(instruction, input_file), history=[], reference_history=[]
+            self._planning_prompt(instruction, input_file),
+            history=[],
+            reference_history=[],
+            temperature=settings.DOCUMENT_AI_TEMPERATURE,
         )
         text = response.strip()
         fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)

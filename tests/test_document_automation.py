@@ -62,7 +62,7 @@ def test_natural_language_csv_automation_runs_three_real_steps(client, monkeypat
     uploaded = _upload(client, headers, "inventory.csv", CSV_DATA, "text/csv")
     provider_calls = []
 
-    def plan_with_provider(message, history, reference_history):
+    def plan_with_provider(message, history, reference_history, **kwargs):
         provider_calls.append(message)
         return json.dumps(
             {

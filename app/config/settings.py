@@ -71,6 +71,19 @@ NVIDIA_CHAT_REASONING_BUDGET = max(
 )
 # Additional same-provider requests for a text answer stopped by its token limit.
 CHAT_MAX_CONTINUATIONS = max(0, min(int(os.getenv("CHAT_MAX_CONTINUATIONS", "3")), 8))
+# Conversational chat sampling. Kept separate from DOCUMENT_AI_TEMPERATURE so
+# document generation/analysis (structured, low-variance) is never coupled to
+# conversational tone tuning.
+CHAT_TEMPERATURE = float(os.getenv("CHAT_TEMPERATURE", "0.3"))
+DOCUMENT_AI_TEMPERATURE = float(os.getenv("DOCUMENT_AI_TEMPERATURE", "0.2"))
+NVIDIA_CHAT_TOP_P = float(os.getenv("NVIDIA_CHAT_TOP_P", "0.9"))
+# Rough, provider-agnostic token estimate (characters // divisor) used only to
+# budget how much history fits in a request - not an exact tokenizer count.
+# SYSTEM_PROMPT alone is already ~4200 estimated tokens, so this must stay well
+# above that plus a full 24-message window before it starts trimming, or it
+# would override the message-count window on nearly every turn.
+CONTEXT_TOKEN_CHAR_DIVISOR = int(os.getenv("CONTEXT_TOKEN_CHAR_DIVISOR", "4"))
+CONTEXT_TOKEN_BUDGET = int(os.getenv("CONTEXT_TOKEN_BUDGET", "24000"))
 # Total AI time for a document, including primary/fallback and streamed tokens.
 DOCUMENT_AI_TIMEOUT_SECONDS = float(os.getenv("DOCUMENT_AI_TIMEOUT_SECONDS", "90"))
 DOCUMENT_AI_MAX_TOKENS = int(os.getenv("DOCUMENT_AI_MAX_TOKENS", "2048"))
@@ -105,6 +118,38 @@ CHAT_VISION_OCR_ENABLED = os.getenv("CHAT_VISION_OCR_ENABLED", "false").lower() 
 USDA_API_KEY = os.getenv("USDA_API_KEY", "").strip()
 USDA_API_URL = os.getenv("USDA_API_URL", "https://api.nal.usda.gov/fdc/v1").rstrip("/")
 USDA_TIMEOUT_SECONDS = int(os.getenv("USDA_TIMEOUT_SECONDS", "15"))
+
+# Redis is a fast, optional cache for recently-assembled chat context. Postgres
+# remains the permanent source of truth; every cache read/write degrades to a
+# no-op (falling back to Postgres) when Redis is disabled or unreachable.
+ENABLE_REDIS_CACHE = os.getenv("ENABLE_REDIS_CACHE", "false").lower() == "true"
+REDIS_URL = os.getenv("REDIS_URL", "")
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+REDIS_PASSWORD = _read_secret("REDIS_PASSWORD", "")
+REDIS_TIMEOUT_SECONDS = float(os.getenv("REDIS_TIMEOUT_SECONDS", "2"))
+REDIS_CHAT_TTL_SECONDS = int(os.getenv("REDIS_CHAT_TTL_SECONDS", "3600"))
+
+# ChromaDB semantic document retrieval - additive to (never a replacement for)
+# the deterministic raw_text extraction/injection path. Fully inert when the
+# flag is off, and falls back to that deterministic path when Chroma or the
+# embedding provider is unreachable.
+ENABLE_SEMANTIC_RAG = os.getenv("ENABLE_SEMANTIC_RAG", "false").lower() == "true"
+CHROMA_HOST = os.getenv("CHROMA_HOST", "localhost")
+CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
+CHROMA_COLLECTION_PREFIX = os.getenv("CHROMA_COLLECTION_PREFIX", "foodai")
+CHROMA_TIMEOUT_SECONDS = float(os.getenv("CHROMA_TIMEOUT_SECONDS", "10"))
+# "nvidia" tries NVIDIA embeddings with an Ollama fallback; "ollama" stays fully local.
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "nvidia").strip().lower()
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b").strip()
+OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text").strip()
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
+RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.5"))
+RAG_MAX_CONTEXT_CHUNKS = int(os.getenv("RAG_MAX_CONTEXT_CHUNKS", "6"))
+RAG_MAX_CONTEXT_TOKENS = int(os.getenv("RAG_MAX_CONTEXT_TOKENS", "2000"))
+RAG_CHUNK_CHARS = int(os.getenv("RAG_CHUNK_CHARS", "800"))
+RAG_CHUNK_OVERLAP_CHARS = int(os.getenv("RAG_CHUNK_OVERLAP_CHARS", "100"))
 
 ALLOWED_ORIGINS = [
     origin.strip()

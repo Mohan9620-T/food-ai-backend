@@ -63,41 +63,30 @@ def call(client, headers, sid, instruction="Create an Excel file with dishes", *
     return response.json()
 
 
-def test_question_answer_review_replay_and_confirm_generate_once(client, db_session, build_setup):
+def test_question_answer_generates_once_and_saves_choices(client, db_session, build_setup):
     headers, sid, generate, model = build_setup
-    renamed = ready()
-    renamed["steps"][0]["parameters"] = {"filename": "Invented_Brochure.xlsx"}
     model.side_effect = [
         json.dumps(question()),
-        json.dumps(ready()),
-        json.dumps(renamed),
         json.dumps(ready()),
     ]
     first = call(client, headers, sid)
     assert first["clarification"]["options"][0]["recommended"] is True
-    review = call(client, headers, sid, "South India")
-    assert review["status"] == "ready_for_review"
-    assert review["plan_summary"] == review["response"]
-    assert review["attachments"] == []
+    result = call(client, headers, sid, "South India")
+    assert result["status"] == "done"
+    assert result["plan_summary"] is None
     db_session.expire_all()
     saved_review = client.get(f"/chat/sessions/{sid}", headers=headers).json()["messages"][-1][
         "automation"
     ]
-    assert saved_review["response"] == review
+    assert saved_review["response"] == result
     assert saved_review["request_instruction"] == "Create an Excel file with dishes"
     assert saved_review["instruction"] == "South India"
     assert saved_review["choices"] == [{"question": "Which region?", "answer": "South India"}]
-    before_messages = db_session.query(ChatMessageRecord).count()
-    assert call(client, headers, sid, "South India") == review
-    assert db_session.query(ChatMessageRecord).count() == before_messages
-    assert db_session.query(ChatDocumentAttachment).filter_by(kind="generated").count() == 0
-    generate.assert_not_awaited()
-    result = call(client, headers, sid, "South India", confirm=True)
     assert result["status"] == "done"
     assert len(result["attachments"]) == 1
     assert db_session.query(ChatDocumentAttachment).filter_by(kind="generated").count() == 1
     generate.assert_awaited_once()
-    assert any(message.content == "South India" for message in model.call_args.kwargs["history"])
+    assert "South India" in model.call_args.args[0]
     attachment = result["attachments"][0]
     raw = client.get(f"/chat/documents/{attachment['id']}/download", headers=headers).content
     workbook = load_workbook(BytesIO(raw))
@@ -117,22 +106,21 @@ def test_new_request_does_not_inherit_an_unfinished_wizard(client, build_setup):
     model.side_effect = [json.dumps(question()), json.dumps(ready())]
     call(client, headers, sid)
     instruction = "Create a new Excel with an inventory table"
-    assert call(client, headers, sid, instruction)["status"] == "ready_for_review"
+    assert call(client, headers, sid, instruction)["status"] == "done"
     saved = client.get(f"/chat/sessions/{sid}", headers=headers).json()["messages"][-1][
         "automation"
     ]
     assert saved["request_instruction"] == instruction
     assert saved["choices"] == []
-    generate.assert_not_awaited()
+    generate.assert_awaited_once()
 
 
-def test_skip_upload_survives_history_reload_and_build(client, build_setup):
+def test_skip_upload_generates_directly_and_saves_source_mode(client, build_setup):
     headers, sid, generate, model = build_setup
     instruction = "Create a new Excel from this image with Item and Quantity columns"
     assert call(client, headers, sid, instruction)["status"] == "clarification_required"
-    review = call(client, headers, sid, instruction, source_mode="description")
-    assert review["status"] == "ready_for_review"
-    generate.assert_not_awaited()
+    result = call(client, headers, sid, instruction, source_mode="description")
+    assert result["status"] == "done"
     model.assert_not_called()
     saved = client.get(f"/chat/sessions/{sid}", headers=headers).json()["messages"][-1][
         "automation"
@@ -140,31 +128,27 @@ def test_skip_upload_survives_history_reload_and_build(client, build_setup):
     assert saved["source_mode"] == "description"
     assert saved["source_document_id"] is None
     assert saved["choices"][-1]["answer"] == "Create from written requirements without uploading."
-    result = call(
-        client, headers, sid, saved["instruction"], source_mode=saved["source_mode"], confirm=True
-    )
     assert result["status"] == "done"
     assert result["attachments"][0]["source_document_ids"] == []
     generate.assert_awaited_once()
     assert generate.call_args.kwargs["documents"] == []
 
 
-def test_confirm_cannot_skip_remaining_questions_or_new_ambiguity(client, build_setup):
+def test_legacy_confirm_cannot_skip_remaining_questions(client, build_setup):
     headers, sid, generate, model = build_setup
     model.side_effect = [
         json.dumps(question()),
         json.dumps(question("Which currency?")),
         json.dumps(ready()),
-        json.dumps(question("What title?", False)),
     ]
     assert call(client, headers, sid)["status"] == "clarification_required"
     assert (
         call(client, headers, sid, "South India", confirm=True)["status"]
         == "clarification_required"
     )
-    assert call(client, headers, sid, "INR")["status"] == "ready_for_review"
-    assert call(client, headers, sid, "INR", confirm=True)["status"] == "clarification_required"
     generate.assert_not_awaited()
+    assert call(client, headers, sid, "INR")["status"] == "done"
+    generate.assert_awaited_once()
 
 
 def test_plain_question_stays_compatible(client, build_setup):
@@ -212,7 +196,10 @@ def test_history_endpoint_restores_choices_for_a_legacy_layout_question(
     assert record.automation["response"]["clarification"] is None
 
 
-def test_default_gate_and_explicit_source_use_existing_pipeline(client, build_setup):
+@pytest.mark.parametrize("compatibility", [{}, {"confirm": False}, {"confirm": True}])
+def test_direct_creation_and_explicit_source_use_existing_pipeline(
+    client, build_setup, compatibility
+):
     headers, sid, generate, _ = build_setup
     upload = client.post(
         "/chat/documents",
@@ -221,9 +208,9 @@ def test_default_gate_and_explicit_source_use_existing_pipeline(client, build_se
         headers=headers,
     ).json()
     source = upload["attachment"]["id"]
-    assert call(client, headers, sid, source_document_id=source)["status"] == "ready_for_review"
-    generate.assert_not_awaited()
-    result = call(client, headers, sid, source_document_id=source, confirm=True)
+    result = call(client, headers, sid, source_document_id=source, **compatibility)
+    assert result["status"] == "done"
+    generate.assert_awaited_once()
     assert result["attachments"][0]["source_document_ids"] == [source]
     assert result["attachments"][0]["provenance"] == "uploaded_source"
 

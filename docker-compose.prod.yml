@@ -27,6 +27,29 @@ services:
       timeout: 5s
       retries: 20
 
+  # Optional chat-context cache, only used when ENABLE_REDIS_CACHE=true. No
+  # published port: only the backend reaches it over the internal network.
+  redis:
+    image: redis:7-alpine
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Optional semantic document retrieval index, only used when
+  # ENABLE_SEMANTIC_RAG=true. No published port (internal network only) and
+  # no in-container healthcheck - see docker-compose.yml for why; reachability
+  # is verified from the backend's own /health/ready endpoint instead. Unlike
+  # Redis's pure-cache semantics, losing this volume means real (if
+  # recoverable-by-reindexing) data loss, so it is persisted.
+  chroma:
+    image: chromadb/chroma:1.5.9
+    restart: always
+    volumes:
+      - chroma_data:/chroma/chroma
+
   backend:
     build:
       context: .
@@ -51,6 +74,14 @@ services:
       OLLAMA_CHAT_VISION_MODEL: ${OLLAMA_CHAT_VISION_MODEL:-qwen3-vl:4b}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://example.com}
       MIGRATION_CHECK_ENABLED: "true"
+      ENABLE_REDIS_CACHE: ${ENABLE_REDIS_CACHE:-false}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      ENABLE_SEMANTIC_RAG: ${ENABLE_SEMANTIC_RAG:-false}
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-nvidia}
     secrets:
       - db_password
       - jwt_secret_key
@@ -77,3 +108,4 @@ secrets:
 volumes:
   postgres_data:
   ollama_models:
+  chroma_data:

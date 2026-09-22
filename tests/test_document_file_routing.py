@@ -141,14 +141,7 @@ def test_independent_excel_request_does_not_reuse_old_upload(client, headers, mo
         "session_id": upload["session_id"],
         "instruction": f"List the planets and {verb} the excel file",
     }
-    review = client.post("/chat/documents/automate", headers=headers, json=payload).json()
-    assert review["status"] == "ready_for_review"
-    assert "old-menu" not in review["plan_summary"]
-    assert "XLSX" in review["plan_summary"]
-    generate.assert_not_awaited()
-    result = client.post(
-        "/chat/documents/automate", headers=headers, json={**payload, "confirm": True}
-    ).json()
+    result = client.post("/chat/documents/automate", headers=headers, json=payload).json()
     assert result["status"] == "done", result
     assert result["steps"][0]["source_document_ids"] == []
     attachment = result["attachments"][0]
@@ -182,8 +175,10 @@ def test_general_question_after_upload_does_not_receive_document_context(
     async def stream(message, history, reference_history):
         yield answer(message, history, reference_history)
 
-    monkeypatch.setattr(type(chat_api.service), "chat", lambda self, *args: answer(*args))
-    monkeypatch.setattr(type(chat_api.service), "stream_chat", lambda self, *args: stream(*args))
+    monkeypatch.setattr(type(chat_api.service), "chat", lambda self, *args, **kwargs: answer(*args))
+    monkeypatch.setattr(
+        type(chat_api.service), "stream_chat", lambda self, *args, **kwargs: stream(*args)
+    )
     response = client.post(
         path,
         headers=headers,
@@ -203,7 +198,7 @@ def test_document_reference_still_supplies_uploaded_content(client, headers, mon
         files={"file": ("menu.txt", b"Dish: Idli.", "text/plain")},
     ).json()
     answer = MagicMock(return_value="The menu contains Idli.")
-    monkeypatch.setattr(type(chat_api.service), "chat", lambda self, *args: answer(*args))
+    monkeypatch.setattr(type(chat_api.service), "chat", lambda self, *args, **kwargs: answer(*args))
     response = client.post(
         "/chat/",
         headers=headers,
@@ -271,7 +266,7 @@ def test_save_only_pdf_does_not_attempt_spreadsheet_edits(
         ("Create a Word summary of this PDF", True),
     ],
 )
-def test_uploaded_pdf_word_review_confirm_and_download(
+def test_uploaded_pdf_word_direct_creation_and_download(
     client, headers, monkeypatch, db_session, request_text, uses_ai
 ):
     source = pdf_bytes()
@@ -300,17 +295,10 @@ def test_uploaded_pdf_word_review_confirm_and_download(
         "source_document_id": data["attachment"]["id"],
         "instruction": request_text,
     }
-    review = client.post("/chat/documents/automate", headers=headers, json=instruction)
-    assert review.status_code == 200
-    assert review.json()["status"] == "ready_for_review"
-    assert review.json()["attachments"] == []
-    assert db_session.query(ChatDocumentAttachment).filter_by(kind="generated").count() == 0
-    generate.assert_not_awaited()
-    built = client.post(
-        "/chat/documents/automate", headers=headers, json={**instruction, "confirm": True}
-    )
+    built = client.post("/chat/documents/automate", headers=headers, json=instruction)
     assert built.status_code == 200, built.text
     assert built.json()["status"] == "done", built.text
+    assert db_session.query(ChatDocumentAttachment).filter_by(kind="generated").count() == 1
     attachment = built.json()["attachments"][0]
     assert attachment["filename"].endswith(".docx")
     assert attachment["source_document_ids"] == [data["attachment"]["id"]]

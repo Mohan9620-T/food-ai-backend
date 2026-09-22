@@ -4,12 +4,27 @@ import logging
 import re
 from typing import cast
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.database import chroma_client
 from app.database.database import get_db
+from app.database.redis_client import (
+    get_cached_history,
+    invalidate_cached_history,
+    set_cached_history,
+)
 from app.models.chat import ChatMessageRecord
 from app.rate_limit import limiter
 from app.repositories.chat_repository import ChatRepository
@@ -25,8 +40,10 @@ from app.schemas.chat_session import (
     ChatSessionOut,
     ChatSessionRename,
 )
+from app.services import chat_memory_service
 from app.services.chat_service import ChatModelUnavailableError, ChatService
 from app.services.chat_vision_service import ChatVisionService
+from app.services.document import semantic_retrieval
 from app.services.document.document_references import matches_document_topic, references_document
 from app.services.document.exceptions import InvalidDocumentError
 from app.services.image_parser_service import VisionModelUnavailableError
@@ -78,6 +95,30 @@ IMAGE_MATCH_STOP_WORDS = {
     "with",
     "you",
 }
+# Words that signal the user is still asking about a picture even when none of
+# its remembered content overlaps with the follow-up (e.g. "can you identify it?").
+IMAGE_INTENT_WORDS = {
+    "identify",
+    "image",
+    "picture",
+    "photo",
+    "show",
+    "shown",
+    "this",
+    "that",
+    "describe",
+    "explain",
+    "tell",
+    "analyze",
+    "analyse",
+    "detail",
+    "details",
+    "zoom",
+    "caption",
+    "visible",
+    "depict",
+    "contains",
+}
 
 
 def _get_user_id(current_user: dict) -> int:
@@ -99,8 +140,11 @@ def _get_or_create_chat_session(
     return repository.create_session(db, user_id, title)
 
 
-def _get_persisted_history(db: Session, session_id: int) -> list[ChatHistoryMessage]:
-    return [
+def _get_persisted_history(db: Session, user_id: int, session_id: int) -> list[ChatHistoryMessage]:
+    cached = get_cached_history(user_id, session_id)
+    if cached is not None:
+        return cached
+    history = [
         ChatHistoryMessage(
             role="assistant" if message.sender == "bot" else "user",
             content=cast(str, message.content),
@@ -109,16 +153,70 @@ def _get_persisted_history(db: Session, session_id: int) -> list[ChatHistoryMess
             db, session_id, limit=ChatService.HISTORY_MESSAGE_LIMIT
         )
     ]
+    set_cached_history(user_id, session_id, history)
+    return history
+
+
+async def _refresh_rolling_summary_task(database_bind, session_id: int) -> None:
+    """Best-effort background step: never delays or fails a chat response."""
+    worker_db = Session(bind=database_bind)
+    try:
+        await chat_memory_service.refresh_rolling_summary(
+            worker_db, service, repository, session_id
+        )
+    finally:
+        worker_db.close()
 
 
 def _document_reference_history(
-    db: Session, session_id: int, message: str
+    db: Session, user_id: int, session_id: int, message: str
 ) -> list[ChatHistoryMessage]:
     contexts = repository.get_document_contexts(db, session_id)
-    if not references_document(message, (filename for filename, _ in contexts)):
+    if not references_document(message, (filename for _, filename, _ in contexts)):
         contexts = [
-            (filename, text) for filename, text in contexts if matches_document_topic(message, text)
+            (document_id, filename, text)
+            for document_id, filename, text in contexts
+            if matches_document_topic(message, text)
         ]
+    if not contexts:
+        return []
+
+    if settings.ENABLE_SEMANTIC_RAG:
+        chunks = semantic_retrieval.retrieve_relevant_chunks(
+            user_id=user_id,
+            session_id=session_id,
+            document_ids=[document_id for document_id, _, _ in contexts],
+            query=message,
+        )
+        if chunks is not None:
+            if chunks:
+                return [
+                    ChatHistoryMessage(
+                        role="user",
+                        content=(
+                            f"{ChatService.DOCUMENT_CONTEXT_PREFIX}\n"
+                            f"Filename: {chunk.filename}"
+                            + (f" ({chunk.location_label})" if chunk.location_label else "")
+                            + f"\nRelevant excerpt:\n{chunk.text}"
+                        ),
+                    )
+                    for chunk in chunks
+                ]
+            filenames = ", ".join(sorted({filename for _, filename, _ in contexts}))
+            return [
+                ChatHistoryMessage(
+                    role="user",
+                    content=(
+                        f"{ChatService.DOCUMENT_CONTEXT_PREFIX}\n"
+                        f"No sufficiently relevant passage was found in {filenames} for this "
+                        "question. Tell the user the document doesn't appear to cover this, "
+                        "rather than guessing."
+                    ),
+                )
+            ]
+        # chunks is None here (RAG unavailable): fall through to the
+        # deterministic full-text path below, exactly like today.
+
     return [
         ChatHistoryMessage(
             role="user",
@@ -127,7 +225,7 @@ def _document_reference_history(
                 f"Filename: {filename}\nExtracted content:\n{raw_text}"
             ),
         )
-        for filename, raw_text in contexts
+        for _, filename, raw_text in contexts
     ]
 
 
@@ -159,7 +257,7 @@ def _select_referenced_image(
     if not question_tokens:
         return image_turns[-1][0]
 
-    best_index = len(image_turns) - 1
+    best_index = None
     best_score = 0
     for index, (image_message, immediate_response) in enumerate(image_turns):
         context = f"{getattr(image_message, 'content', '')} {immediate_response}".lower()
@@ -168,7 +266,16 @@ def _select_referenced_image(
         if score >= best_score and score > 0:
             best_index = index
             best_score = score
-    return image_turns[best_index][0]
+    if best_index is not None:
+        return image_turns[best_index][0]
+    # No topic word overlaps with any image's content. Only fall back to the
+    # most recent image when the wording itself still signals a visual
+    # question (e.g. "can you identify it?"); otherwise this is a new,
+    # unrelated question and must not be forced through the vision model.
+    all_tokens = set(re.findall(r"[a-z0-9]+", normalized))
+    if all_tokens & IMAGE_INTENT_WORDS:
+        return image_turns[-1][0]
+    return None
 
 
 @router.get(
@@ -213,6 +320,8 @@ def consolidate_sessions(
 ):
     user_id = _get_user_id(current_user)
     session = repository.consolidate_sessions(db, user_id)
+    if session:
+        invalidate_cached_history(user_id, cast(int, session[0].id))
     logger.info(
         "chat.sessions_consolidated",
         extra={"user_id": user_id, "session_count": len(session)},
@@ -288,9 +397,11 @@ def rename_session(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    session = repository.rename_session(db, session_id, _get_user_id(current_user), payload.title)
+    user_id = _get_user_id(current_user)
+    session = repository.rename_session(db, session_id, user_id, payload.title)
     if not session:
         raise HTTPException(status_code=404, detail="Chat session not found")
+    invalidate_cached_history(user_id, session_id)
     return session
 
 
@@ -307,9 +418,14 @@ def rename_session(
 def delete_session(
     session_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
 ):
-    deleted = repository.delete_session(db, session_id, _get_user_id(current_user))
-    if not deleted:
+    user_id = _get_user_id(current_user)
+    document_ids = repository.delete_session(db, session_id, user_id)
+    if document_ids is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
+    invalidate_cached_history(user_id, session_id)
+    if settings.ENABLE_SEMANTIC_RAG:
+        for document_id in document_ids:
+            chroma_client.delete_document_chunks(user_id=user_id, document_id=document_id)
     return {"detail": "Chat session deleted"}
 
 
@@ -329,9 +445,14 @@ def delete_user_turn(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    deleted = repository.delete_user_turn(db, session_id, message_id, _get_user_id(current_user))
-    if not deleted:
+    user_id = _get_user_id(current_user)
+    document_ids = repository.delete_user_turn(db, session_id, message_id, user_id)
+    if document_ids is None:
         raise HTTPException(status_code=404, detail="Chat message not found")
+    invalidate_cached_history(user_id, session_id)
+    if settings.ENABLE_SEMANTIC_RAG:
+        for document_id in document_ids:
+            chroma_client.delete_document_chunks(user_id=user_id, document_id=document_id)
     return {"detail": "Chat turn deleted"}
 
 
@@ -351,6 +472,7 @@ def delete_user_turn(
 )
 def chat(
     request: ChatRequest,
+    background_tasks: BackgroundTasks,
     session_id: int | None = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -359,18 +481,22 @@ def chat(
 
     session = _get_or_create_chat_session(db, user_id, session_id, request.message)
 
-    history = _get_persisted_history(db, session.id)
+    history = _get_persisted_history(db, user_id, session.id)
 
     try:
         lookup = prepare_workbook_lookup(db, session.id, request.message)
         if lookup is not None:
             answer = lookup.answer()
         else:
-            document_references = _document_reference_history(db, session.id, request.message)
+            document_references = _document_reference_history(
+                db, user_id, session.id, request.message
+            )
             answer = service.chat(
                 request.message,
                 history,
                 [*request.reference_history, *document_references],
+                session_title=session.title,
+                rolling_summary=cast(str | None, session.rolling_summary),
             )
     except InvalidDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -382,6 +508,8 @@ def chat(
         raise HTTPException(status_code=503, detail=str(error))
 
     repository.add_turn(db, session.id, request.message, answer)
+    invalidate_cached_history(user_id, session.id)
+    background_tasks.add_task(_refresh_rolling_summary_task, db.get_bind(), session.id)
 
     logger.info("chat.completed", extra={"user_id": user_id, "session_id": session.id})
 
@@ -477,6 +605,7 @@ async def chat_vision(
             image_data=image_bytes,
             image_content_type=content_type,
         )
+        invalidate_cached_history(user_id, session.id)
         logger.info(
             "chat.vision_completed",
             extra={"user_id": user_id, "session_id": session.id},
@@ -512,12 +641,12 @@ async def stream_chat(
     user_id = _get_user_id(current_user)
     session = _get_or_create_chat_session(db, user_id, session_id, payload.message)
 
-    history = _get_persisted_history(db, session.id)
+    history = _get_persisted_history(db, user_id, session.id)
     try:
         lookup = prepare_workbook_lookup(db, session.id, payload.message)
     except InvalidDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    document_references = _document_reference_history(db, session.id, payload.message)
+    document_references = _document_reference_history(db, user_id, session.id, payload.message)
     image_turns = repository.get_image_turns(db, session.id)
     referenced_image = _select_referenced_image(payload.message, image_turns)
     referenced_turn = next(
@@ -536,6 +665,7 @@ async def stream_chat(
     # and emotional context even if the latest message is very short.
     vision_history.extend(item for item in history if item not in vision_history)
     repository.add_message(db, session.id, "user", payload.message)
+    invalidate_cached_history(user_id, session.id)
     logger.info("chat.stream_started", extra={"user_id": user_id, "session_id": session.id})
 
     events: asyncio.Queue[dict] = asyncio.Queue()
@@ -548,6 +678,7 @@ async def stream_chat(
         worker_db = Session(bind=database_bind)
         try:
             repository.add_message(worker_db, session.id, "bot", saved_answer)
+            invalidate_cached_history(user_id, session.id)
         except Exception:
             logger.exception(
                 "chat.interrupted_response_save_failed",
@@ -589,8 +720,16 @@ async def stream_chat(
             worker_db = Session(bind=database_bind)
             try:
                 repository.add_message(worker_db, session.id, "bot", answer)
+                invalidate_cached_history(user_id, session.id)
             finally:
                 worker_db.close()
+            # Independent task, not awaited: folding expired turns into the rolling
+            # summary must never delay the "done" event the client is waiting on.
+            memory_task = asyncio.create_task(
+                _refresh_rolling_summary_task(database_bind, session.id)
+            )
+            stream_tasks.add(memory_task)
+            memory_task.add_done_callback(stream_tasks.discard)
         logger.info("chat.stream_completed", extra={"user_id": user_id, "session_id": session.id})
         await events.put({"type": "done"})
 
@@ -599,6 +738,8 @@ async def stream_chat(
             payload.message,
             history,
             [*payload.reference_history, *document_references],
+            session_title=session.title,
+            rolling_summary=cast(str | None, session.rolling_summary),
         )
         try:
             async for chunk in iterator:

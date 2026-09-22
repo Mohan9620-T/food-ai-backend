@@ -470,7 +470,7 @@ def test_clarification_reply_reuses_persisted_conversation(client, monkeypatch):
 
     prompts = []
 
-    def plan(message, history, reference_history):
+    def plan(message, history, reference_history, **kwargs):
         prompts.append(message)
         return json.dumps(
             {

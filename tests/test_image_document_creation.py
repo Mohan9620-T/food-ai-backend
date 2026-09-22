@@ -76,7 +76,7 @@ def test_invalid_image_cannot_be_saved(client, headers, mime, data):
 
 
 @pytest.mark.parametrize("format", ["xlsx", "docx", "pdf"])
-def test_image_review_build_download_reopens_with_matching_parser(
+def test_image_direct_creation_download_reopens_with_matching_parser(
     client, headers, monkeypatch, valid_png_bytes, format, db_session
 ):
     provider = MagicMock()
@@ -104,13 +104,7 @@ def test_image_review_build_download_reopens_with_matching_parser(
         "source_document_id": source["attachment"]["id"],
         "instruction": f"Read this image and create a {format} document with item name and country name",
     }
-    review = client.post("/chat/documents/automate", headers=headers, json=payload).json()
-    assert review["status"] == "ready_for_review", review
-    assert review["attachments"] == []
-    provider.infer.assert_not_called()
-    result = client.post(
-        "/chat/documents/automate", headers=headers, json={**payload, "confirm": True}
-    ).json()
+    result = client.post("/chat/documents/automate", headers=headers, json=payload).json()
     assert result["status"] == "done", result
     attachment = result["attachments"][0]
     assert attachment["source_document_ids"] == [source["attachment"]["id"]]
@@ -169,6 +163,18 @@ def test_old_image_turn_becomes_owned_source_without_duplicate_attachments(
     client, headers, monkeypatch, valid_png_bytes, db_session, instruction
 ):
     monkeypatch.setattr(type(chat.vision_service), "describe", lambda *args: "Food labels")
+    monkeypatch.setattr(
+        ImageDocumentReader,
+        "read",
+        lambda *args, **kwargs: ImageDocumentReader._document(TRANSCRIPTION, ()),
+    )
+    monkeypatch.setattr(
+        ChatDocumentService,
+        "generate_content",
+        AsyncMock(
+            return_value=StructuredDocumentContent(title="Labels", paragraphs=["Curry India"])
+        ),
+    )
     source = client.post(
         "/chat/vision", headers=headers, files={"image": ("food.png", valid_png_bytes, "image/png")}
     ).json()
@@ -176,9 +182,8 @@ def test_old_image_turn_becomes_owned_source_without_duplicate_attachments(
     for _ in range(2):
         result = client.post("/chat/documents/automate", headers=headers, json=payload)
         assert result.status_code == 200
-        assert result.json()["status"] == "ready_for_review", result.json()
-        assert ".png" in result.json()["plan_summary"]
-    images = db_session.query(ChatDocumentAttachment).all()
+        assert result.json()["status"] == "done", result.json()
+    images = db_session.query(ChatDocumentAttachment).filter_by(kind="uploaded").all()
     assert len(images) == 1
     assert images[0].file_data == valid_png_bytes
     assert (

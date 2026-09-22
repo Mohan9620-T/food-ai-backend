@@ -5,6 +5,7 @@ These verify the application protocol, not the quality of a live model's judgmen
 
 import asyncio
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -122,6 +123,54 @@ def test_nemotron_reasoning_can_be_disabled(monkeypatch):
 
     assert hosted["max_tokens"] == 4096
     assert hosted["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["google/gemma-4-31b-it", "nvidia/nemotron-3-super-120b-a12b"],
+)
+def test_nvidia_body_respects_configured_temperature_and_top_p(monkeypatch, model):
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_MODEL", model)
+    monkeypatch.setattr(settings, "CHAT_TEMPERATURE", 0.3)
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_TOP_P", 0.9)
+    service = ChatService()
+    _, body = service._build_request_body("Explain galaxies", [], [], stream=False)
+
+    hosted = service._nvidia_body(body, stream=False)
+
+    assert hosted["temperature"] == 0.3
+    assert hosted["top_p"] == 0.9
+
+
+def test_chat_defaults_to_configured_conversational_temperature(monkeypatch):
+    monkeypatch.setattr(settings, "CHAT_TEMPERATURE", 0.42)
+    _, body = ChatService()._build_request_body("Hello", [], [], stream=False)
+
+    assert body["options"]["temperature"] == 0.42
+
+
+def test_complete_chat_defaults_to_configured_document_ai_temperature(monkeypatch):
+    monkeypatch.setattr(settings, "DOCUMENT_AI_TEMPERATURE", 0.15)
+    monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "unit-test-key")
+    original_client = httpx.AsyncClient
+    seen_body = {}
+
+    async def handler(request):
+        seen_body.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"choices": [{"finish_reason": "stop", "message": {"content": "ok"}}]},
+        )
+
+    def mocked_client(*args, **kwargs):
+        return original_client(*args, transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr("app.services.chat_service.httpx.AsyncClient", mocked_client)
+
+    asyncio.run(ChatService().complete_chat("Summarize this", [], []))
+
+    assert seen_body["temperature"] == 0.15
 
 
 def test_nvidia_truncation_reports_incomplete_without_mixing_providers(monkeypatch):
@@ -276,6 +325,10 @@ def test_saved_session_context_beyond_twelve_messages_reaches_model(client, monk
         return Response()
 
     monkeypatch.setattr("app.services.chat_service.requests.post", post)
+    # 28 imported messages exceed HISTORY_MESSAGE_LIMIT, so this turn would also
+    # trigger a real background rolling-summary call; keep this test scoped to
+    # the main chat response only.
+    monkeypatch.setattr(ChatService, "complete_chat", AsyncMock(return_value="Summary."))
     response = client.post(
         f"/chat/?session_id={session['id']}",
         json={"message": "What now?", "history": [{"role": "user", "content": "Browser detail"}]},

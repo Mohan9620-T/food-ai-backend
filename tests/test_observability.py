@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 import httpx
 
 from app import main
+from app.config import settings
 
 
 def test_health_remains_backward_compatible(client):
@@ -60,6 +61,60 @@ def test_readiness_returns_503_when_dependencies_are_unavailable(client, monkeyp
         "status": "Not Ready",
         "checks": {"database": "down", "ollama": "down"},
     }
+
+
+def test_readiness_ignores_redis_when_cache_disabled(client, monkeypatch):
+    connection = MagicMock()
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    monkeypatch.setattr(main.engine, "connect", MagicMock(return_value=context))
+    ollama_response = MagicMock()
+    ollama_response.raise_for_status.return_value = None
+    monkeypatch.setattr(main.httpx, "get", MagicMock(return_value=ollama_response))
+    monkeypatch.setattr(settings, "ENABLE_REDIS_CACHE", False)
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 200
+    assert "redis" not in response.json()["checks"]
+
+
+def test_readiness_reports_redis_down_without_affecting_overall_readiness(client, monkeypatch):
+    connection = MagicMock()
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    monkeypatch.setattr(main.engine, "connect", MagicMock(return_value=context))
+    ollama_response = MagicMock()
+    ollama_response.raise_for_status.return_value = None
+    monkeypatch.setattr(main.httpx, "get", MagicMock(return_value=ollama_response))
+    monkeypatch.setattr(settings, "ENABLE_REDIS_CACHE", True)
+    monkeypatch.setattr(main, "get_redis_client", MagicMock(return_value=None))
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "Ready"
+    assert body["checks"]["redis"] == "down"
+
+
+def test_readiness_reports_redis_up_when_reachable(client, monkeypatch):
+    connection = MagicMock()
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    monkeypatch.setattr(main.engine, "connect", MagicMock(return_value=context))
+    ollama_response = MagicMock()
+    ollama_response.raise_for_status.return_value = None
+    monkeypatch.setattr(main.httpx, "get", MagicMock(return_value=ollama_response))
+    monkeypatch.setattr(settings, "ENABLE_REDIS_CACHE", True)
+    fake_client = MagicMock()
+    fake_client.ping.return_value = True
+    monkeypatch.setattr(main, "get_redis_client", MagicMock(return_value=fake_client))
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 200
+    assert response.json()["checks"]["redis"] == "up"
 
 
 def test_metrics_exposes_prometheus_request_metrics(client):

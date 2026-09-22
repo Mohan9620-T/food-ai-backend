@@ -209,7 +209,7 @@ def test_trailing_blank_cells_and_invalid_cell_values():
     book.close()
 
 
-def test_upload_append_missing_data_clarification_review_build_and_download(client, monkeypatch):
+def test_upload_append_missing_data_clarification_direct_creation_and_download(client, monkeypatch):
     def no_ai(*args, **kwargs):
         raise AssertionError("Appending supplied rows must not call AI")
 
@@ -237,16 +237,8 @@ def test_upload_append_missing_data_clarification_review_build_and_download(clie
         "/chat/documents/automate", headers=headers, json={**base, "instruction": LEAD}
     ).json()
     assert question["status"] == "clarification_required"
-    review = client.post(
-        "/chat/documents/automate", headers=headers, json={**base, "instruction": DATA}
-    ).json()
-    assert review["status"] == "ready_for_review", review
-    assert "add 2 new rows" in review["plan_summary"] and "'Items'" in review["plan_summary"]
-    assert review["attachments"] == []
     result = client.post(
-        "/chat/documents/automate",
-        headers=headers,
-        json={**base, "instruction": DATA, "confirm": True},
+        "/chat/documents/automate", headers=headers, json={**base, "instruction": DATA}
     ).json()
     assert result["status"] == "done", result
     assert result["steps"][0]["operation"] == "append_workbook_rows"

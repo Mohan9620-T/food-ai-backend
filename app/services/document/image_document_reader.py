@@ -218,6 +218,21 @@ in answer; keep items empty to avoid duplicating the data. Do not summarize or t
         )
 
     @staticmethod
+    def display_text(text: str) -> str:
+        """Keep OCR coordinates for processing, but show users the actual source text."""
+        prefix = "Image OCR lines (left/top are pixel coordinates):\n"
+        if not text.startswith(prefix):
+            return text
+        try:
+            lines = [json.loads(line) for line in text[len(prefix) :].splitlines() if line.strip()]
+            if not lines or any(not isinstance(line.get("text"), str) for line in lines):
+                return text
+            return "\n\n".join(line["text"] for line in lines)
+        except (ValueError, AttributeError):
+            # Never drop source data when an older extraction has an unexpected shape.
+            return text
+
+    @staticmethod
     def _tables(text: str) -> tuple[ExtractedTable, ...]:
         tables: list[ExtractedTable] = []
         lines = text.splitlines()

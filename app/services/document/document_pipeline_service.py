@@ -37,6 +37,7 @@ from app.services.document.extraction_models import (
     GeneratedSectionContent,
     StructuredDocumentContent,
 )
+from app.services.document.image_document_reader import ImageDocumentReader
 from app.services.spreadsheet.row_append import AppendRowsRequest, WorkbookRowAppender
 from app.services.spreadsheet.row_selection import RowSelection, WorkbookRowSelector
 
@@ -204,6 +205,29 @@ class DocumentPipelineService:
         """Validate a complete AI-authored plan before touching document bytes."""
         if not requested_steps:
             raise UnsupportedDocumentOperationError("The document plan contains no steps.")
+        # A simple file plan must not swallow an explicit request for chat text too.
+        first = requested_steps[0]
+        if (
+            len(requested_steps) == 1
+            and first.output_type is not None
+            and isinstance(first.input_file or input_filename, str)
+            and re.search(r"\b(?:extract|transcribe|read)\b", request_instruction or "", re.I)
+            and re.search(
+                r"\b(?:in(?:to)? (?:the )?chat|chatla|chatlayum|text (?:output|response))\b",
+                request_instruction or "",
+                re.I,
+            )
+        ):
+            requested_steps = (
+                StructuredPipelineStep(
+                    document_type=None,
+                    operation=DocumentOperation.EXTRACT_DOCUMENT,
+                    input_file=first.input_file or input_filename,
+                    output_type=None,
+                    parameters={},
+                ),
+                *requested_steps,
+            )
         if len(requested_steps) > self.max_steps:
             raise InvalidDocumentParametersError(
                 f"A document plan can contain at most {self.max_steps} steps."
@@ -517,6 +541,35 @@ class DocumentPipelineService:
                     extracted_sources.append(extracted_source)
                     if on_extracted is not None:
                         on_extracted(source, extracted_source)
+            if (
+                context_texts
+                and step.intent.output_type
+                in {DocumentType.PDF, DocumentType.DOCX, DocumentType.TXT, DocumentType.MARKDOWN}
+                and re.search(
+                    r"\bsame (?:extracted )?(?:information|content|data|text)\b"
+                    r"|\b(?:do not|don't) summari[sz]e\b|\bverbatim\b",
+                    request_instruction,
+                    re.I,
+                )
+            ):
+                # Export the actual text results without a second model rewriting them.
+                requested_filename = step.intent.parameters.get("filename")
+                generated = await asyncio.to_thread(
+                    self.document_service.document_generator.generate,
+                    "\n\n".join(context_texts),
+                    step.intent.output_type.value,
+                    requested_filename=(str(requested_filename) if requested_filename else None),
+                )
+                if any(item.document_type == DocumentType.IMAGE for item in extracted_sources):
+                    generated = replace(
+                        generated,
+                        fidelity=Fidelity.BEST_EFFORT,
+                        fidelity_note="Exported the image transcription; recognition errors may remain.",
+                    )
+                return replace(
+                    self._agent_document_result(step, generated, f"Created {generated.filename}."),
+                    extracted_documents=tuple(extracted_sources),
+                )
             generated_content = await self.document_service.generate_content(
                 step.instruction or request_instruction,
                 list(context_texts),
@@ -578,6 +631,12 @@ class DocumentPipelineService:
             self.document_service.extract_document,
             selected.file_data,
             selected.filename,
+            **(
+                {"image_instruction": request_instruction}
+                if self.intent_service.registry.document_type_from_filename(selected.filename)
+                == DocumentType.IMAGE
+                else {}
+            ),
         )
         if on_extracted is not None:
             on_extracted(selected, extracted)
@@ -585,7 +644,11 @@ class DocumentPipelineService:
             DocumentOperation.READ_DOCUMENT,
             DocumentOperation.EXTRACT_DOCUMENT,
         }:
-            text = extracted.text
+            text = (
+                ImageDocumentReader.display_text(extracted.text)
+                if extracted.document_type == DocumentType.IMAGE
+                else extracted.text
+            )
         elif step.intent.operation == DocumentOperation.SUMMARIZE_DOCUMENT:
             text = await self.document_service.summarize(extracted, step.instruction)
         else:

@@ -162,6 +162,53 @@ class ChatRepository:
         )
         return list(reversed(messages))
 
+    def get_messages_since(
+        self,
+        db: Session,
+        session_id: int,
+        *,
+        after_message_id: int | None,
+        before_message_id: int,
+        limit: int = 200,
+    ) -> list[ChatMessageRecord]:
+        """Return non-internal messages strictly between two ids, oldest first.
+
+        Used to fold exactly the turns about to leave the visible history
+        window into the rolling summary: everything after the last-summarized
+        message (``after_message_id``, the watermark) and before the oldest
+        message still inside the visible window (``before_message_id``). This
+        never re-selects an already-summarized message, so the caller can
+        advance the watermark to the newest id returned without ever
+        double-summarizing or skipping a turn.
+        """
+        query = db.query(ChatMessageRecord).filter(
+            ChatMessageRecord.session_id == session_id,
+            ChatMessageRecord.is_internal.is_(False),
+            ChatMessageRecord.id < before_message_id,
+        )
+        if after_message_id is not None:
+            query = query.filter(ChatMessageRecord.id > after_message_id)
+        return (
+            query.order_by(ChatMessageRecord.created_at.asc(), ChatMessageRecord.id.asc())
+            .limit(limit)
+            .all()
+        )
+
+    def update_rolling_summary(
+        self,
+        db: Session,
+        session_id: int,
+        *,
+        summary: str,
+        through_message_id: int,
+    ) -> None:
+        session = db.get(ChatSession, session_id)
+        if session is None:
+            return
+        setattr(session, "rolling_summary", summary)
+        setattr(session, "summary_covers_through_message_id", through_message_id)
+        db.commit()
+
     def get_image_turns(
         self,
         db: Session,
@@ -543,7 +590,7 @@ class ChatRepository:
 
     def get_document_contexts(
         self, db: Session, session_id: int, limit: int = 4
-    ) -> list[tuple[str, str]]:
+    ) -> list[tuple[int, str, str]]:
         """Return recent original uploads as deterministic evidence for chat Q&A."""
         rows = (
             db.query(ChatDocumentAttachment)
@@ -560,7 +607,7 @@ class ChatRepository:
             .all()
         )
         return [
-            (str(row.filename), str(row.raw_text))
+            (int(row.id), str(row.filename), str(row.raw_text))
             for row in reversed(rows)
             if str(row.raw_text or "").strip()
         ]
@@ -662,28 +709,49 @@ class ChatRepository:
         db.refresh(session)
         return session
 
-    def delete_session(self, db: Session, session_id: int, user_id: int) -> bool:
+    def delete_session(self, db: Session, session_id: int, user_id: int) -> list[int] | None:
+        """Delete a session, returning the ids of any document attachments it
+        held (None if the session was not found) so callers can clean up
+        anything indexed outside Postgres, e.g. Chroma chunks, afterward.
+        """
         session = self.get_session(db, session_id, user_id)
         if not session:
-            return False
+            return None
+        document_ids = [
+            int(message.document_attachment.id)
+            for message in session.messages
+            if message.document_attachment is not None
+        ]
         db.delete(session)
         db.commit()
-        return True
+        return document_ids
 
-    def delete_user_turn(self, db: Session, session_id: int, message_id: int, user_id: int) -> bool:
+    def delete_user_turn(
+        self, db: Session, session_id: int, message_id: int, user_id: int
+    ) -> list[int] | None:
+        """Delete a user turn, returning the ids of any document attachments
+        it held (None if the turn was not found), mirroring delete_session.
+        """
         session = self.get_session(db, session_id, user_id)
         if not session:
-            return False
+            return None
         messages = list(session.messages)
         message_index = next(
             (index for index, message in enumerate(messages) if message.id == message_id), None
         )
         if message_index is None or messages[message_index].sender != "user":
-            return False
-        db.delete(messages[message_index])
+            return None
+        turn_messages = [messages[message_index]]
         for following in messages[message_index + 1 :]:
             if following.sender == "user":
                 break
-            db.delete(following)
+            turn_messages.append(following)
+        document_ids = [
+            int(message.document_attachment.id)
+            for message in turn_messages
+            if message.document_attachment is not None
+        ]
+        for message in turn_messages:
+            db.delete(message)
         db.commit()
-        return True
+        return document_ids

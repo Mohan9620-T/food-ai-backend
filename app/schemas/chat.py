@@ -122,6 +122,7 @@ class ChatDocumentAutomationRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=4000)
     source_document_id: int | None = Field(default=None, gt=0)
     source_mode: Literal["auto", "description"] = "auto"
+    # Accepted for older clients; ready requests now execute without a confirmation gate.
     confirm: bool = False
 
     @model_validator(mode="after")

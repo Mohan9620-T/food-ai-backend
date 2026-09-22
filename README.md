@@ -410,11 +410,12 @@ For production or staging, add the exact frontend origin to `ALLOWED_ORIGINS`.
   ordinal references such as `the first PDF`, and collective references such as `both PDFs`.
   Ambiguous requests return one clarification question and use persisted chat history to resolve
   the reply. Optional `clarification.options` supplies 2–5 choices; a plain question remains valid.
-  By default, a ready plan returns `status: "ready_for_review"` and `plan_summary` without executing
-  or generating any file. Repeat the last instruction with `confirm: true` to re-plan and execute;
-  confirmation still returns clarification if details are missing. The Angular cards show choices,
-  a running answer summary and a Build action through the same `/automate` endpoint. There is no
-  separate wizard state endpoint or new database migration for this gate. Every generated
+  Ready requests execute immediately; no review or Build click is required. Clarification choices
+  appear in the chat composer only when essential information is missing. The legacy `confirm`
+  field remains accepted, but does not gate execution. Requests for both chat text and a file
+  return the completed text steps followed by downloadable attachments; a later file failure
+  still returns the text already extracted. Explicit exports of the same extracted text to
+  PDF/Word preserve that text without a second model rewrite. Every generated
   intermediate is validated and saved, while all useful outputs are
   returned as normal downloadable chat attachments. See
   [Phase 5 document automation](docs/universal-document-phase5.md). Production
@@ -457,7 +458,7 @@ For production or staging, add the exact frontend origin to `ALLOWED_ORIGINS`.
   Word and PDF use the same flow. Ordinary image questions still return a chat answer.
   To create a new file from written requirements, no upload is required. A missing image
   mentioned only as a layout example uses a standard layout. If an earlier request is
-  waiting for a source, choose **Create without uploading**, then review and Build.
+  waiting for a source, choose **Create without uploading** to generate from written requirements.
   This chooses `source_mode: "description"` on `/chat/documents/automate` and persists
   that choice across reloads; do not combine it with `source_document_id`.
   Extracting actual image data still requires an uploaded image.

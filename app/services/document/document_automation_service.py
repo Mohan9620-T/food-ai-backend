@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from app.config import settings
 from app.schemas.chat import ChatHistoryMessage, ClarificationOption
 from app.services.chat_service import ChatService
 from app.services.document.document_operation_registry import (
@@ -294,7 +295,10 @@ class DocumentAutomationService:
                 "input_file null. Ignore obsolete requests to upload in earlier assistant turns."
             )
         response = self.chat_service.chat(
-            prompt, history=conversation_history or [], reference_history=[]
+            prompt,
+            history=conversation_history or [],
+            reference_history=[],
+            temperature=settings.DOCUMENT_AI_TEMPERATURE,
         )
         envelope = self._parse_envelope(response)
         if envelope.status == "clarification_required":
@@ -793,6 +797,11 @@ class DocumentAutomationService:
         explicit_source: bool,
         multi_input: bool,
     ) -> str | list[str] | None:
+        if index == 0 and explicit_source and not multi_input:
+            # The uploaded/selected attachment ID outranks a filename guessed from history.
+            selected = next((document for document in documents if document.is_latest), None)
+            if selected is not None:
+                return selected.filename
         if planned is not None:
             values = planned if isinstance(planned, list) else [planned]
             resolved: list[str] = []
@@ -1019,6 +1028,9 @@ class DocumentAutomationService:
             "answer questions, create files, modify files, merge PDFs, transform spreadsheets, or "
             "convert documents. A null input_file after step one consumes the preceding file output; "
             "text results remain available as context for later create_document steps. The "
+            "user can request BOTH text in chat and a downloadable file: include a text operation "
+            "(extract_document for complete transcription) before create_document, using the same "
+            "selected source. Do not replace the requested chat text with a file-only step. "
             "document_type field always describes an input/source type; for create_document set "
             "document_type to null and put the requested target only in output_type. Name exact "
             "available filenames for separate source branches. merge_pdf requires a list of at least "

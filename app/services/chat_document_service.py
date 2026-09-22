@@ -1472,7 +1472,7 @@ class ChatDocumentService:
                     prompt,
                     history,
                     [],
-                    **({"max_tokens": token_limit} if token_limit is not None else {}),
+                    max_tokens=token_limit,
                 )
         except TimeoutError as error:
             logger.warning("chat.document_ai_timeout")

@@ -465,7 +465,7 @@ def test_document_prompt_injection_remains_delimited_untrusted_data():
     prompts = []
 
     class CapturingChat:
-        async def complete_chat(self, message, history, reference_history):
+        async def complete_chat(self, message, history, reference_history, **kwargs):
             del history, reference_history
             prompts.append(message)
             return "The revenue is 125."

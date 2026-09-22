@@ -289,7 +289,7 @@ def test_description_mode_cannot_invent_rows_from_an_unselected_source():
     assert "upload" in plan.clarifying_question.lower()
 
 
-def test_review_build_download_and_history_use_real_source_cells(client, monkeypatch):
+def test_direct_creation_download_and_history_use_real_source_cells(client, monkeypatch):
     def no_model(*args, **kwargs):
         raise AssertionError("Exact row selection must not call AI")
 
@@ -313,14 +313,9 @@ def test_review_build_download_and_history_use_real_source_cells(client, monkeyp
         "source_document_id": upload["attachment"]["id"],
         "instruction": REQUEST,
     }
-    review = client.post("/chat/documents/automate", headers=headers, json=payload)
-    assert review.status_code == 200
-    assert review.json()["status"] == "ready_for_review"
-    assert review.json()["attachments"] == []
-    assert "24138, 24101, 24102" in review.json()["plan_summary"]
-    built = client.post(
-        "/chat/documents/automate", headers=headers, json={**payload, "confirm": True}
-    ).json()
+    response = client.post("/chat/documents/automate", headers=headers, json=payload)
+    assert response.status_code == 200
+    built = response.json()
     assert built["status"] == "done", built
     assert "Matched 5 rows" in built["response"]
     document = built["attachments"][0]

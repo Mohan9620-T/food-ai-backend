@@ -36,6 +36,14 @@ class ChatSession(Base):
         nullable=True,
         index=True,
     )
+    # Rolling summary of turns that have fallen outside the visible history
+    # window, plus the id of the last message folded into it (a watermark so
+    # the same turns are never re-summarized). Structured facts extracted from
+    # the conversation (topic, decisions, constraints, ...) live in
+    # memory_facts as a single JSON blob rather than normalized columns.
+    rolling_summary = Column(Text, nullable=True)
+    summary_covers_through_message_id = Column(Integer, nullable=True)
+    memory_facts = Column(JSON, nullable=True)
 
     messages = relationship(
         "ChatMessageRecord",

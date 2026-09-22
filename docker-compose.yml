@@ -29,6 +29,34 @@ services:
       timeout: 5s
       retries: 20
 
+  # Optional chat-context cache. The backend only connects to this when
+  # ENABLE_REDIS_CACHE=true is set in .env; otherwise it is simply unused,
+  # so this service is safe to leave running with the flag off.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Optional semantic document retrieval index. The backend only connects to
+  # this when ENABLE_SEMANTIC_RAG=true is set in .env; otherwise unused.
+  # No in-container healthcheck: the official image ships no curl/wget/python
+  # to probe its own HTTP API with. Reachability is instead verified from the
+  # backend's own /health/ready endpoint (chroma is not in backend's
+  # depends_on, so this never blocks the rest of the stack from starting).
+  chroma:
+    image: chromadb/chroma:1.5.9
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+
   backend:
     build:
       context: .
@@ -45,6 +73,10 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       OLLAMA_URL: http://ollama:11434/api/chat
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in the project .env file}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,3 +88,4 @@ services:
 volumes:
   postgres_data:
   ollama_models:
+  chroma_data:

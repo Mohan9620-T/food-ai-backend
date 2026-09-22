@@ -249,7 +249,7 @@ def test_chat_success_with_valid_token(client, monkeypatch):
     monkeypatch.setattr(
         ChatService,
         "chat",
-        lambda self, message, history, reference_history: "Vanakkam! Nalla irukeenga?",
+        lambda self, message, history, reference_history, **kwargs: "Vanakkam! Nalla irukeenga?",
     )
 
     response = client.post(
@@ -272,7 +272,7 @@ def test_chat_uses_saved_session_history_instead_of_browser_history(client, monk
     headers = {"Authorization": f"Bearer {token}"}
     captured_histories = []
 
-    def fake_chat(self, message, history, reference_history):
+    def fake_chat(self, message, history, reference_history, **kwargs):
         captured_histories.append([(item.role, item.content) for item in history])
         return "Understood, boss." if len(captured_histories) == 1 else "Here you go, boss."
 
@@ -385,7 +385,7 @@ def test_chat_stream_timeout_returns_error_chunk_and_closes_cleanly(client, monk
 def test_chat_stream_returns_session_tokens_and_persists_answer(client, monkeypatch):
     token = _register_and_login(client, email="stream@example.com")
 
-    async def fake_stream(self, message, history, reference_history):
+    async def fake_stream(self, message, history, reference_history, **kwargs):
         yield "Hello "
         yield "there"
 
@@ -581,13 +581,65 @@ def test_chat_stream_honors_explicit_historical_image_number(
     assert selected_images == [b"image-2"]
 
 
+def test_chat_stream_treats_unrelated_topic_after_image_as_plain_text(
+    client,
+    db_session,
+    monkeypatch,
+):
+    token = _register_and_login(client, email="unrelated-topic-after-image@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = client.post(
+        "/chat/sessions", json={"title": "Diagram chat"}, headers=headers
+    ).json()["id"]
+    db_session.add(
+        ChatMessageRecord(
+            session_id=session_id,
+            sender="user",
+            content="What does this diagram show?",
+            image_data=b"testing-types-diagram",
+            image_content_type="image/png",
+        )
+    )
+    db_session.add(
+        ChatMessageRecord(
+            session_id=session_id,
+            sender="bot",
+            content=(
+                "The image is a diagram titled 'Software Testing Types' with categories "
+                "like Functional Testing and Non-Functional Testing."
+            ),
+        )
+    )
+    db_session.commit()
+
+    def unexpected_vision(self, image_bytes, user_message, conversation_history=()):
+        raise AssertionError("An unrelated new topic must not reuse the earlier image")
+
+    async def fake_text_stream(self, message, history, reference_history, **kwargs):
+        yield "Ramen noodles are a Japanese noodle dish served in broth."
+
+    monkeypatch.setattr(ChatVisionService, "describe", unexpected_vision)
+    monkeypatch.setattr(ChatService, "stream_chat", fake_text_stream)
+
+    response = client.post(
+        f"/chat/stream?session_id={session_id}",
+        json={"message": "ramen noodles", "history": [], "reference_history": []},
+        headers=headers,
+    )
+
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    assert [event.get("content") for event in events if event["type"] == "token"] == [
+        "Ramen noodles are a Japanese noodle dish served in broth."
+    ]
+
+
 def test_chat_stream_generation_is_not_stopped_by_request_disconnect_check(client, monkeypatch):
     from starlette.requests import Request
 
     token = _register_and_login(client, email="disconnect@example.com")
     pulled = False
 
-    async def fake_stream(self, message, history, reference_history):
+    async def fake_stream(self, message, history, reference_history, **kwargs):
         nonlocal pulled
         pulled = True
         yield "must not be read"
@@ -749,6 +801,63 @@ def test_chat_service_bounds_old_context_for_faster_local_inference():
     assert len(truncated) <= ChatService.CONTEXT_MESSAGE_CHAR_LIMIT
 
 
+def test_build_request_body_injects_topic_anchor_for_a_real_title():
+    _, body = ChatService()._build_request_body(
+        "What else should I add?",
+        [],
+        [],
+        stream=False,
+        session_title="Meal plan for diabetic patients",
+    )
+
+    topic_messages = [
+        item
+        for item in body["messages"]
+        if item["role"] == "system" and "CURRENT CONVERSATION TOPIC" in item["content"]
+    ]
+    assert len(topic_messages) == 1
+    assert "Meal plan for diabetic patients" in topic_messages[0]["content"]
+
+
+@pytest.mark.parametrize("session_title", ["New chat", None])
+def test_build_request_body_omits_topic_anchor_for_untitled_sessions(session_title):
+    _, body = ChatService()._build_request_body(
+        "What else should I add?",
+        [],
+        [],
+        stream=False,
+        session_title=session_title,
+    )
+
+    assert not any("CURRENT CONVERSATION TOPIC" in item["content"] for item in body["messages"])
+
+
+def test_chat_thread_session_title_into_request_body(monkeypatch):
+    captured = {}
+    original = ChatService._build_request_body
+
+    def spy(self, message, history, reference_history, *, stream, **kwargs):
+        captured.update(kwargs)
+        return original(self, message, history, reference_history, stream=stream, **kwargs)
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": "Sure, here's more."}}
+
+    monkeypatch.setattr(ChatService, "_build_request_body", spy)
+    monkeypatch.setattr(
+        "app.services.chat_service.requests.post",
+        lambda url, json, timeout: FakeResponse(),
+    )
+
+    ChatService().chat("Hello", [], [], session_title="Meal plan for diabetic patients")
+
+    assert captured["session_title"] == "Meal plan for diabetic patients"
+
+
 def test_delete_user_turn_removes_its_following_bot_response(client):
     token = _register_and_login(client, "delete-turn@example.com")
     headers = {"Authorization": f"Bearer {token}"}
@@ -804,6 +913,14 @@ def test_system_prompt_requests_readable_markdown_and_relevant_emojis():
     assert "one short, relevant next-step suggestion" in prompt
     assert "Do not use the same generic suggestion every time" in prompt
     assert "Omit this closing" in prompt and "suggestion when" in prompt
+
+
+def test_system_prompt_no_longer_deprioritizes_conversation_history():
+    prompt = ChatService.SYSTEM_PROMPT
+
+    assert "use conversation history only as context" not in prompt
+    assert "stated conversation topic" in prompt
+    assert "clearly changes the subject" in prompt
 
 
 def test_language_detection_uses_latest_message_only():
@@ -1375,7 +1492,8 @@ def test_file_capability_answers_do_not_depend_on_the_provider(monkeypatch, ques
     monkeypatch.setattr(ChatService, "_complete_with_ollama", unexpected)
     answer = asyncio.run(ChatService().complete_chat(question, [], []))
     assert "downloadable Word (.docx)" in answer
-    assert "Build my document file" in answer
+    assert "created automatically" in answer
+    assert "Build my document file" not in answer
     assert ChatService()._immediate_answer("Create a Word document from this PDF") is None
 
 
@@ -1404,7 +1522,7 @@ def test_interrupted_answer_is_saved_with_notice_and_never_emits_done(client, mo
     headers = {"Authorization": f"Bearer {token}"}
     failure = "The response reached its output limit before it finished. Please retry with a shorter request."
 
-    async def truncated_stream(self, message, history, reference_history):
+    async def truncated_stream(self, message, history, reference_history, **kwargs):
         yield "A partial answer"
         raise ChatModelUnavailableError(failure)
 

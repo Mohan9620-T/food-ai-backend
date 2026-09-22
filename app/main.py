@@ -22,8 +22,10 @@ from app.api.nvidia_chat import router as nvidia_chat_router
 from app.api.profile import router as profile_router
 from app.api.user_api import router as user_router
 from app.config import settings
+from app.database.chroma_client import get_chroma_client
 from app.database.database import engine
 from app.database.migration_check import warn_if_migrations_pending
+from app.database.redis_client import get_redis_client
 from app.logging_config import configure_logging
 from app.rate_limit import limiter
 
@@ -118,6 +120,32 @@ def readiness() -> JSONResponse:
         logger.warning("readiness_dependency_unavailable", extra={"dependency": "ollama"})
 
     ready = all(value == "up" for value in checks.values())
+
+    # Redis is an optional cache: report its health for visibility, but never let
+    # it being down or disabled affect overall readiness (chat degrades to Postgres).
+    if settings.ENABLE_REDIS_CACHE:
+        checks["redis"] = "up"
+        try:
+            client = get_redis_client()
+            if client is None or not client.ping():
+                raise RuntimeError("redis unavailable")
+        except Exception:
+            checks["redis"] = "down"
+            logger.warning("readiness_dependency_unavailable", extra={"dependency": "redis"})
+
+    # Chroma is an optional semantic-retrieval index: report its health for
+    # visibility, but never let it being down or disabled affect overall
+    # readiness (chat degrades to deterministic raw_text document context).
+    if settings.ENABLE_SEMANTIC_RAG:
+        checks["chroma"] = "up"
+        try:
+            chroma = get_chroma_client()
+            if chroma is None:
+                raise RuntimeError("chroma unavailable")
+            chroma.heartbeat()
+        except Exception:
+            checks["chroma"] = "down"
+            logger.warning("readiness_dependency_unavailable", extra={"dependency": "chroma"})
     return JSONResponse(
         status_code=200 if ready else 503,
         content={"status": "Ready" if ready else "Not Ready", "checks": checks},

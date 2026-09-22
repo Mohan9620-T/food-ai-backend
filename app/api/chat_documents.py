@@ -40,6 +40,7 @@ from app.services.chat_service import ChatModelUnavailableError
 from app.services.conversion.document_conversion_service import (
     UnsupportedDocumentConversionError,
 )
+from app.services.document import semantic_retrieval
 from app.services.document.document_automation_service import (
     AvailableDocument,
     DocumentAutomationPlanningError,
@@ -161,9 +162,11 @@ def _completion_message(filenames: list[str], text_result: str | None) -> str:
     if not filenames:
         return text_result or "Done. I completed the document request."
     if len(filenames) == 1:
-        return f"Done — I created {filenames[0]}. It is attached below."
-    joined = ", ".join(filenames[:-1]) + f" and {filenames[-1]}"
-    return f"Done — I created {joined}. All files are attached below."
+        completion = f"Done — I created {filenames[0]}. It is attached below."
+    else:
+        joined = ", ".join(filenames[:-1]) + f" and {filenames[-1]}"
+        completion = f"Done — I created {joined}. All files are attached below."
+    return f"{text_result}\n\n{completion}" if text_result else completion
 
 
 async def _save_selected_rows(
@@ -290,7 +293,7 @@ async def upload_document(
             raise HTTPException(status_code=404, detail="Chat session not found")
     try:
         if image_upload and not analyze:
-            # Save the original before any model request; extraction happens on Build.
+            # Save the original before the chained automation request extracts its data.
             extracted = ExtractedDocument(
                 document_type=DocumentType.IMAGE,
                 text="",
@@ -407,7 +410,7 @@ async def upload_document(
         resolved_session = repository.create_session(db, user_id, user_text[:60])
     resolved_session_id = cast(int, resolved_session.id)
     saved_notice = (
-        "The image is saved. Review your document request, then build to extract its data."
+        "The image is saved."
         if image_upload and not analyze
         else "The file and its extracted text are saved. "
         "You can download the original or export the saved text as PDF or Word."
@@ -423,6 +426,15 @@ async def upload_document(
         raw_text=raw_text,
         extracted=extracted if not (image_upload and not analyze) else None,
     )
+    if settings.ENABLE_SEMANTIC_RAG and not (image_upload and not analyze):
+        await asyncio.to_thread(
+            semantic_retrieval.index_document,
+            user_id=user_id,
+            session_id=resolved_session_id,
+            document_id=cast(int, attachment.id),
+            filename=filename,
+            extracted=extracted,
+        )
     if selected_rows is not None and selection is not None:
         return await _save_selected_rows(
             db, attachment, user_text, selected_rows, selection, bot_record
@@ -1161,9 +1173,8 @@ async def run_document_pipeline(
     summary="Automate document changes from natural language",
     description=(
         "Plan a document workflow from the instruction and chat history. Ambiguous requests "
-        "return a clarifying question, optionally with choices. Ready requests return a review "
-        "summary without execution unless confirm is true. Confirmed requests re-plan and run "
-        "the existing document pipeline, returning its completion message and final files."
+        "return a clarifying question, optionally with choices. Ready requests execute directly, "
+        "returning all requested text results and validated downloadable files."
     ),
     responses={
         404: {"description": "Chat session or selected source document was not found."},
@@ -1273,7 +1284,6 @@ async def automate_document(
             )
             return _save_automation_response(db, payload, response_payload)
 
-        append_review = None
         for step in plan.steps:
             if step.intent.operation != DocumentOperation.APPEND_WORKBOOK_ROWS:
                 continue
@@ -1284,15 +1294,10 @@ async def automate_document(
             if source is None:
                 continue
             try:
-                resolved_append = await asyncio.to_thread(
+                await asyncio.to_thread(
                     WorkbookRowAppender().resolve,
                     cast(bytes, source.file_data),
                     AppendRowsRequest.model_validate(step.intent.parameters),
-                )
-                append_review = (
-                    f"Review before building: add {len(resolved_append.rows)} new rows to "
-                    f"'{resolved_append.sheet_name}' in {source.filename}, producing an updated XLSX. "
-                    "Existing records and formulas will be preserved. No file has been built yet."
                 )
             except InvalidDocumentError as error:
                 return _save_automation_response(
@@ -1304,32 +1309,6 @@ async def automate_document(
                         status="clarification_required",
                     ),
                 )
-
-        if payload.confirm is not True and any(step.produces_document for step in plan.steps):
-            summary = append_review or automation_service.summarize_plan(plan)
-            # Repeated previews reuse the persisted review, including its choices.
-            if (
-                len(history) >= 2
-                and history[-2].role == "user"
-                and history[-2].content == payload.instruction
-                and history[-1].content == summary
-            ):
-                previous = repository.get_message_history(db, payload.session_id, limit=1)[0]
-                if previous.automation is not None:
-                    db.commit()
-                    return ChatDocumentAutomationResponse.model_validate(
-                        previous.automation["response"]
-                    )
-            return _save_automation_response(
-                db,
-                payload,
-                ChatDocumentAutomationResponse(
-                    response=summary,
-                    session_id=payload.session_id,
-                    status="ready_for_review",
-                    plan_summary=summary,
-                ),
-            )
 
         repository.add_message(db, payload.session_id, "user", payload.instruction, commit=False)
         runtime_documents = {str(document.filename).casefold(): document for document in documents}
@@ -1568,6 +1547,8 @@ async def automate_document(
                 else f"I couldn't complete the requested document changes. {failure_reason}"
             )
             response += _fidelity_message(fidelity_results)
+            if context_texts:
+                response = "\n\n".join([*context_texts, response])
             if completed_records:
                 setattr(completed_records[-1], "is_internal", False)
                 setattr(completed_records[-1], "content", response)
@@ -1592,7 +1573,7 @@ async def automate_document(
             )
 
         filenames = [str(attachment.filename) for attachment in completed_attachments]
-        response = _completion_message(filenames, context_texts[-1] if context_texts else None)
+        response = _completion_message(filenames, "\n\n".join(context_texts) or None)
         if completion_details:
             response += " " + " ".join(completion_details)
         response += _fidelity_message(fidelity_results)

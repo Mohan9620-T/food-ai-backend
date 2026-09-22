@@ -148,7 +148,7 @@ def test_semantic_analysis_uses_deterministically_extracted_text(document_type):
     calls = []
 
     class CapturingChatService:
-        async def complete_chat(self, message, history, reference_history):
+        async def complete_chat(self, message, history, reference_history, **kwargs):
             calls.append((message, history, reference_history))
             return "Oats revenue is 125."
 
@@ -277,7 +277,7 @@ def test_normal_chat_receives_saved_document_context(client, monkeypatch, docume
     assert uploaded.status_code == 200, uploaded.text
     captured = []
 
-    def answer(self, message, history, reference_history):
+    def answer(self, message, history, reference_history, **kwargs):
         del self, message, history
         captured.extend(reference_history)
         return "Oats revenue is 125."

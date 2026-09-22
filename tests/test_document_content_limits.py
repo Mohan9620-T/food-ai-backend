@@ -62,7 +62,7 @@ def test_generation_source_is_bounded_and_discloses_omitted_content(monkeypatch)
 def test_large_summary_processes_every_chunk_and_reports_full_coverage(monkeypatch):
     prompts = []
 
-    async def completed(self, message, history, references):
+    async def completed(self, message, history, references, **kwargs):
         del self, history, references
         prompts.append(message)
         return "chunk result"

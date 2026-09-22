@@ -124,7 +124,12 @@ Language handling:
   answer, ask one short clarifying question instead of guessing.
 
 Accuracy rules:
-- Answer the latest user message directly and use conversation history only as context.
+- Answer the latest user message directly. Read it in light of the ongoing conversation,
+  the stated conversation topic, and any conversation memory notes provided: use them to
+  resolve ambiguous references, keep requirements and constraints established earlier in
+  force, and stay on the user's actual subject. Only set that context aside when the user
+  clearly changes the subject, asks something unrelated, or contradicts an earlier
+  statement — in that case, follow the new request, not the old topic.
 - Preserve explicit user preferences and standing instructions throughout the current
   chat. For example, if the user asks to be called "boss", naturally use "boss" in
   later replies until the user changes or withdraws that preference.
@@ -183,8 +188,9 @@ Document files in this application:
 - Do not tell users that this application is text-only or cannot create actual files.
   The document workflow creates and stores files on the server; it does not need
   access to the user's device or Microsoft Word installation.
-- For a file request, the application asks any needed questions, shows a review,
-  then generates the attachment when the user clicks "Build my document file".
+- For a file request, the application asks only essential missing questions in chat,
+  then automatically generates the attachment. There is no review or Build button.
+  When the user asks for both extracted text and a file, return both in the chat.
   Explain this workflow when asked about file capabilities. A user can upload a PDF,
   ask about its contents, then ask "Create a Word document from this PDF".
 - A plain chat answer is not a generated attachment. Only say a file is created or
@@ -338,13 +344,23 @@ maadhiri Thanglish-la explain panren."""
         message: str,
         history: list[ChatHistoryMessage],
         reference_history: list[ChatHistoryMessage],
+        *,
+        temperature: float | None = None,
+        session_title: str | None = None,
+        rolling_summary: str | None = None,
     ) -> str:
         immediate_answer = self._immediate_answer(message)
         if immediate_answer:
             return immediate_answer
 
         response_language, body = self._build_request_body(
-            message, history, reference_history, stream=False
+            message,
+            history,
+            reference_history,
+            stream=False,
+            temperature=temperature,
+            session_title=session_title,
+            rolling_summary=rolling_summary,
         )
 
         provider = "ollama"
@@ -397,6 +413,9 @@ maadhiri Thanglish-la explain panren."""
         reference_history: list[ChatHistoryMessage],
         *,
         max_tokens: int | None = None,
+        temperature: float | None = None,
+        session_title: str | None = None,
+        rolling_summary: str | None = None,
     ) -> str:
         """Return one complete answer without depending on an SSE stream.
 
@@ -412,7 +431,15 @@ maadhiri Thanglish-la explain panren."""
             return immediate_answer
 
         response_language, body = self._build_request_body(
-            message, history, reference_history, stream=False
+            message,
+            history,
+            reference_history,
+            stream=False,
+            temperature=(
+                temperature if temperature is not None else settings.DOCUMENT_AI_TEMPERATURE
+            ),
+            session_title=session_title,
+            rolling_summary=rolling_summary,
         )
         token_budget = (
             settings.DOCUMENT_AI_MAX_TOKENS
@@ -462,6 +489,10 @@ maadhiri Thanglish-la explain panren."""
         message: str,
         history: list[ChatHistoryMessage],
         reference_history: list[ChatHistoryMessage],
+        *,
+        temperature: float | None = None,
+        session_title: str | None = None,
+        rolling_summary: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Continue length-limited answers with the same provider in one visible turn."""
         immediate_answer = self._immediate_answer(message)
@@ -469,7 +500,15 @@ maadhiri Thanglish-la explain panren."""
             yield immediate_answer
             return
 
-        _, body = self._build_request_body(message, history, reference_history, stream=True)
+        _, body = self._build_request_body(
+            message,
+            history,
+            reference_history,
+            stream=True,
+            temperature=temperature,
+            session_title=session_title,
+            rolling_summary=rolling_summary,
+        )
         if not self._use_nvidia_primary():
             async with aclosing(
                 self._stream_with_continuations(body, self._stream_ollama)
@@ -800,14 +839,13 @@ maadhiri Thanglish-la explain panren."""
             "messages": body["messages"],
             "stream": stream,
             "temperature": body["options"]["temperature"],
+            "top_p": settings.NVIDIA_CHAT_TOP_P,
             "max_tokens": body.get("nvidia_max_tokens", settings.NVIDIA_CHAT_MAX_TOKENS),
         }
         if settings.NVIDIA_CHAT_MODEL == "google/gemma-4-31b-it":
             request_body.update(
                 {
                     "chat_template_kwargs": {"enable_thinking": False},
-                    "temperature": 1.0,
-                    "top_p": 0.95,
                     "top_k": 64,
                 }
             )
@@ -815,8 +853,6 @@ maadhiri Thanglish-la explain panren."""
             request_body.update(
                 {
                     "chat_template_kwargs": {"enable_thinking": False},
-                    "temperature": 1.0,
-                    "top_p": 0.95,
                 }
             )
             if (
@@ -974,9 +1010,10 @@ maadhiri Thanglish-la explain panren."""
         ):
             return (
                 "This app can generate downloadable Word (.docx), PDF, Excel (.xlsx), CSV, "
-                "PowerPoint (.pptx), TXT and Markdown files. Upload your source and ask, for "
-                "example, 'Create a Word document from this PDF'. Review the plan, click "
-                "'Build my document file', then use Download on the generated attachment."
+                "PowerPoint (.pptx), TXT and Markdown files. Describe what you need, or upload "
+                "a source and ask, for example, 'Create a Word document from this PDF'. "
+                "Once the necessary details are clear, the file is created automatically. "
+                "Use Download on the generated attachment."
             )
         if (
             response_language == "Tanglish (Tamil written in Latin letters)"
@@ -995,11 +1032,37 @@ maadhiri Thanglish-la explain panren."""
         reference_history: list[ChatHistoryMessage],
         *,
         stream: bool,
+        temperature: float | None = None,
+        session_title: str | None = None,
+        rolling_summary: str | None = None,
     ) -> tuple[str, dict]:
         response_language = self.response_language(message, history)
         messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
         if response_language == "Tanglish (Tamil written in Latin letters)":
             messages.append({"role": "system", "content": self.TANGLISH_STYLE_PROMPT})
+
+        memory_sections = []
+        if session_title and session_title != "New chat":
+            memory_sections.append(f'CURRENT CONVERSATION TOPIC: "{session_title}"')
+        if rolling_summary:
+            memory_sections.append(
+                "CONVERSATION MEMORY (summary of earlier turns no longer shown in full):\n"
+                f"{rolling_summary}"
+            )
+        if memory_sections:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "\n\n".join(memory_sections)
+                        + "\n\nUse this as context for ambiguous follow-ups and to keep "
+                        "answers on-topic and consistent with what was already "
+                        "established. It is an anchor, not a restriction — answer a "
+                        "clearly new or unrelated request on its own merits even if it "
+                        "departs from this topic."
+                    ),
+                }
+            )
 
         if reference_history:
             bounded_references = reference_history[-self.REFERENCE_MESSAGE_LIMIT :]
@@ -1053,6 +1116,7 @@ maadhiri Thanglish-la explain panren."""
         ):
             previous_history = previous_history[:-1]
         previous_history = previous_history[-self.HISTORY_MESSAGE_LIMIT :]
+        previous_history = self._fit_history_to_token_budget(previous_history, messages, message)
 
         # Recalled preferences precede recent turns so a newer correction always
         # wins (for example, "don't call me master anymore").
@@ -1113,7 +1177,9 @@ maadhiri Thanglish-la explain panren."""
             "keep_alive": settings.OLLAMA_KEEP_ALIVE,
             "think": settings.OLLAMA_CHAT_THINK,
             "options": {
-                "temperature": 0.2,
+                "temperature": (
+                    temperature if temperature is not None else settings.CHAT_TEMPERATURE
+                ),
                 "num_predict": settings.OLLAMA_CHAT_MAX_TOKENS,
             },
         }
@@ -1137,3 +1203,46 @@ maadhiri Thanglish-la explain panren."""
             half = (limit - len("\n...[truncated]...\n")) // 2
             content = f"{content[:half]}\n...[truncated]...\n{content[-half:]}"
         return {"role": item.role, "content": content}
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Provider-agnostic approximation used only to budget request size.
+
+        A real tokenizer would be specific to one provider's vocabulary
+        (OpenAI's tiktoken, for example, does not match Nemotron/Gemma/Qwen),
+        which would give a precise-looking but wrong count. This character
+        based estimate is honestly approximate and costs no new dependency.
+        """
+        return max(1, len(text) // settings.CONTEXT_TOKEN_CHAR_DIVISOR)
+
+    @classmethod
+    def _fit_history_to_token_budget(
+        cls,
+        previous_history: list[ChatHistoryMessage],
+        messages_so_far: list[dict],
+        current_message: str,
+    ) -> list[ChatHistoryMessage]:
+        """Trim already count-bounded history further to an estimated token budget.
+
+        Keeps the newest messages and drops the oldest first. Always keeps at
+        least the single most recent history message, even if it alone would
+        exceed the budget, so a token-budget guard never zeroes out history
+        entirely over one long message.
+        """
+        fixed_cost = (
+            sum(cls._estimate_tokens(item["content"]) for item in messages_so_far)
+            + cls._estimate_tokens(current_message)
+            + 250  # Reserved for the per-turn "next answer" instruction appended later.
+        )
+        reserved_for_response = settings.OLLAMA_CHAT_MAX_TOKENS
+        budget = max(0, settings.CONTEXT_TOKEN_BUDGET - fixed_cost - reserved_for_response)
+
+        kept: list[ChatHistoryMessage] = []
+        running_total = 0
+        for item in reversed(previous_history):
+            cost = cls._estimate_tokens(item.content)
+            if kept and running_total + cost > budget:
+                break
+            running_total += cost
+            kept.append(item)
+        return list(reversed(kept))
