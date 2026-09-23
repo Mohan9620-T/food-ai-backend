@@ -90,6 +90,8 @@ def test_image_plan_uses_extracted_readings_and_full_text_completion(monkeypatch
     calls = []
 
     async def complete(self, message, history, references):
+        assert "energy needs are unknown" in self.SYSTEM_PROMPT
+        assert "all seven days of meals" in self.SYSTEM_PROMPT
         calls.append((message, history, references))
         yield "## Diet plan\nBreakfast: oats.\n"
         yield "## Workout sessions\nMonday: strength; Tuesday: walking."
@@ -100,7 +102,7 @@ def test_image_plan_uses_extracted_readings_and_full_text_completion(monkeypatch
     )
     assert "Diet plan" in answer and "Workout sessions" in answer
     assert "Body fat: 22.5%. BMI: 24.1." in calls[0][2][0].content
-    assert "Do not infer age, sex" in calls[0][2][0].content
+    assert "starter example" not in calls[0][2][0].content
     assert "transcribe" in provider.calls[0]["system_prompt"]
     assert "Do not infer health conditions" in provider.calls[0]["system_prompt"]
 
