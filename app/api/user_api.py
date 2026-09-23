@@ -6,12 +6,30 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database.database import get_db
 from app.rate_limit import limiter
-from app.schemas.user import RefreshTokenRequest, Token, UserCreate, UserLogin, UserResponse
+from app.schemas.user import (
+    RefreshTokenRequest,
+    SetPasswordRequest,
+    Token,
+    UserCreate,
+    UserLogin,
+    UserResponse,
+)
 from app.services.user_service import EmailAlreadyExistsError, UserService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/users", tags=["Users"])
 service = UserService()
+
+
+@router.post("/set-password", summary="Choose a password using the private welcome-email link")
+@limiter.limit(settings.LOGIN_RATE_LIMIT)
+def set_password(request: Request, payload: SetPasswordRequest, db: Session = Depends(get_db)):
+    if not service.account_passwords.set_password(db, payload.token, payload.password):
+        raise HTTPException(
+            status_code=400, detail="This password link is invalid, expired or already used."
+        )
+    logger.info("auth.password_changed")
+    return {"detail": "Password saved. Log in with your new password."}
 
 
 @router.post(

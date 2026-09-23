@@ -85,6 +85,7 @@ DATABASE_URL = _database_url()
 EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "auto").strip().lower() or "auto"
 EMAIL_FROM_EMAIL = os.getenv("EMAIL_FROM_EMAIL", "").strip()
 EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "Food AI Assistant").strip()
+PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "").strip().rstrip("/")
 EMAIL_TIMEOUT_SECONDS = 15
 EMAIL_TOKEN_ENCRYPTION_KEY = _read_secret("EMAIL_TOKEN_ENCRYPTION_KEY", "") or ""
 RESEND_API_KEY = _read_secret("RESEND_API_KEY", "") or ""

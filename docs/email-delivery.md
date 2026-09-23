@@ -5,6 +5,24 @@ Gmail, Google Workspace, Outlook, Hotmail, Microsoft 365, and other recipient do
 Recipients do not supply their email passwords to Food AI. A Food AI login password
 is separate from the sender's mail-provider credentials and is never emailed.
 
+## New-account sign-in and password emails
+
+Configure `PUBLIC_APP_URL` with the deployed UI's HTTPS URL, for example
+`https://food-ai-ui-production.up.railway.app`. New-account emails include the
+recipient's sign-in address, login URL, and a private link to choose a new password.
+The user can also log in immediately with the password chosen during registration.
+
+The password link expires after 30 minutes and works once. Only its hash is saved
+in the database; the private token is never returned by registration. Using it
+invalidates existing access and refresh tokens and sends a password-change notice.
+The browser removes the token from its address bar and keeps it only in memory.
+Do not refresh the form before saving; reopen the email link if necessary.
+Missing/invalid `PUBLIC_APP_URL` disables the link without preventing registration.
+Mail delivery failure likewise does not prevent login. Existing accounts are not
+automatically sent new emails, and their passwords cannot be retrieved or emailed.
+
+This follows [OWASP's password-link guidance](https://cheatsheetseries.owasp.org/cheatsheets/Forgot_Password_Cheat_Sheet.html).
+
 **Railway Free, Trial and Hobby block outbound SMTP.** Use one of the HTTPS providers
 below on these plans. [Railway's email delivery rules](https://docs.railway.com/networking/outbound-networking).
 SMTP is supported locally and on Railway Pro or above. No plan upgrade is required
@@ -45,6 +63,35 @@ RESEND_API_KEY=<sending API key>
 [Resend send API](https://resend.com/docs/api-reference/emails/send-email).
 
 ## Gmail / Google Workspace over HTTPS
+
+### Guided local connection (recommended)
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/apis/library/gmail.googleapis.com)
+   under the sender's account, select/create a project and enable **Gmail API**.
+2. In **Google Auth Platform**, configure the app name/contact and audience. While
+   the app is in Testing, add the sender address as a test user.
+3. Create a **Desktop app** OAuth client and download its JSON into the ignored
+   `secrets/google-oauth-client.json` directory/file in this backend repository.
+   Do not paste the JSON, Google password or OAuth tokens into chat or Git.
+4. Run the following locally, replacing the sender and project values:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/connect_gmail.py --client-json secrets/google-oauth-client.json --sender your-sender@gmail.com --project YOUR_RAILWAY_PROJECT_ID
+```
+
+The helper opens Google consent in your browser. It requests email identity to
+verify the sender and Gmail sending permission, with offline access. A loopback
+callback uses state validation and PKCE. Credentials go directly to Railway through
+stdin without being printed or saved to another file. Existing encryption keys are
+preserved. Redeploy the backend afterward; the helper does not send any messages.
+
+External apps in Testing normally receive seven-day refresh tokens for these
+scopes. Complete Google's applicable publishing/verification requirements for
+continued production delivery. Keep the client JSON private.
+
+[Google desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app).
+
+### Manual configuration
 
 1. In your own Google Cloud project, enable Gmail API and create an OAuth client.
 2. Configure the consent screen and authorize the intended sender with only

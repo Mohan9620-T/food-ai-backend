@@ -11,6 +11,7 @@ class User(Base):
     fullname = Column(String(100), nullable=False)
     email = Column(String(150), unique=True, nullable=False)
     password = Column(String(255), nullable=False)
+    auth_version = Column(Integer, nullable=False, default=0, server_default="0")
 
     refresh_tokens = relationship(
         "RefreshToken",

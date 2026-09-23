@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserCreate
+from app.services.account_password_service import AccountPasswordService, public_app_url
 from app.services.email_service import EmailService
 from app.utils.security import (
     create_access_token,
@@ -23,6 +24,7 @@ class UserService:
         self.repository = UserRepository()
         self.refresh_tokens = RefreshTokenRepository()
         self.email_service = email_service or EmailService()
+        self.account_passwords = AccountPasswordService(self.email_service)
 
     def create_user(self, db: Session, user: UserCreate):
         existing_user = self.repository.get_user_by_email(db, user.email)
@@ -35,9 +37,13 @@ class UserService:
             email=user.email,
             password=user.password,
         )
+        password_link = self.account_passwords.create_link(db, created_user.id)
+        base_url = public_app_url()
         email_sent = self.email_service.send_new_account_welcome(
             recipient=user.email,
             fullname=user.fullname,
+            password_link=password_link,
+            login_url=f"{base_url}/login" if base_url else None,
         )
         return {
             "id": created_user.id,
@@ -97,5 +103,6 @@ class UserService:
                 "sub": str(user.id),
                 "email": user.email,
                 "fullname": user.fullname,
+                "auth_version": user.auth_version,
             }
         )

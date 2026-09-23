@@ -101,7 +101,24 @@ class EmailService:
                 errors.append("EMAIL_TOKEN_ENCRYPTION_KEY must be a valid Fernet key.")
         return errors
 
-    def send_new_account_welcome(self, *, recipient: str, fullname: str) -> bool:
+    def send_new_account_welcome(
+        self,
+        *,
+        recipient: str,
+        fullname: str,
+        password_link: str | None = None,
+        login_url: str | None = None,
+    ) -> bool:
+        account_details = "Use the password you chose during registration.\n"
+        if login_url:
+            account_details += f"Log in: {login_url}\n"
+        if password_link:
+            account_details += (
+                "\nTo choose a new password, open this private, one-use link within 30 minutes:\n"
+                f"{password_link}\n"
+                "This link signs out your other sessions after you save a new password.\n"
+                "Do not forward this link. Your password is never included in email.\n"
+            )
         return self.send_text(
             recipient=recipient,
             subject="Welcome to Food AI Assistant",
@@ -109,6 +126,7 @@ class EmailService:
                 f"Hello {fullname},\n\n"
                 "Your Food AI Assistant account has been created successfully.\n\n"
                 f"You can log in anytime using this email address: {recipient}\n\n"
+                f"{account_details}\n"
                 "If you did not create this account, please ignore this email.\n"
             ),
         )
