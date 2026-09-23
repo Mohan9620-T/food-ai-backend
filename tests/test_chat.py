@@ -1200,6 +1200,8 @@ def test_latest_instruction_forbids_metadata_from_old_examples(monkeypatch):
 def test_nvidia_chat_success_does_not_call_ollama(monkeypatch):
     monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_TIMEOUT_SECONDS", 30)
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_COMPLETE_TIMEOUT_SECONDS", 120)
     calls = []
 
     class Response:
@@ -1209,6 +1211,7 @@ def test_nvidia_chat_success_does_not_call_ollama(monkeypatch):
             return {"choices": [{"message": {"content": "NVIDIA answer"}}]}
 
     def post(url, **kwargs):
+        assert kwargs["timeout"] == (settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS, 120)
         calls.append(url)
         return Response()
 

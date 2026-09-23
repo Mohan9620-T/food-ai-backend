@@ -12,6 +12,7 @@ class ChatHistoryMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    web_search: bool = False
     history: list[ChatHistoryMessage] = Field(default_factory=list)
     reference_history: list[ChatHistoryMessage] = Field(default_factory=list)
     # Internal optional image payload for future multimodal transports. The existing

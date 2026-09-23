@@ -86,6 +86,8 @@ services:
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-nvidia}
+      ENABLE_WEB_SEARCH: ${ENABLE_WEB_SEARCH:-false}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
     secrets:
       - db_password
       - jwt_secret_key

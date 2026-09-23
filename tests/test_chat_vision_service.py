@@ -25,7 +25,7 @@ class StubVisionProvider:
         self.error = error
         self.calls = []
 
-    def infer(self, system_prompt, user_prompt, encoded_image):
+    def infer(self, system_prompt, user_prompt, encoded_image, **kwargs):
         self.calls.append(
             {
                 "system_prompt": system_prompt,
@@ -83,6 +83,38 @@ def test_describe_passes_accompanying_user_question(monkeypatch):
     assert "OPEN" in result
     assert provider.calls[0]["user_prompt"] == "What does the sign say?"
     assert "Transcribe any clearly visible text" in provider.calls[0]["system_prompt"]
+
+
+def test_image_plan_uses_extracted_readings_and_full_text_completion(monkeypatch):
+    provider = install_provider(monkeypatch, vision_result(answer="Body fat: 22.5%. BMI: 24.1."))
+    calls = []
+
+    async def complete(self, message, history, references):
+        calls.append((message, history, references))
+        yield "## Diet plan\nBreakfast: oats.\n"
+        yield "## Workout sessions\nMonday: strength; Tuesday: walking."
+
+    monkeypatch.setattr("app.services.chat_vision_service.ChatService.stream_chat", complete)
+    answer = ChatVisionService().describe(
+        b"report", "Give me a diet plan and workout sessions based on my BMI image"
+    )
+    assert "Diet plan" in answer and "Workout sessions" in answer
+    assert "Body fat: 22.5%. BMI: 24.1." in calls[0][2][0].content
+    assert "Do not infer age, sex" in calls[0][2][0].content
+    assert "transcribe" in provider.calls[0]["system_prompt"]
+    assert "Do not infer health conditions" in provider.calls[0]["system_prompt"]
+
+
+def test_unreadable_plan_image_does_not_fabricate_measurements(monkeypatch):
+    install_provider(monkeypatch, vision_result())
+    monkeypatch.setattr(
+        "app.services.chat_vision_service.ChatService.chat",
+        lambda *a, **k: pytest.fail("No evidence"),
+    )
+    assert (
+        ChatVisionService().describe(b"report", "Give me a diet plan")
+        == ChatVisionService.EMPTY_RESPONSE_MESSAGE
+    )
 
 
 def test_production_prepares_nvidia_compatible_jpeg_even_with_ollama_dev_override(

@@ -134,6 +134,9 @@ NVIDIA_API_BASE_URL = os.getenv(
 NVIDIA_CHAT_MODEL = os.getenv("NVIDIA_CHAT_MODEL", "nvidia/nemotron-3-super-120b-a12b").strip()
 NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS", "5"))
 NVIDIA_CHAT_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_CHAT_TIMEOUT_SECONDS", "30"))
+NVIDIA_CHAT_COMPLETE_TIMEOUT_SECONDS = float(
+    os.getenv("NVIDIA_CHAT_COMPLETE_TIMEOUT_SECONDS", "120")
+)
 NVIDIA_CHAT_MAX_TOKENS = int(os.getenv("NVIDIA_CHAT_MAX_TOKENS", "4096"))
 # Nemotron Super text chat can reason briefly without consuming its answer allowance.
 NVIDIA_CHAT_REASONING_BUDGET = max(
@@ -240,6 +243,21 @@ RAG_MAX_CONTEXT_CHUNKS = int(os.getenv("RAG_MAX_CONTEXT_CHUNKS", "6"))
 RAG_MAX_CONTEXT_TOKENS = int(os.getenv("RAG_MAX_CONTEXT_TOKENS", "2000"))
 RAG_CHUNK_CHARS = int(os.getenv("RAG_CHUNK_CHARS", "800"))
 RAG_CHUNK_OVERLAP_CHARS = int(os.getenv("RAG_CHUNK_OVERLAP_CHARS", "100"))
+
+# Live web search via Tavily, offered to the NVIDIA model as a tool it can choose
+# to call for questions needing current/real-time information. Off by default and
+# a no-op without a key; failures degrade to answering without search results,
+# never block the chat response.
+ENABLE_WEB_SEARCH = os.getenv("ENABLE_WEB_SEARCH", "false").lower() == "true"
+TAVILY_API_KEY = (_read_secret("TAVILY_API_KEY", "") or "").strip()
+TAVILY_API_BASE_URL = os.getenv("TAVILY_API_BASE_URL", "https://api.tavily.com").rstrip("/")
+TAVILY_TIMEOUT_SECONDS = float(os.getenv("TAVILY_TIMEOUT_SECONDS", "10"))
+WEB_SEARCH_MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
+# Small budget: this call only has to decide whether to search and with what
+# query, not produce the final answer.
+WEB_SEARCH_DECISION_MAX_TOKENS = int(os.getenv("WEB_SEARCH_DECISION_MAX_TOKENS", "200"))
+WEB_SEARCH_DECISION_TIMEOUT_SECONDS = float(os.getenv("WEB_SEARCH_DECISION_TIMEOUT_SECONDS", "5"))
+WEB_FETCH_TIMEOUT_SECONDS = float(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", "12"))
 
 ALLOWED_ORIGINS = [
     origin.strip()

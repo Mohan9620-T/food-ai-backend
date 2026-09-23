@@ -484,12 +484,15 @@ def chat(
     history = _get_persisted_history(db, user_id, session.id)
 
     try:
-        lookup = prepare_workbook_lookup(db, session.id, request.message)
+        web_request = request.web_search or service.requests_web(request.message)
+        lookup = None if web_request else prepare_workbook_lookup(db, session.id, request.message)
         if lookup is not None:
             answer = lookup.answer()
         else:
-            document_references = _document_reference_history(
-                db, user_id, session.id, request.message
+            document_references = (
+                []
+                if web_request
+                else _document_reference_history(db, user_id, session.id, request.message)
             )
             answer = service.chat(
                 request.message,
@@ -497,6 +500,7 @@ def chat(
                 [*request.reference_history, *document_references],
                 session_title=session.title,
                 rolling_summary=cast(str | None, session.rolling_summary),
+                **({"web_search": True} if request.web_search else {}),
             )
     except InvalidDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -582,10 +586,18 @@ async def chat_vision(
             persisted_user_message,
         )
         try:
-            answer = await asyncio.to_thread(
-                vision_service.describe, image_bytes, message_text or None
+            plan_history = (
+                _get_persisted_history(db, user_id, session.id)
+                if ChatVisionService._requests_plan(message_text)
+                else []
             )
-        except VisionModelUnavailableError as error:
+            answer = await asyncio.to_thread(
+                vision_service.describe,
+                image_bytes,
+                message_text or None,
+                **({"conversation_history": plan_history} if plan_history else {}),
+            )
+        except (VisionModelUnavailableError, ChatModelUnavailableError) as error:
             logger.warning(
                 "chat.vision_unavailable",
                 extra={"user_id": user_id, "session_id": session.id},
@@ -643,12 +655,17 @@ async def stream_chat(
 
     history = _get_persisted_history(db, user_id, session.id)
     try:
-        lookup = prepare_workbook_lookup(db, session.id, payload.message)
+        web_request = payload.web_search or service.requests_web(payload.message)
+        lookup = None if web_request else prepare_workbook_lookup(db, session.id, payload.message)
     except InvalidDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    document_references = _document_reference_history(db, user_id, session.id, payload.message)
+    document_references = (
+        [] if web_request else _document_reference_history(db, user_id, session.id, payload.message)
+    )
     image_turns = repository.get_image_turns(db, session.id)
-    referenced_image = _select_referenced_image(payload.message, image_turns)
+    referenced_image = (
+        None if web_request else _select_referenced_image(payload.message, image_turns)
+    )
     referenced_turn = next(
         (turn for turn in image_turns if turn[0] is referenced_image),
         None,
@@ -704,7 +721,7 @@ async def stream_chat(
                 )
                 chunks.append(answer)
                 await events.put({"type": "token", "content": answer})
-            except VisionModelUnavailableError as error:
+            except (VisionModelUnavailableError, ChatModelUnavailableError) as error:
                 logger.warning(
                     "chat.follow_up_vision_unavailable",
                     extra={"user_id": user_id, "session_id": session.id},
@@ -740,6 +757,7 @@ async def stream_chat(
             [*payload.reference_history, *document_references],
             session_title=session.title,
             rolling_summary=cast(str | None, session.rolling_summary),
+            **({"web_search": True} if payload.web_search else {}),
         )
         try:
             async for chunk in iterator:
