@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 from app.api.chat import router as chat_router
 from app.api.chat_documents import router as chat_documents_router
+from app.api.chat_suggestions import router as chat_suggestions_router
 from app.api.diet_plans import router as diet_plans_router
 from app.api.meals import router as meals_router
 from app.api.nvidia_chat import router as nvidia_chat_router
@@ -62,6 +63,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 app.include_router(user_router)
 app.include_router(chat_router)
+app.include_router(chat_suggestions_router)
 app.include_router(chat_documents_router)
 app.include_router(meals_router)
 app.include_router(nvidia_chat_router)

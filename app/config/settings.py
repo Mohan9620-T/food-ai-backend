@@ -183,7 +183,12 @@ NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS = float(
 )
 NVIDIA_VISION_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_VISION_TIMEOUT_SECONDS", "45"))
 NVIDIA_VISION_MAX_DIMENSION = int(os.getenv("NVIDIA_VISION_MAX_DIMENSION", "768"))
-NVIDIA_VISION_MAX_TOKENS = int(os.getenv("NVIDIA_VISION_MAX_TOKENS", "384"))
+# 384 was tuned for short answers (e.g. "what's on this plate?") but silently
+# truncated any request that asks the assistant to act on image data - e.g. a
+# diet/workout plan derived from a body-composition scan. This is the chat
+# vision path only (ChatVisionService); meal-photo logging uses a separate,
+# unaffected code path, so raising this doesn't change meal-logging cost/latency.
+NVIDIA_VISION_MAX_TOKENS = int(os.getenv("NVIDIA_VISION_MAX_TOKENS", "2048"))
 CHAT_VISION_OCR_ENABLED = os.getenv("CHAT_VISION_OCR_ENABLED", "false").lower() == "true"
 
 # Ollama is a hard part of the default topology (local dev, Docker Compose) -
