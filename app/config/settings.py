@@ -82,12 +82,31 @@ DB_USER = _database_setting("DB_USER", "PGUSER")
 DB_PASSWORD = _read_secret("DB_PASSWORD")
 DATABASE_URL = _database_url()
 
-SMTP_HOST = os.getenv("SMTP_HOST")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USERNAME = os.getenv("SMTP_USERNAME")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", SMTP_USERNAME or "")
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "auto").strip().lower() or "auto"
+EMAIL_FROM_EMAIL = os.getenv("EMAIL_FROM_EMAIL", "").strip()
+EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "Food AI Assistant").strip()
+EMAIL_TIMEOUT_SECONDS = 15
+EMAIL_TOKEN_ENCRYPTION_KEY = _read_secret("EMAIL_TOKEN_ENCRYPTION_KEY", "") or ""
+RESEND_API_KEY = _read_secret("RESEND_API_KEY", "") or ""
+GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID", "").strip()
+GMAIL_CLIENT_SECRET = _read_secret("GMAIL_CLIENT_SECRET", "") or ""
+GMAIL_REFRESH_TOKEN = _read_secret("GMAIL_REFRESH_TOKEN", "") or ""
+MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID", "").strip()
+MICROSOFT_CLIENT_SECRET = _read_secret("MICROSOFT_CLIENT_SECRET", "") or ""
+MICROSOFT_TENANT_ID = os.getenv("MICROSOFT_TENANT_ID", "common").strip() or "common"
+MICROSOFT_REFRESH_TOKEN = _read_secret("MICROSOFT_REFRESH_TOKEN", "") or ""
+
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+try:
+    SMTP_PORT = int(os.getenv("SMTP_PORT", "587").strip() or "587")
+except ValueError:
+    # Optional mail configuration must not prevent the application from starting.
+    SMTP_PORT = 0
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
+SMTP_PASSWORD = _read_secret("SMTP_PASSWORD", "") or ""
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "").strip() or SMTP_USERNAME
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/chat")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")

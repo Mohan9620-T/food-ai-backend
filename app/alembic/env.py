@@ -7,6 +7,7 @@ from app.config.settings import DATABASE_URL
 from app.database.database import Base, connect_args
 from app.models.chat import ChatMessageRecord, ChatSession  # noqa: F401
 from app.models.diet_plan import DietPlan, DietPlanMeal, DietPlanMealItem  # noqa: F401
+from app.models.mail_credential import MailCredential  # noqa: F401
 from app.models.meal_log import MealLog, MealLogItem  # noqa: F401
 from app.models.refresh_token import RefreshToken  # noqa: F401
 from app.models.user import User  # noqa: F401

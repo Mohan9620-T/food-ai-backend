@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 os.environ["MIGRATION_CHECK_ENABLED"] = "false"
 os.environ["APP_ENVIRONMENT"] = "development"
 os.environ["LLM_PROVIDER"] = "ollama"
+os.environ["EMAIL_PROVIDER"] = "disabled"
 
 from app.database.database import Base, get_db
 from app.main import app

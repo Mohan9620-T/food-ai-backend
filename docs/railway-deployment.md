@@ -19,8 +19,10 @@ ALLOWED_ORIGINS=https://food-ai-ui-production.up.railway.app
 ```
 
 Set `JWT_SECRET_KEY` to a long random secret and `NVIDIA_API_KEY` to your provider
-key using Railway Variables, never in Git. `USDA_API_KEY` and SMTP settings are
-optional for nutrition lookup and account emails. Existing local database data is
+key using Railway Variables, never in Git. `USDA_API_KEY` is optional for nutrition
+lookup. For account emails, configure an HTTPS provider as described in
+[email delivery](email-delivery.md); Trial/Hobby do not permit outbound SMTP.
+Gmail API, Microsoft Graph, Resend and SMTP are supported. Existing local database data is
 not copied automatically; Railway uses its own persistent Postgres database.
 
 Do not paste `None` as a database host/port or use a laptop's `localhost` database.
