@@ -221,5 +221,6 @@ The existing registration `email_sent` field reports this provider acceptance.
 Email failure does not undo registration or reveal provider secrets to the user.
 No automatic send retry occurs after an ambiguous timeout.
 
-This setup sends application emails. It does not add Google/Microsoft login,
-read inboxes, or implement a forgotten-password/reset flow.
+This setup sends application emails and supports the private new-account password
+link. It does not add Google/Microsoft login, read inboxes, or provide a public
+forgot-password/link-resend form for existing accounts.
