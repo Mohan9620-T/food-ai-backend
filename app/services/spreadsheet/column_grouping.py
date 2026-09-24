@@ -42,6 +42,21 @@ class ColumnGroupingRequest(BaseModel):
         )
         if not sheets or not separate:
             return None
+        target = re.search(
+            r'\b(?:split|group|separate)\b[^.\n]{0,50}?\b(?:by|based\s+on)\s+(?:the\s+)?(?:column\s+)?["`]?(\w+)',
+            text,
+            re.I,
+        )
+        if target and target.group(1).casefold() not in {
+            "price",
+            "prices",
+            "rate",
+            "rates",
+            "cost",
+        }:
+            # Mentioning a retained Price column must not override the requested
+            # grouping column. Let the full planner handle other explicit columns.
+            return None
         if re.search(r"\b(?:prices?|rates?|cost)\b|விலை|விலையில்|விலைக்கு", text, re.I):
             column = "Price"
         else:

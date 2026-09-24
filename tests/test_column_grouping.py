@@ -62,6 +62,7 @@ def test_plain_grouping_requests_are_not_web_queries(prompt):
     [
         "What is the current price of rice?",
         "Sort the items price-wise in the same sheet",
+        "Split my workbook by Category into separate sheets and preserve the Price column",
         "Do not split by Price into separate sheets. Just describe the file.",
     ],
 )
