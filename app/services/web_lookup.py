@@ -67,6 +67,14 @@ def automatic_web_question(message: str) -> bool:
         return False
     # Local transformations and personal files do not need an external search.
     if re.search(
+        r"\b(?:rows?|records?|columns?|headers?|cells?|workbooks?|spreadsheets?|worksheets?|sheets?|excel|xlsx|csv|documents?|files?|tables?)\b",
+        text,
+    ) and re.search(
+        r"\b(?:keep|preserve|group|sort|arrange|reorder|format|filter|extract|append|insert|add|update|edit|modify|split|merge|combine)\b",
+        text,
+    ):
+        return False
+    if re.search(
         r"\b(?:rows?|records?|columns?|headers?|cells?|workbooks?|spreadsheets?|sheets?)\b", text
     ) and re.search(
         r"\b(?:find|filter|extract|append|insert|add|update|edit|counts?|how many|which|what)\b",

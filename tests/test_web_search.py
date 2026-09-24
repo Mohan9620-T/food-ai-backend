@@ -66,6 +66,10 @@ def test_factual_questions_automatically_require_lookup(question):
         "How many rows are in the spreadsheet?",
         "Can you read the file and give me the row counts?",
         "Create a new Excel file",
+        "Please keep the same format as my original Excel sheet — Code, Name, Category, Status, Price — and group the items price-wise.",
+        "Sort the workbook by Price from lowest to highest",
+        "Group the rows by price and keep the original columns",
+        "Please format my 2026 sales spreadsheet",
         "Give me a diet plan and workout sessions from this image",
     ],
 )

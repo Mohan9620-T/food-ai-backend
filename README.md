@@ -113,7 +113,7 @@ use the documented default or disable the associated integration when empty.
 | `DOCUMENT_OOXML_MAX_ENTRY_RATIO` | Optional | Maximum decompressed-to-compressed size ratio for one OOXML entry; default `200`. |
 | `DOCUMENT_OOXML_MAX_ENTRIES` | Optional | Maximum number of entries in an OOXML archive; default `5000`. |
 | `NVIDIA_CHAT_MAX_TOKENS` | Optional | NVIDIA text-chat answer allowance per request; default `4096`, independent of Ollama's limit. When reasoning is enabled, its budget and a 500-token closing allowance are added to this limit. |
-| `NVIDIA_CHAT_REASONING_BUDGET` | Optional | Brief reasoning for `nvidia/nemotron-3-super-120b-a12b` text chat; default `1024`, range `0`-`8192`. Uses low-effort reasoning; `0` disables it. Other models and atomic document requests retain their existing settings. Reasoning is not displayed or saved in chat history. |
+| `NVIDIA_CHAT_REASONING_BUDGET` | Optional | Opt-in reasoning for `nvidia/nemotron-3-super-120b-a12b` text chat; default `0` (disabled), range `0`-`8192`. Disabled by default after capped reasoning responses exposed unfinished deliberation in the provider's answer field. Other models and atomic document requests retain their settings. |
 | `CHAT_MAX_CONTINUATIONS` | Optional | Extra requests to the same provider when a text response reaches its token limit; default `3`, range `0`–`8`. Text continues in the same message. A remaining interruption is reported honestly. Atomic document generation retains its separate token budget. |
 | `NVIDIA_TEST_CHAT_MODEL` | Optional | NVIDIA model used only by `/nvidia-chat`; defaults to `nvidia/nemotron-3-ultra-550b-a55b`. |
 | `NVIDIA_CHAT_VISION_MODEL` | Optional | NVIDIA image-chat model; defaults to `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`. |

@@ -208,6 +208,12 @@ class DocumentAutomationService:
                 selection,
                 explicit_source=explicit_source,
             )
+        if source_mode != "description":
+            sort_plan = self._plan_workbook_sort(
+                instruction, documents, explicit_source=explicit_source
+            )
+            if sort_plan is not None:
+                return sort_plan
         creation = self.pipeline_service.intent_service.is_creation_request(source_instruction)
         # A missing layout example is optional for a new, described document.
         # Actual image transcription/extraction still requires the source, regardless of length.
@@ -386,6 +392,91 @@ class DocumentAutomationService:
         steps = self.pipeline_service.plan_structured(
             tuple(requested_steps),
             input_filename=default_source.filename if default_source else None,
+            request_instruction=instruction,
+        )
+        return DocumentAutomationPlan(status="ready", clarifying_question=None, steps=steps)
+
+    def _plan_workbook_sort(
+        self, instruction: str, documents: tuple[AvailableDocument, ...], *, explicit_source: bool
+    ) -> DocumentAutomationPlan | None:
+        """Reorder actual workbook rows; never ask an LLM to reproduce the dataset."""
+        if not re.search(r"\b(?:sort|group|arrange|order)\b", instruction, re.I):
+            return None
+        # Grouping into summaries/separate sheets or combining edits needs a different plan.
+        if re.search(
+            r"\b(?:sum|average|aggregate|counts?|summary|summarize|summarise|subtotal|filter|remove|delete|append|insert|merge)\b|\b(?:separate|each|new)\s+(?:work)?sheets?\b",
+            instruction,
+            re.I,
+        ):
+            return None
+        column_match = re.search(
+            r"\b(?:sort|group|arrange|order)\b[^.!?\n]{0,50}?\bby\s+(?:the\s+)?(?:column\s+)?"
+            r"(?:[`\"](?P<quoted>[^`\"\n]+)[`\"]|(?P<plain>[A-Za-z][A-Za-z0-9_]*))",
+            instruction,
+            re.I,
+        )
+        wise_match = re.search(
+            r"\b(?P<column>price|category|status|name|code)[ -]wise\b", instruction, re.I
+        )
+        column = (
+            (column_match.group("quoted") or column_match.group("plain"))
+            if column_match
+            else (wise_match.group("column") if wise_match else None)
+        )
+        if column is None:
+            return None
+        spreadsheets = tuple(doc for doc in documents if doc.document_type == DocumentType.XLSX)
+        if not spreadsheets:
+            return None
+        if not explicit_source and re.search(r"\b(?:original|uploaded)\b", instruction, re.I):
+            spreadsheets = tuple(doc for doc in spreadsheets if doc.kind == "uploaded")
+            if not spreadsheets:
+                return self._clarification(
+                    "Please upload the original Excel workbook to preserve its rows and formatting."
+                )
+        resolved = self._resolve_input_reference(
+            None,
+            instruction,
+            spreadsheets,
+            {doc.filename.casefold(): doc.filename for doc in spreadsheets},
+            index=0,
+            explicit_source=explicit_source,
+            multi_input=False,
+        )
+        if isinstance(resolved, str) and resolved.startswith("clarify:"):
+            return self._clarification(resolved.removeprefix("clarify:"))
+        sheet_match = re.search(r'\b(?:worksheet|sheet)\s+[`"]([^`"\n]+)[`"]', instruction, re.I)
+        steps = self.pipeline_service.plan_structured(
+            (
+                StructuredPipelineStep(
+                    document_type=DocumentType.XLSX,
+                    operation=DocumentOperation.MODIFY_DOCUMENT,
+                    input_file=resolved,
+                    output_type=DocumentType.XLSX,
+                    parameters={
+                        "edits": [
+                            {
+                                "action": "sort_range",
+                                "locator": {"sheet": sheet_match.group(1) if sheet_match else None},
+                                "options": {
+                                    "column": column,
+                                    "header": True,
+                                    "descending": bool(
+                                        re.search(
+                                            r"\b(?:descending|desc|highest first)\b",
+                                            instruction,
+                                            re.I,
+                                        )
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                ),
+            ),
+            input_filename=next(
+                (doc.filename for doc in spreadsheets if doc.is_latest), spreadsheets[-1].filename
+            ),
             request_instruction=instruction,
         )
         return DocumentAutomationPlan(status="ready", clarifying_question=None, steps=steps)

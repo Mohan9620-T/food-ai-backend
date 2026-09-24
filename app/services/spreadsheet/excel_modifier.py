@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import copy
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from typing import Any
 
@@ -380,8 +381,18 @@ class ExcelModifier:
         cell._hyperlink = copy(snapshot["hyperlink"])
 
     @staticmethod
-    def _sort_key(value: object) -> tuple[int, str]:
-        return (1, "") if value is None else (0, str(value).casefold())
+    def _sort_key(value: object) -> tuple[int, Decimal | str]:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return (2, "")
+        # Numeric cells and numeric text must sort by value: 2.00 before 10.00.
+        if not isinstance(value, bool):
+            try:
+                number = Decimal(str(value).strip())
+                if number.is_finite():
+                    return (0, number)
+            except InvalidOperation:
+                pass
+        return (1, str(value).casefold())
 
     @staticmethod
     def _values_equal(actual: object, expected: object) -> bool:

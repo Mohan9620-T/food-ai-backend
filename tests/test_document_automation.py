@@ -3,12 +3,78 @@ from contextlib import closing
 from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
 
 from app.api import chat_documents
 from app.services.document.document_pipeline_service import DocumentPipelineResult
 from app.services.document.exceptions import InvalidDocumentError
 
 CSV_DATA = b"Item,Category,Price\nApple,Fruit,1.25\nCarrot,Vegetable,0.80\n"
+
+PRICE_GROUP_REQUEST = (
+    "Please keep the same format as my original Excel sheet — Code, Name, Category, Status, Price — "
+    "and group the items price-wise. For example, all items with price 1.50 should be together, "
+    "all items with price 2.00 should be together, and so on. I need to clearly see the item names "
+    "and their details for each price group."
+)
+
+
+def test_price_grouping_preserves_all_original_rows_without_ai(client, monkeypatch):
+    headers = _login(client, "price-grouping@example.com")
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Products"
+    columns = ["Code", "Name", "Category", "Status", "Price"]
+    sheet.append(columns)
+    for index in range(1200):
+        sheet.append(
+            [f"P{index}", f"Product {index}", "Food", "Active", [10.0, 2.0, "1.50", 2.0][index % 4]]
+        )
+        sheet.cell(index + 2, 5).number_format = "0.00"
+    sheet["A2"].font = Font(bold=True, color="FF0000")
+    sheet.column_dimensions["B"].width = 34
+    original_rows = list(sheet.values)[1:]
+    output = BytesIO()
+    book.save(output)
+    book.close()
+    original = output.getvalue()
+    uploaded = _upload(
+        client,
+        headers,
+        "products.xlsx",
+        original,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Grouping existing rows must not call AI or web search")
+
+    monkeypatch.setattr(chat_documents.automation_service.chat_service, "chat", forbidden)
+    response = client.post(
+        "/chat/documents/automate",
+        headers=headers,
+        json={
+            "session_id": uploaded["session_id"],
+            "instruction": PRICE_GROUP_REQUEST,
+        },
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["status"] == "done", result
+    download = client.get(
+        f"/chat/documents/{result['latest_document_id']}/download", headers=headers
+    )
+    assert download.status_code == 200
+    with closing(load_workbook(BytesIO(download.content))) as grouped:
+        rows = list(grouped.active.values)
+        assert rows[0] == tuple(columns)
+        assert rows[1:] == sorted(original_rows, key=lambda row: float(row[4]))
+        assert grouped.active.column_dimensions["B"].width == 34
+        original_first = next(row for row in grouped.active if row[0].value == "P0")
+        assert original_first[0].font.bold and original_first[0].font.color.rgb == "00FF0000"
+        assert all(row[4].number_format == "0.00" for row in list(grouped.active)[1:])
+    source = client.get(f"/chat/documents/{uploaded['attachment']['id']}/download", headers=headers)
+    assert source.content == original
 
 
 def _login(client, email: str) -> dict[str, str]:

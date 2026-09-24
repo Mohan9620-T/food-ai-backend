@@ -129,25 +129,27 @@ def test_empty_failed_continuation_retries_same_request_without_repeating_text(m
     assert calls[1] == calls[2]
 
 
-def test_failed_continuation_after_visible_text_is_never_retried():
+def test_connection_loss_after_visible_text_resumes_from_last_character(monkeypatch):
     calls = []
     chunks = []
 
     async def provider(body):
         calls.append(body)
-        yield "First. " if len(calls) == 1 else "More. "
+        yield ["First. ", "More. ", "Finished."][len(calls) - 1]
         if len(calls) == 1:
             raise _OutputLimitReached()
-        raise _NvidiaFallbackError("lost connection")
+        if len(calls) == 2:
+            raise _NvidiaFallbackError("lost connection")
 
     async def run():
         async for chunk in ChatService()._stream_with_continuations({"messages": []}, provider):
             chunks.append(chunk)
 
-    with pytest.raises(ChatModelUnavailableError, match="interrupted"):
-        asyncio.run(run())
-    assert len(calls) == 2
-    assert "".join(chunks) == "First. More. "
+    monkeypatch.setattr(settings, "CHAT_MAX_CONTINUATIONS", 3)
+    asyncio.run(run())
+    assert len(calls) == 3
+    assert "".join(chunks) == "First. More. Finished."
+    assert calls[2]["messages"][-2]["content"] == "First. More. "
 
 
 def test_continuation_attempts_are_bounded_and_partial_text_is_preserved(monkeypatch):

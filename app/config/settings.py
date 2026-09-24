@@ -138,9 +138,9 @@ NVIDIA_CHAT_COMPLETE_TIMEOUT_SECONDS = float(
     os.getenv("NVIDIA_CHAT_COMPLETE_TIMEOUT_SECONDS", "120")
 )
 NVIDIA_CHAT_MAX_TOKENS = int(os.getenv("NVIDIA_CHAT_MAX_TOKENS", "4096"))
-# Nemotron Super text chat can reason briefly without consuming its answer allowance.
+# Disable hidden reasoning by default so capped answers retain their visible-output budget.
 NVIDIA_CHAT_REASONING_BUDGET = max(
-    0, min(int(os.getenv("NVIDIA_CHAT_REASONING_BUDGET", "1024")), 8192)
+    0, min(int(os.getenv("NVIDIA_CHAT_REASONING_BUDGET", "0")), 8192)
 )
 # Additional same-provider requests for a text answer stopped by its token limit.
 CHAT_MAX_CONTINUATIONS = max(0, min(int(os.getenv("CHAT_MAX_CONTINUATIONS", "3")), 8))

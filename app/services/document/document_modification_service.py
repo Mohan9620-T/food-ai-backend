@@ -385,7 +385,7 @@ class DocumentModificationService:
                 prefix = rows[:1] if header else []
                 data = rows[1:] if header else rows
                 data.sort(
-                    key=lambda row: (row[column] == "", str(row[column]).casefold()),
+                    key=lambda row: ExcelModifier._sort_key(row[column]),
                     reverse=bool(edit.options.get("descending", False)),
                 )
                 expected[sheet] = prefix + data

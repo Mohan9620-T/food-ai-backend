@@ -207,6 +207,8 @@ def test_nvidia_normal_completion_ignores_usage_and_private_reasoning(monkeypatc
 
 
 def test_nvidia_eof_without_completion_is_interruption(monkeypatch):
+    # Verify EOF is never marked complete when recovery is disabled/exhausted.
+    monkeypatch.setattr(settings, "CHAT_MAX_CONTINUATIONS", 0)
     _install_nvidia_stream(monkeypatch, [_event("An unfinished sentence")])
     chunks = []
 

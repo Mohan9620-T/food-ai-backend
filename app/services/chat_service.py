@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import aclosing
 
 import httpx
@@ -511,13 +511,13 @@ maadhiri Thanglish-la explain panren."""
         provider = "ollama"
         if self._use_nvidia_primary():
             try:
-                answer = await self._complete_with_nvidia(body)
+                answer = await self._complete_with_continuations(body, self._complete_with_nvidia)
                 provider = "nvidia"
             except _NvidiaFallbackError:
                 logger.warning("chat.text_complete_nvidia_fallback_to_ollama")
-                answer = await self._complete_with_ollama(body)
+                answer = await self._complete_with_continuations(body, self._complete_with_ollama)
         else:
-            answer = await self._complete_with_ollama(body)
+            answer = await self._complete_with_continuations(body, self._complete_with_ollama)
 
         if self.response_uses_wrong_language(answer, response_language):
             rewrite_instruction = (
@@ -538,9 +538,11 @@ maadhiri Thanglish-la explain panren."""
                 ]
             )
             answer = (
-                await self._complete_with_nvidia(body, allow_fallback=False)
+                await self._complete_with_continuations(
+                    body, lambda request: self._complete_with_nvidia(request, allow_fallback=False)
+                )
                 if provider == "nvidia"
-                else await self._complete_with_ollama(body)
+                else await self._complete_with_continuations(body, self._complete_with_ollama)
             )
         return answer
 
@@ -639,8 +641,14 @@ maadhiri Thanglish-la explain panren."""
 
     @staticmethod
     def _continuation_body(body: dict, answer: str) -> dict:
+        budget = min(
+            16384,
+            max(4096, int(body.get("nvidia_max_tokens", settings.NVIDIA_CHAT_MAX_TOKENS)) * 2),
+        )
         return {
             **body,
+            "nvidia_max_tokens": budget,
+            "options": {**body.get("options", {}), "num_predict": budget},
             "messages": [
                 *body["messages"],
                 {"role": "assistant", "content": answer},
@@ -690,6 +698,54 @@ maadhiri Thanglish-la explain panren."""
                 raise
         raise AssertionError("Continuation budget must terminate the loop")
 
+    async def _complete_with_continuations(
+        self, body: dict, complete: Callable[[dict], Awaitable[str]]
+    ) -> str:
+        """Assemble atomic document output before parsing or saving any artifact.
+
+        Plain text is continued verbatim. Truncated JSON is regenerated with more
+        room: splicing model-generated JSON fragments can corrupt strings/structure.
+        The caller's deadline and continuation cap still bound the work.
+        """
+        answer = ""
+        request_body = body
+        structured = False
+        for attempt in range(settings.CHAT_MAX_CONTINUATIONS + 1):
+            try:
+                segment = await complete(request_body)
+                if not segment.strip():
+                    self._check_continuation(attempt, "")
+                return answer + segment
+            except _OutputLimitReached as error:
+                self._check_continuation(attempt, error.partial)
+                structured = structured or bool(
+                    re.match(r"\s*(?:```(?:json)?\s*)?[{\[]", error.partial)
+                )
+                previous_budget = int(
+                    request_body.get("nvidia_max_tokens", settings.DOCUMENT_AI_MAX_TOKENS)
+                )
+                if structured:
+                    answer = ""
+                    request_body = {**body}
+                else:
+                    answer += error.partial
+                    request_body = self._continuation_body(body, answer)
+                # Grow later segments so a small per-call budget can still finish
+                # structured output, while retaining a bounded provider allocation.
+                budget = min(
+                    16384,
+                    max(4096 if structured else 1, previous_budget * 2),
+                )
+                request_body["nvidia_max_tokens"] = budget
+                request_body["options"] = {**body.get("options", {}), "num_predict": budget}
+            except _NvidiaFallbackError as error:
+                if answer or structured:
+                    raise ChatModelUnavailableError(
+                        "Document generation was interrupted. Please retry the request."
+                    ) from error
+                raise
+        raise AssertionError("Continuation budget must terminate the loop")
+
     async def _stream_with_continuations(
         self, body: dict, generate: Callable[[dict], AsyncGenerator[str, None]]
     ) -> AsyncGenerator[str, None]:
@@ -712,6 +768,21 @@ maadhiri Thanglish-la explain panren."""
                 request_body = self._continuation_body(body, "".join(chunks))
             except _NvidiaFallbackError as error:
                 if chunks:
+                    progress = "".join(chunks[start:])
+                    malformed = isinstance(
+                        error.__cause__, (ValueError, TypeError, KeyError, IndexError)
+                    )
+                    if (
+                        progress.strip()
+                        and not malformed
+                        and attempt < settings.CHAT_MAX_CONTINUATIONS
+                    ):
+                        # Resume after visible text instead of restarting the answer.
+                        request_body = self._continuation_body(body, "".join(chunks))
+                        logger.warning(
+                            "chat.interrupted_stream_continued", extra={"continuation": attempt + 1}
+                        )
+                        continue
                     raise ChatModelUnavailableError(
                         "The response stream was interrupted. Please try again."
                     ) from error
@@ -836,7 +907,10 @@ maadhiri Thanglish-la explain panren."""
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(settings.OLLAMA_URL, json=body)
                 response.raise_for_status()
-                answer = response.json()["message"]["content"]
+                data = response.json()
+                answer = data["message"]["content"]
+                if data.get("done_reason") == "length":
+                    raise _OutputLimitReached(answer if isinstance(answer, str) else "")
                 if not isinstance(answer, str) or not answer.strip():
                     raise ValueError("missing Ollama response content")
                 return answer
@@ -895,12 +969,9 @@ maadhiri Thanglish-la explain panren."""
                         response.raise_for_status()
                     response.raise_for_status()
                 choice = response.json()["choices"][0]
-                if choice.get("finish_reason") == "length":
-                    raise ChatModelUnavailableError(
-                        "The response reached its output limit before it finished. "
-                        "Please retry with a shorter request."
-                    )
                 answer = choice["message"]["content"]
+                if choice.get("finish_reason") == "length":
+                    raise _OutputLimitReached(answer if isinstance(answer, str) else "")
                 if not isinstance(answer, str) or not answer.strip():
                     raise _NvidiaFallbackError("missing NVIDIA response content")
                 return answer
