@@ -208,17 +208,24 @@ def lookup(message: str, *, force: bool = False) -> WebEvidence | None:
     urls = extract_urls(message)
     results: list[dict] = []
     failures = []
+    direct_read_failed = False
     if urls:
         for url in urls:
             try:
                 results.extend(read_page(url))
             except WebPageError as error:
                 failures.append(f"{url}: {error}")
-        if not results:
-            return WebEvidence(error="I couldn't read the supplied link(s). " + " ".join(failures))
-    else:
-        results = web_search_provider.search(message) or []
-        if not results:
+        direct_read_failed = not results
+    if not urls or direct_read_failed:
+        search_results = web_search_provider.search(message) or []
+        if direct_read_failed and not search_results:
+            return WebEvidence(
+                error=(
+                    "I couldn't read the supplied link(s), and a web search for the same question "
+                    "also returned nothing usable. " + " ".join(failures)
+                )
+            )
+        if not urls and not search_results:
             return WebEvidence(
                 error=(
                     "I couldn't verify this from live sources, so I won't guess a current answer. "
@@ -230,6 +237,11 @@ def lookup(message: str, *, force: bool = False) -> WebEvidence | None:
                     )
                 )
             )
+        if direct_read_failed:
+            failures.append(
+                "Falling back to web search because the supplied link(s) could not be read."
+            )
+        results = search_results
         if all(str(item.get("source_type", "")).startswith("Wikipedia") for item in results):
             failures.append(
                 "Wikipedia fallback: only live article introductions were retrieved, not a comprehensive web search."

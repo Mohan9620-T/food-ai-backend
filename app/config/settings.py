@@ -253,6 +253,13 @@ TAVILY_API_BASE_URL = os.getenv("TAVILY_API_BASE_URL", "https://api.tavily.com")
 TAVILY_TIMEOUT_SECONDS = float(os.getenv("TAVILY_TIMEOUT_SECONDS", "10"))
 WEB_SEARCH_MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
 WEB_FETCH_TIMEOUT_SECONDS = float(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", "12"))
+# Optional: enables reading private GitHub repositories/files via the API and raises
+# the public rate limit. Public repos work without it. Never invented if unset - a
+# private repo simply reports that authentication is required.
+GITHUB_TOKEN = (_read_secret("GITHUB_TOKEN", "") or "").strip()
+GITHUB_API_BASE_URL = os.getenv("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
+# Bounded so a tree/directory link cannot pull an unbounded number of files.
+GITHUB_TREE_MAX_FILES = int(os.getenv("GITHUB_TREE_MAX_FILES", "6"))
 
 ALLOWED_ORIGINS = [
     origin.strip()

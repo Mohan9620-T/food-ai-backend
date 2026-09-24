@@ -157,6 +157,142 @@ def test_unreadable_url_does_not_fall_back_to_training(monkeypatch):
     assert "couldn't read" in lookup("Read https://source.example").error
 
 
+def test_direct_read_success_does_not_trigger_unnecessary_search(monkeypatch):
+    monkeypatch.setattr("app.services.web_lookup.read_page", lambda url: [source(url=url)])
+    monkeypatch.setattr(
+        web_search_provider, "search", lambda *a, **k: pytest.fail("Unneeded search call")
+    )
+    result = lookup("Read https://source.example/office")
+    assert "Verified current data" in result.context
+
+
+def test_direct_read_failure_falls_back_to_search(monkeypatch):
+    from app.services.web_page_reader import WebPageError
+
+    def fail(_):
+        raise WebPageError("Unavailable")
+
+    monkeypatch.setattr("app.services.web_lookup.read_page", fail)
+    monkeypatch.setattr(web_search_provider, "search", lambda query: [source()])
+    result = lookup("Read https://source.example/office")
+    assert "Verified current data" in result.context
+    assert "Falling back to web search" in result.context
+
+
+def test_direct_read_and_search_both_failing_reports_both(monkeypatch):
+    from app.services.web_page_reader import WebPageError
+
+    def fail(_):
+        raise WebPageError("Unavailable")
+
+    monkeypatch.setattr("app.services.web_lookup.read_page", fail)
+    monkeypatch.setattr(web_search_provider, "search", lambda query: None)
+    error = lookup("Read https://source.example/office").error
+    assert "couldn't read" in error
+    assert "web search" in error
+
+
+# --- Acceptance: GitHub URLs are actually fetched end-to-end, not just searched ----
+
+
+def test_acceptance_github_tree_url_is_actually_fetched_not_just_searched(monkeypatch):
+    import base64
+
+    from app.services import web_page_reader as reader
+
+    listing = [
+        {
+            "name": "attention_engine.py",
+            "type": "file",
+            "path": "app/cognitive_kernel/engines/attention_engine.py",
+        },
+        {
+            "name": "memory_engine.py",
+            "type": "file",
+            "path": "app/cognitive_kernel/engines/memory_engine.py",
+        },
+    ]
+    engine_source = {
+        "type": "file",
+        "encoding": "base64",
+        "content": base64.b64encode(
+            b'class AttentionEngine:\n    """Routes salience across the cognitive kernel."""\n'
+        ).decode(),
+    }
+
+    engine_paths = {
+        "app/cognitive_kernel/engines/attention_engine.py",
+        "app/cognitive_kernel/engines/memory_engine.py",
+    }
+
+    def fetch(url, deadline, **kwargs):
+        # The branch "feat/meta-cognitive-architecture" itself contains a "/", so
+        # the resolver must probe: split=1 (branch="feat") 404s before split=2
+        # (the real branch) succeeds - simulate that real-GitHub behavior here.
+        if url.endswith(
+            "contents/app/cognitive_kernel/engines?ref=feat/meta-cognitive-architecture"
+        ):
+            return url, "application/json", json.dumps(listing)
+        if any(
+            url.endswith(f"contents/{path}?ref=feat/meta-cognitive-architecture")
+            for path in engine_paths
+        ):
+            return url, "application/json", json.dumps(engine_source)
+        raise reader.WebPageError(
+            "The website returned HTTP 404; it may require sign-in or be unavailable."
+        )
+
+    monkeypatch.setattr(reader, "_fetch", fetch)
+    monkeypatch.setattr(
+        web_search_provider, "search", lambda *a, **k: pytest.fail("Must not fall back to search")
+    )
+
+    message = (
+        "Explain the cognitive kernel engines in this repository:\n\n"
+        "https://github.com/jeyachandran123/Atlas/tree/feat/meta-cognitive-architecture/"
+        "app/cognitive_kernel/engines\n\n"
+        "Explain the folder structure and each engine like a Chief AI/ML Architect."
+    )
+    result = lookup(message)
+
+    assert result.error == ""
+    assert "AttentionEngine" in result.context
+    assert "Routes salience across the cognitive kernel" in result.context
+    assert "attention_engine.py" in result.context and "memory_engine.py" in result.context
+
+
+def test_acceptance_github_blob_url_is_actually_fetched_not_just_searched(monkeypatch):
+    import base64
+
+    from app.services import web_page_reader as reader
+
+    file_payload = {
+        "type": "file",
+        "encoding": "base64",
+        "content": base64.b64encode(
+            b"NVIDIA_API_KEY=\nJWT_SECRET_KEY=replace_with_a_long_random_jwt_secret\n"
+        ).decode(),
+    }
+    monkeypatch.setattr(
+        reader,
+        "_fetch",
+        lambda url, deadline, **k: (url, "application/json", json.dumps(file_payload)),
+    )
+    monkeypatch.setattr(
+        web_search_provider, "search", lambda *a, **k: pytest.fail("Must not fall back to search")
+    )
+
+    message = (
+        "Explain this file:\n\n"
+        "https://github.com/jeyachandran123/Atlas/blob/feat/meta-cognitive-architecture/.env.example"
+    )
+    result = lookup(message)
+
+    assert result.error == ""
+    assert "JWT_SECRET_KEY" in result.context
+    assert "replace_with_a_long_random_jwt_secret" in result.context  # placeholder, safe to show
+
+
 def test_tavily_primary_result_and_request(monkeypatch):
     monkeypatch.setattr(settings, "TAVILY_API_KEY", "test-only")
 
