@@ -409,7 +409,13 @@ def test_chat_injects_retrieved_chunks_instead_of_full_document(
 ):
     from app.services.chat_service import ChatService
 
-    stub = _StubEmbeddingProvider(vector=(1.0, 0.0))
+    class TopicEmbeddingProvider(_StubEmbeddingProvider):
+        def embed(self, texts, *, input_type="passage"):
+            # Equal vectors made the real Chroma result order arbitrary. Give
+            # the relevant passage/query a higher similarity than filler.
+            return [[1.0, 0.0] if "idli" in text.lower() else [0.0, 1.0] for text in texts]
+
+    stub = TopicEmbeddingProvider()
     monkeypatch.setattr(semantic_retrieval, "get_embedding_provider", lambda: stub)
     token = _login(client, "rag-chat@example.com")
     headers = {"Authorization": f"Bearer {token}"}

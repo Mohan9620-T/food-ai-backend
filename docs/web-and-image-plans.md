@@ -6,9 +6,22 @@ Set `ENABLE_WEB_SEARCH=true` in the backend environment. Add `TAVILY_API_KEY`
 through the deployment's secret variables to enable broad live searches.
 Do not commit API keys. Restart/redeploy after changing the environment.
 
-Users can turn on **Search web** in the chat composer, ask to search online,
-or paste an HTTP(S) URL. Explicit website requests bypass old uploaded-document
-and image context. Replies include Markdown source links and are saved in chat history.
+Factual questions, including current office-holder and dated questions, trigger
+lookup automatically. Users do not need to turn on **Search web**. That toggle
+forces a lookup for other prompts. Public HTTP(S) links are read directly.
+Web questions bypass old uploaded-document and image context. Greetings,
+personal-file operations, creative writing and image-based plans retain their
+normal routes. Retrieved pages are appended as clickable **Sources** with a UTC
+retrieval time, in both streaming/non-streaming answers and saved chat history.
+
+When Tavily is unavailable or has no usable results, `WIKIPEDIA_SEARCH_ENABLED=true`
+(default) retrieves up to three live Wikipedia article introductions, their links
+and revision dates through the [MediaWiki Search API](https://www.mediawiki.org/wiki/API:Search)
+and [TextExtracts](https://www.mediawiki.org/wiki/Extension:TextExtracts).
+This fallback needs no key, but is not a broad search of news, jobs or prices.
+Source retrieval does not guarantee that an article is current or correct; the
+answer must distinguish current, former and predicted office holders and disclose
+conflicting or insufficient evidence. Original question dates remain in context.
 
 Public URL reading does not require Tavily. GitHub repository URLs retrieve public
 metadata, an available README excerpt, and root filenames. This is not a full code
@@ -23,8 +36,11 @@ blocked. Retrieved text is untrusted evidence, never an instruction source.
 
 Search uses [Tavily's Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search).
 GitHub summaries use the [public repository contents API](https://docs.github.com/en/rest/repos/contents).
-Explicit search failure or a missing key produces an honest message instead of a
-made-up current answer. Existing general chat continues to work without a search key.
+If both search providers fail, the reply reports that it could not verify the
+answer instead of substituting stale training knowledge. No model decision call
+can silently skip factual lookup. With `ENABLE_WEB_SEARCH=false`, ordinary chat
+retains its previous behavior and explicit web requests report that web access
+is disabled. Keep the feature enabled in production for automatic lookup.
 
 Non-streaming NVIDIA replies use `NVIDIA_CHAT_COMPLETE_TIMEOUT_SECONDS=120` to
 allow a detailed answer to finish. Streaming keeps its separate 30-second idle

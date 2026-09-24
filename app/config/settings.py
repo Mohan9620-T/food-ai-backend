@@ -244,19 +244,14 @@ RAG_MAX_CONTEXT_TOKENS = int(os.getenv("RAG_MAX_CONTEXT_TOKENS", "2000"))
 RAG_CHUNK_CHARS = int(os.getenv("RAG_CHUNK_CHARS", "800"))
 RAG_CHUNK_OVERLAP_CHARS = int(os.getenv("RAG_CHUNK_OVERLAP_CHARS", "100"))
 
-# Live web search via Tavily, offered to the NVIDIA model as a tool it can choose
-# to call for questions needing current/real-time information. Off by default and
-# a no-op without a key; failures degrade to answering without search results,
-# never block the chat response.
+# Automatic factual lookup with Tavily and a key-free Wikipedia fallback.
+# Failed lookups report unavailable evidence instead of guessing current facts.
 ENABLE_WEB_SEARCH = os.getenv("ENABLE_WEB_SEARCH", "false").lower() == "true"
+WIKIPEDIA_SEARCH_ENABLED = os.getenv("WIKIPEDIA_SEARCH_ENABLED", "true").lower() == "true"
 TAVILY_API_KEY = (_read_secret("TAVILY_API_KEY", "") or "").strip()
 TAVILY_API_BASE_URL = os.getenv("TAVILY_API_BASE_URL", "https://api.tavily.com").rstrip("/")
 TAVILY_TIMEOUT_SECONDS = float(os.getenv("TAVILY_TIMEOUT_SECONDS", "10"))
 WEB_SEARCH_MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
-# Small budget: this call only has to decide whether to search and with what
-# query, not produce the final answer.
-WEB_SEARCH_DECISION_MAX_TOKENS = int(os.getenv("WEB_SEARCH_DECISION_MAX_TOKENS", "200"))
-WEB_SEARCH_DECISION_TIMEOUT_SECONDS = float(os.getenv("WEB_SEARCH_DECISION_TIMEOUT_SECONDS", "5"))
 WEB_FETCH_TIMEOUT_SECONDS = float(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", "12"))
 
 ALLOWED_ORIGINS = [
