@@ -21,6 +21,7 @@ from app.services.document.document_pipeline_service import (
     StructuredPipelineStep,
 )
 from app.services.document.document_references import references_document, references_image
+from app.services.spreadsheet.column_grouping import ColumnGroupingRequest
 from app.services.spreadsheet.row_append import AppendRowsRequest
 from app.services.spreadsheet.row_selection import RowSelection
 from app.utils.document_clarification import spreadsheet_layout_question
@@ -137,6 +138,11 @@ class DocumentAutomationService:
         conversation_history: list[ChatHistoryMessage] | None = None,
         source_mode: Literal["auto", "description"] = "auto",
     ) -> DocumentAutomationPlan:
+        grouping = ColumnGroupingRequest.from_instruction(instruction)
+        if grouping is not None and source_mode != "description":
+            return self._plan_column_grouping(
+                instruction, documents, grouping, explicit_source=explicit_source
+            )
         append_instruction = instruction
         history = conversation_history or []
         if (
@@ -392,6 +398,47 @@ class DocumentAutomationService:
         steps = self.pipeline_service.plan_structured(
             tuple(requested_steps),
             input_filename=default_source.filename if default_source else None,
+            request_instruction=instruction,
+        )
+        return DocumentAutomationPlan(status="ready", clarifying_question=None, steps=steps)
+
+    def _plan_column_grouping(
+        self,
+        instruction: str,
+        documents: tuple[AvailableDocument, ...],
+        request: ColumnGroupingRequest,
+        *,
+        explicit_source: bool,
+    ) -> DocumentAutomationPlan:
+        sources = tuple(doc for doc in documents if doc.document_type == DocumentType.XLSX)
+        if not sources:
+            return self._clarification(
+                "Please upload the Excel workbook whose rows should be split into sheets."
+            )
+        if not explicit_source and any(doc.kind == "uploaded" for doc in sources):
+            sources = tuple(doc for doc in sources if doc.kind == "uploaded")
+        resolved = self._resolve_input_reference(
+            None,
+            instruction,
+            sources,
+            {doc.filename.casefold(): doc.filename for doc in sources},
+            index=0,
+            explicit_source=explicit_source,
+            multi_input=False,
+        )
+        if isinstance(resolved, str) and resolved.startswith("clarify:"):
+            return self._clarification(resolved.removeprefix("clarify:"))
+        steps = self.pipeline_service.plan_structured(
+            (
+                StructuredPipelineStep(
+                    document_type=DocumentType.XLSX,
+                    operation=DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN,
+                    input_file=resolved,
+                    output_type=DocumentType.XLSX,
+                    parameters=request.model_dump(exclude_none=True),
+                ),
+            ),
+            input_filename=sources[-1].filename,
             request_instruction=instruction,
         )
         return DocumentAutomationPlan(status="ready", clarifying_question=None, steps=steps)
@@ -1137,6 +1184,11 @@ class DocumentAutomationService:
             "To append supplied records to an existing workbook, use append_workbook_rows with "
             "data containing the user's exact pasted rows (TSV, CSV, table or JSON), optionally sheet_name. "
             "Never regenerate the existing workbook to add records. "
+            "To put actual existing rows with equal values into separate worksheets, use "
+            "split_workbook_by_column with column set to the grouping header (Price for price/rate), "
+            "optionally sheet_name if known. It retains source sheets, all columns and every row, "
+            "including a Blank group for missing values. Never substitute split_by_category, "
+            "create_document, a guide, summary or mapping table for grouping another column. "
             "A new topic is independent of earlier uploads unless the user refers to a source. "
             "With no available files, use create_document with input_file null to write from "
             "general knowledge and the latest requirements. A request to create a file must "

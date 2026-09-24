@@ -438,6 +438,16 @@ For production or staging, add the exact frontend origin to `ALLOWED_ORIGINS`.
   as a follow-up, without AI availability or a Build step. New lookups search the
   latest original uploaded workbook; name a generated workbook explicitly to search
   that output instead. Explicit file-creation requests still use Review and Build.
+- **Separate Excel rows by price:** upload an XLSX workbook and write
+  `Put items with the same price into separate sheets` or
+  `same rate items thani thani sheet la list out panni kudu`.
+  The app copies actual rows into one tab per price, including a `Blank` tab for missing
+  prices, and retains the original worksheets, columns, cell values and formatting.
+  It validates the saved workbook before returning the download. This operation does
+  not regenerate rows through AI or search the web. Requests to sort within the same
+  sheet retain their existing behaviour. Detailed automation prompts support up to
+  20,000 characters; ambiguous source worksheets require clarification.
+
 - **Add Excel records:** upload an XLSX workbook and write `Add new rows to sheet "Items"`,
   followed on the next lines by rows copied from Excel, CSV, a Markdown table, or JSON records.
   Include column headers when mapping only selected columns. Review and Build creates an

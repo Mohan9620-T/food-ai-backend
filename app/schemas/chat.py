@@ -120,7 +120,7 @@ class ChatDocumentPipelineResponse(ChatDocumentResponse):
 
 class ChatDocumentAutomationRequest(BaseModel):
     session_id: int = Field(gt=0)
-    instruction: str = Field(min_length=1, max_length=4000)
+    instruction: str = Field(min_length=1, max_length=20000)
     source_document_id: int | None = Field(default=None, gt=0)
     source_mode: Literal["auto", "description"] = "auto"
     # Accepted for older clients; ready requests now execute without a confirmation gate.

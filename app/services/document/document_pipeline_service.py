@@ -38,6 +38,7 @@ from app.services.document.extraction_models import (
     StructuredDocumentContent,
 )
 from app.services.document.image_document_reader import ImageDocumentReader
+from app.services.spreadsheet.column_grouping import ColumnGroupingRequest, WorkbookColumnGrouper
 from app.services.spreadsheet.row_append import AppendRowsRequest, WorkbookRowAppender
 from app.services.spreadsheet.row_selection import RowSelection, WorkbookRowSelector
 
@@ -106,6 +107,7 @@ class DocumentPipelineService:
             DocumentOperation.FILTER_AND_SORT_WORKBOOK,
             DocumentOperation.EXTRACT_MATCHING_ROWS,
             DocumentOperation.APPEND_WORKBOOK_ROWS,
+            DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN,
         }
     )
     _TEXT_OPERATIONS = frozenset(
@@ -389,6 +391,24 @@ class DocumentPipelineService:
                 fidelity_note="Selected row values and column order preserved in a new workbook.",
             )
             summary = result.summary
+        elif step.intent.operation == DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN:
+            grouped = WorkbookColumnGrouper().split(
+                selected.file_data,
+                ColumnGroupingRequest.model_validate(step.intent.parameters),
+                selected.filename,
+            )
+            generated = GeneratedDocument(
+                file_data=grouped.file_data,
+                filename=DocumentGenerationService.safe_filename(
+                    f"{Path(selected.filename).stem}-by-{step.intent.parameters['column']}",
+                    DocumentType.XLSX,
+                ),
+                content_type=DocumentGenerationService.MIME_TYPES[DocumentType.XLSX],
+                document_type=DocumentType.XLSX,
+                fidelity=Fidelity.HIGH,
+                fidelity_note="All source rows and columns verified after saving the grouped workbook.",
+            )
+            summary = grouped.summary
         elif step.intent.operation == DocumentOperation.APPEND_WORKBOOK_ROWS:
             data, appended = WorkbookRowAppender().append(
                 selected.file_data, AppendRowsRequest.model_validate(step.intent.parameters)
@@ -751,6 +771,15 @@ class DocumentPipelineService:
                 "The document plan contains unsupported parameters."
             )
         parameters = dict(requested.parameters)
+        if requested.operation == DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN:
+            try:
+                return ColumnGroupingRequest.model_validate(parameters).model_dump(
+                    exclude_none=True
+                )
+            except ValidationError as error:
+                raise InvalidDocumentParametersError(
+                    "Name the column to split into separate sheets."
+                ) from error
         if requested.operation == DocumentOperation.APPEND_WORKBOOK_ROWS:
             try:
                 return AppendRowsRequest.model_validate(parameters).model_dump(exclude_none=True)
@@ -868,6 +897,11 @@ class DocumentPipelineService:
             return DocumentGenerationService.safe_filename(
                 f"{Path(current_filename).stem}-updated", output_type
             )
+        if operation == DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN:
+            return DocumentGenerationService.safe_filename(
+                f"{Path(current_filename).stem}-by-{(parameters or {}).get('column', 'value')}",
+                output_type,
+            )
         stem = Path(current_filename).stem or "document"
         return DocumentGenerationService.safe_filename(f"{stem}-pipeline", output_type)
 
@@ -900,6 +934,11 @@ class DocumentPipelineService:
             return request_instruction or "Extract complete rows matching the requested IDs"
         if operation == DocumentOperation.APPEND_WORKBOOK_ROWS:
             return request_instruction or "Append the supplied rows to the workbook"
+        if operation == DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN:
+            return (
+                request_instruction
+                or f"Split actual rows into one sheet per {parameters['column']}"
+            )
         if operation == DocumentOperation.SPLIT_BY_CATEGORY:
             return "Split the workbook into one sheet per category"
         if operation == DocumentOperation.EXPAND_DISH_BY_DIETARY_CATEGORY:

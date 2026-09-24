@@ -50,6 +50,7 @@ class DocumentOperation(str, Enum):
     FILTER_AND_SORT_WORKBOOK = "filter_and_sort_workbook"
     EXTRACT_MATCHING_ROWS = "extract_matching_rows"
     APPEND_WORKBOOK_ROWS = "append_workbook_rows"
+    SPLIT_WORKBOOK_BY_COLUMN = "split_workbook_by_column"
 
 
 @dataclass(frozen=True)
@@ -258,6 +259,16 @@ class DocumentOperationRegistry:
                     spreadsheet,
                     required_parameters=frozenset({"data"}),
                     optional_parameters=frozenset({"sheet_name"}),
+                    expected_fidelity=Fidelity.HIGH,
+                ),
+                DocumentOperationDefinition(
+                    DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN,
+                    ("split by column", "one sheet per price", "separate sheets by value"),
+                    True,
+                    spreadsheet,
+                    spreadsheet,
+                    required_parameters=frozenset({"column"}),
+                    optional_parameters=frozenset({"sheet_name", "instruction"}),
                     expected_fidelity=Fidelity.HIGH,
                 ),
             )

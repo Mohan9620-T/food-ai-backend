@@ -1480,6 +1480,7 @@ async def automate_document(
                 if step.intent.operation in {
                     DocumentOperation.EXTRACT_MATCHING_ROWS,
                     DocumentOperation.APPEND_WORKBOOK_ROWS,
+                    DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN,
                 }:
                     completion_details.append(result.summary)
 

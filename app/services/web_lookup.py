@@ -8,6 +8,7 @@ from urllib.parse import quote, urlsplit
 
 from app.config import settings
 from app.services import web_search_provider
+from app.services.spreadsheet.column_grouping import ColumnGroupingRequest
 from app.services.web_page_reader import WebPageError, extract_urls, read_page
 
 
@@ -59,6 +60,8 @@ def explicit_web_request(message: str) -> bool:
 
 
 def automatic_web_question(message: str) -> bool:
+    if ColumnGroupingRequest.from_instruction(message) is not None:
+        return False
     text = message.strip().lower()
     if not text or re.fullmatch(
         r"(?:hi|hello|hey|thanks|thank you|ok(?:ay)?|yes|no|sure|continue|go on|next|done|vanakkam)[!.\s]*",
