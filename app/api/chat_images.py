@@ -65,14 +65,18 @@ async def generate_image(
                 message_id=bot.id,
                 filename=f"generated-image-{uuid4().hex[:12]}.png",
                 content_type="image/png",
-                file_size=len(image),
-                file_data=image,
+                file_size=len(image.data),
+                file_data=image.data,
                 kind="generated",
                 generation_metadata={
                     "provider": "nvidia",
                     "model": IMAGE_MODEL,
                     "prompt": prompt,
-                    "aspect_ratio": payload.aspect_ratio,
+                    "provider_prompt": image.provider_prompt,
+                    "prompt_compacted": image.provider_prompt != prompt,
+                    "aspect_ratio": image.aspect_ratio,
+                    "width": image.width,
+                    "height": image.height,
                 },
             )
             # Do not replace latest_document_id: an illustration is not the active spreadsheet.

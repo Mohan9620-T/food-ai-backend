@@ -61,7 +61,8 @@ def test_provider_returns_valid_png_without_truncating_prompt(
 
     transport(monkeypatch, handler)
     result = asyncio.run(generation.ImageGenerationService().generate(prompt, ratio))
-    assert result.startswith(b"\x89PNG")
+    assert result.data.startswith(b"\x89PNG")
+    assert result.provider_prompt == prompt
 
 
 @pytest.mark.parametrize(
@@ -78,6 +79,142 @@ def test_provider_errors_are_safe_and_never_retried(monkeypatch, status, expecte
     with pytest.raises(generation.ImageGenerationError) as error:
         asyncio.run(generation.ImageGenerationService().generate("Robot chef"))
     assert error.value.status_code == expected
+    assert "private provider detail" not in str(error.value)
+    assert len(calls) == 1
+
+
+def test_long_prompt_is_prepared_before_generation_and_keeps_landscape(
+    monkeypatch, valid_png_bytes
+):
+    original = ("Detailed volcanic scene. " * 60) + "16:9, exactly three black dragon heads."
+    prepared = "Three black dragon heads: left, center, right; huge wings; orange volcanic sky."
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append(str(request.url))
+        if request.url.path.endswith("/chat/completions"):
+            assert body["messages"][1]["content"] == original
+            assert body["response_format"] == {"type": "json_object"}
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": json.dumps({"prompt": prepared})},
+                        }
+                    ]
+                },
+            )
+        assert body["prompt"] == prepared
+        assert (body["width"], body["height"]) == (1344, 768)
+        return httpx.Response(
+            200, json={"artifacts": [{"base64": base64.b64encode(valid_png_bytes).decode()}]}
+        )
+
+    transport(monkeypatch, handler)
+    result = asyncio.run(generation.ImageGenerationService().generate(original))
+    assert result.provider_prompt == prepared
+    assert result.aspect_ratio == "16:9"
+    assert result.data == valid_png_bytes
+    assert len(calls) == 2
+
+
+def test_whitespace_can_fit_without_text_model(monkeypatch, valid_png_bytes):
+    def handler(request):
+        assert str(request.url) == generation.IMAGE_ENDPOINT
+        assert json.loads(request.content)["prompt"] == "A black dragon"
+        return httpx.Response(
+            200, json={"artifacts": [{"base64": base64.b64encode(valid_png_bytes).decode()}]}
+        )
+
+    transport(monkeypatch, handler)
+    result = asyncio.run(
+        generation.ImageGenerationService().generate("A" + " " * 810 + "black dragon")
+    )
+    assert result.provider_prompt == "A black dragon"
+
+
+@pytest.mark.parametrize(
+    "outcome", ["valid", "still_long", "invalid", "truncated", "refused", "unavailable"]
+)
+def test_preparation_is_bounded_and_never_truncates_or_generates_invalid_output(
+    monkeypatch, outcome
+):
+    calls = []
+
+    def handler(request):
+        assert request.url.path.endswith("/chat/completions")
+        body = json.loads(request.content)
+        calls.append(body)
+        if outcome == "unavailable":
+            return httpx.Response(503, json={"secret": "private provider detail"})
+        content = json.dumps({"prompt": "x" * 801})
+        finish = "stop"
+        if len(calls) == 2 and outcome == "valid":
+            content = json.dumps({"prompt": "Three black dragons under an orange sky."})
+        if outcome == "invalid":
+            content = "not JSON"
+        if outcome == "truncated":
+            finish = "length"
+        if outcome == "refused":
+            finish = "content_filter"
+        return httpx.Response(
+            200, json={"choices": [{"finish_reason": finish, "message": {"content": content}}]}
+        )
+
+    transport(monkeypatch, handler)
+    service = generation.ImageGenerationService()
+    if outcome == "valid":
+        result = asyncio.run(service._prepare_prompt("scene " * 200))
+        assert result == "Three black dragons under an orange sky."
+        assert len(calls) == 2
+        assert "600 characters" in calls[1]["messages"][-1]["content"]
+    else:
+        with pytest.raises(generation.ImageGenerationError) as error:
+            asyncio.run(service.generate("scene " * 200))
+        assert ("content rules" if outcome == "refused" else "800") in str(error.value)
+        assert "private provider detail" not in str(error.value)
+        assert len(calls) == (2 if outcome == "still_long" else 1)
+
+
+@pytest.mark.parametrize(
+    "payload,expected",
+    [
+        (
+            {
+                "detail": [
+                    {
+                        "type": "string_too_long",
+                        "loc": ["body", "prompt"],
+                        "input": "private provider detail",
+                        "ctx": {"max_length": 800},
+                    }
+                ]
+            },
+            "prompt limit",
+        ),
+        ({"detail": [{"type": "enum", "loc": ["body", "width"]}]}, "image settings"),
+        (
+            {"error": {"code": "content_policy_violation", "message": "private provider detail"}},
+            "content rules",
+        ),
+        ({"detail": "private provider detail"}, "recognized reason"),
+        ({"detail": [None, {"loc": "private provider detail"}, {"loc": []}]}, "recognized reason"),
+    ],
+)
+def test_provider_validation_is_not_misreported_as_content_refusal(monkeypatch, payload, expected):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(422, json=payload)
+
+    transport(monkeypatch, handler)
+    with pytest.raises(generation.ImageGenerationError) as error:
+        asyncio.run(generation.ImageGenerationService().generate("Three black dragon heads"))
+    assert expected in str(error.value)
     assert "private provider detail" not in str(error.value)
     assert len(calls) == 1
 
@@ -117,7 +254,9 @@ def test_image_persists_with_history_and_private_download(
 ):
     owner = headers(client)
     other = headers(client, "other-owner")
-    generate = AsyncMock(return_value=valid_png_bytes)
+    generate = AsyncMock(
+        return_value=generation.GeneratedImage(valid_png_bytes, "A robot chef", "1:1", 2, 2)
+    )
     monkeypatch.setattr(chat_images.service, "generate", generate)
     response = client.post(
         "/chat/images", headers=owner, json={"message": "Generate an image of a robot chef"}
@@ -131,6 +270,9 @@ def test_image_persists_with_history_and_private_download(
     assert history["messages"][-1]["attachments"][0]["id"] == attachment_id
     attachment = db_session.get(ChatDocumentAttachment, attachment_id)
     assert attachment.generation_metadata["prompt"] == "Generate an image of a robot chef"
+    assert attachment.generation_metadata["provider_prompt"] == "A robot chef"
+    assert attachment.generation_metadata["prompt_compacted"] is True
+    assert attachment.generation_metadata["width"] == 2
     assert (
         client.get(f"/chat/documents/{attachment_id}/download", headers=owner).content
         == valid_png_bytes
