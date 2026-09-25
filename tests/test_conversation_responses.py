@@ -15,7 +15,7 @@ from app.schemas.chat import ChatHistoryMessage
 from app.schemas.vision_result import VisionResult
 from app.services.chat_service import ChatModelUnavailableError, ChatService
 from app.services.chat_vision_service import ChatVisionService
-from app.services.conversation_guidance import CONVERSATION_GUIDANCE
+from app.services.conversation_guidance import CONVERSATION_GUIDANCE, PERSONAL_CONVERSATION_PROMPT
 
 
 def _install_nvidia_stream(monkeypatch, events):
@@ -366,6 +366,8 @@ def test_shared_guidance_and_recent_context_reach_vision_provider(monkeypatch, v
 
     assert result == "I hear you."
     assert CONVERSATION_GUIDANCE in captured[0]["system_prompt"]
-    assert CONVERSATION_GUIDANCE in text_body["messages"][0]["content"]
+    # Personal text turns use the concise emotional-support prompt; vision retains
+    # the shared guidance alongside its image-analysis instructions.
+    assert text_body["messages"][0]["content"] == PERSONAL_CONVERSATION_PROMPT
     assert history[0].content in captured[0]["user_prompt"]
     assert captured[0]["user_prompt"].endswith("Latest question: What should I do now?")

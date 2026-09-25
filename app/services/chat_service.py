@@ -117,6 +117,11 @@ class ChatService:
     DEVANAGARI_SCRIPT_PATTERN = re.compile(r"[\u0900-\u097f]")
 
     SYSTEM_PROMPT = (
+        "Image creation is handled by the application's Create image tool, not this text response. "
+        "For image capability questions, explain that users can select Create image and describe "
+        "a subject. Never claim you created an image without a returned image attachment. "
+        "Do not promise uploaded-image editing. Do not invent blanket copyright prohibitions "
+        "for fictional characters; image requests are subject to the image provider's rules. "
         """You are a helpful, accurate multilingual assistant.
 
 Language handling:
@@ -259,9 +264,7 @@ Content-versus-format rules:
 - Put Markdown bold markers around headings, including the issue title, "Repro Steps:",
   and "Expected Result:". Return only the formatted result without introductory or
   explanatory commentary for this bug-report formatting task only.
-"""
-        + "\n"
-        + CONVERSATION_GUIDANCE
+""" + "\n" + CONVERSATION_GUIDANCE
     )
 
     TANGLISH_STYLE_PROMPT = """The user explicitly selected Tanglish for this chat.
