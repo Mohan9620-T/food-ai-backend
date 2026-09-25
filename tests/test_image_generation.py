@@ -86,7 +86,9 @@ def test_provider_errors_are_safe_and_never_retried(monkeypatch, status, expecte
 def test_long_prompt_is_prepared_before_generation_and_keeps_landscape(
     monkeypatch, valid_png_bytes
 ):
-    original = ("Detailed volcanic scene. " * 60) + "16:9, exactly three black dragon heads."
+    ending = " 16:9, exactly three black dragon heads."
+    original = ("Detailed volcanic scene. " * 900)[: 20_000 - len(ending)] + ending
+    assert len(original) == 20_000
     prepared = "Three black dragon heads: left, center, right; huge wings; orange volcanic sky."
     calls = []
 
@@ -137,7 +139,8 @@ def test_whitespace_can_fit_without_text_model(monkeypatch, valid_png_bytes):
 
 
 @pytest.mark.parametrize(
-    "outcome", ["valid", "still_long", "invalid", "truncated", "refused", "unavailable"]
+    "outcome",
+    ["valid", "still_long", "invalid", "truncated", "refused", "unavailable", "cannot_fit"],
 )
 def test_preparation_is_bounded_and_never_truncates_or_generates_invalid_output(
     monkeypatch, outcome
@@ -160,11 +163,14 @@ def test_preparation_is_bounded_and_never_truncates_or_generates_invalid_output(
             finish = "length"
         if outcome == "refused":
             finish = "content_filter"
+        if outcome == "cannot_fit":
+            content = json.dumps({"error": "cannot_fit"})
         return httpx.Response(
             200, json={"choices": [{"finish_reason": finish, "message": {"content": content}}]}
         )
 
     transport(monkeypatch, handler)
+    monkeypatch.setattr(generation, "PROMPT_PREPARATION_RETRY_DELAY_SECONDS", 0)
     service = generation.ImageGenerationService()
     if outcome == "valid":
         result = asyncio.run(service._prepare_prompt("scene " * 200))
@@ -174,9 +180,95 @@ def test_preparation_is_bounded_and_never_truncates_or_generates_invalid_output(
     else:
         with pytest.raises(generation.ImageGenerationError) as error:
             asyncio.run(service.generate("scene " * 200))
-        assert ("content rules" if outcome == "refused" else "800") in str(error.value)
+        expected = {
+            "refused": "content rules",
+            "cannot_fit": "couldn't preserve all",
+        }.get(outcome, "couldn't be prepared right now")
+        assert expected in str(error.value)
+        assert "under 800" not in str(error.value)
+        assert error.value.status_code == (422 if outcome in {"refused", "cannot_fit"} else 503)
         assert "private provider detail" not in str(error.value)
-        assert len(calls) == (2 if outcome == "still_long" else 1)
+        assert len(calls) == (2 if outcome in {"still_long", "unavailable"} else 1)
+
+
+@pytest.mark.parametrize("failure", [502, 503, 504, "timeout", "connection"])
+def test_temporary_preparation_failure_retries_without_duplicate_image_generation(
+    monkeypatch, valid_png_bytes, failure
+):
+    preparation_calls = []
+    image_calls = []
+    original = "A cinematic volcanic landscape, glowing orange clouds. " * 30
+
+    def handler(request):
+        body = json.loads(request.content)
+        if request.url.path.endswith("/chat/completions"):
+            preparation_calls.append(body)
+            assert body["messages"][1]["content"] == original
+            if len(preparation_calls) == 1:
+                if failure == "timeout":
+                    raise httpx.ReadTimeout("private provider detail")
+                if failure == "connection":
+                    raise httpx.ConnectError("private provider detail")
+                return httpx.Response(failure)
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(
+                                    {"prompt": "Volcanic landscape, orange clouds."}
+                                )
+                            },
+                        }
+                    ]
+                },
+            )
+        image_calls.append(body)
+        return httpx.Response(
+            200, json={"artifacts": [{"base64": base64.b64encode(valid_png_bytes).decode()}]}
+        )
+
+    transport(monkeypatch, handler)
+    monkeypatch.setattr(generation, "PROMPT_PREPARATION_RETRY_DELAY_SECONDS", 0)
+    result = asyncio.run(generation.ImageGenerationService().generate(original))
+    assert result.data == valid_png_bytes
+    assert len(preparation_calls) == 2
+    assert len(image_calls) == 1
+    assert image_calls[0]["prompt"] == "Volcanic landscape, orange clouds."
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 422, 429])
+def test_preparation_does_not_retry_rejections_or_quota_errors(monkeypatch, status):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status, json={"error": "private provider detail"})
+
+    transport(monkeypatch, handler)
+    with pytest.raises(generation.ImageGenerationError) as error:
+        asyncio.run(generation.ImageGenerationService().generate("scene " * 200))
+    assert "private provider detail" not in str(error.value)
+    assert "800" not in str(error.value)
+    assert len(calls) == 1
+
+
+def test_preparation_deadline_stops_a_stalled_service(monkeypatch):
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        await asyncio.Event().wait()
+
+    transport(monkeypatch, handler)
+    monkeypatch.setattr(generation, "PROMPT_PREPARATION_TIMEOUT_SECONDS", 0.01)
+    with pytest.raises(generation.ImageGenerationError) as error:
+        asyncio.run(generation.ImageGenerationService().generate("scene " * 200))
+    assert error.value.status_code == 503
+    assert "original prompt is preserved" in str(error.value)
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -290,6 +382,25 @@ def test_image_persists_with_history_and_private_download(
     assert client.post("/chat/images", json={"message": "Create a logo"}).status_code == 401
 
 
+@pytest.mark.parametrize("character", ["a", "\U0001f30b"])
+def test_api_accepts_and_preserves_20000_characters(
+    client, db_session, monkeypatch, valid_png_bytes, character
+):
+    owner = headers(client)
+    original = character * 20_000
+    generate = AsyncMock(
+        return_value=generation.GeneratedImage(valid_png_bytes, "A volcano", "1:1", 2, 2)
+    )
+    monkeypatch.setattr(chat_images.service, "generate", generate)
+    response = client.post("/chat/images", headers=owner, json={"message": original})
+    assert response.status_code == 200
+    generate.assert_awaited_once_with(original, "auto")
+    attachment = db_session.get(ChatDocumentAttachment, response.json()["attachment"]["id"])
+    assert attachment.generation_metadata["prompt"] == original
+    history = client.get(f"/chat/sessions/{response.json()['session_id']}", headers=owner).json()
+    assert history["messages"][0]["content"] == original
+
+
 def test_failed_generation_does_not_save_fake_success(client, db_session, monkeypatch):
     owner = headers(client)
     monkeypatch.setattr(
@@ -319,7 +430,7 @@ def test_capabilities_missing_key_and_input_validation(client, monkeypatch):
     assert "not configured" in result.json()["response"]
     assert result.json()["attachment"] is None
     generate.assert_not_awaited()
-    for message in ["", "   ", "a" * 10001]:
+    for message in ["", "   ", "a" * 20_001]:
         assert (
             client.post("/chat/images", headers=owner, json={"message": message}).status_code == 422
         )

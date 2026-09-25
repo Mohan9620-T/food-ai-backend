@@ -15,6 +15,7 @@ from app.repositories.chat_repository import ChatRepository
 from app.schemas.chat import ChatDocumentAttachmentOut, ChatDocumentResponse
 from app.services.image_generation_service import (
     IMAGE_MODEL,
+    MAX_IMAGE_REQUEST_CHARS,
     ImageGenerationError,
     ImageGenerationService,
     image_request_help,
@@ -27,7 +28,7 @@ service = ImageGenerationService()
 
 
 class ImageGenerationRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=10000, pattern=r"\S")
+    message: str = Field(min_length=1, max_length=MAX_IMAGE_REQUEST_CHARS, pattern=r"\S")
     session_id: int | None = Field(default=None, gt=0)
     aspect_ratio: Literal["auto", "1:1", "9:16", "16:9"] = "auto"
 

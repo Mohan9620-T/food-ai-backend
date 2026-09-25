@@ -1,8 +1,10 @@
 """NVIDIA FLUX image generation. Provider refusals are never retried or bypassed."""
 
+import asyncio
 import base64
 import binascii
 import json
+import logging
 import re
 from dataclasses import dataclass
 from io import BytesIO
@@ -14,11 +16,15 @@ from app.config import settings
 
 IMAGE_ENDPOINT = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b"
 IMAGE_MODEL = "black-forest-labs/flux.2-klein-4b"
+MAX_IMAGE_REQUEST_CHARS = 20_000
 MAX_RESPONSE_BYTES = 20 * 1024 * 1024
 # The hosted trial endpoint validates against 800, despite its reference page
 # advertising 10,000. Keep the user's full request in history and prepare it first.
 MAX_PROVIDER_PROMPT_CHARS = 800
 MAX_METADATA_BYTES = 64 * 1024
+PROMPT_PREPARATION_TIMEOUT_SECONDS = 90
+PROMPT_PREPARATION_RETRY_DELAY_SECONDS = 0.5
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -43,6 +49,32 @@ async def _read_body(response: httpx.Response, limit: int) -> bytes:
         if len(body) > limit:
             raise ImageGenerationError("The image provider returned an oversized response.")
     return bytes(body)
+
+
+async def _request_preparation(client: httpx.AsyncClient, request_body: dict[str, object]) -> bytes:
+    """Retry a temporary text-service failure once; never retry an image or refusal."""
+    for attempt in range(2):
+        try:
+            async with client.stream(
+                "POST",
+                f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.NVIDIA_API_KEY}"},
+                json=request_body,
+            ) as response:
+                response.raise_for_status()
+                return await _read_body(response, MAX_METADATA_BYTES)
+        except httpx.HTTPStatusError as error:
+            if attempt or error.response.status_code not in {502, 503, 504}:
+                raise
+            logger.warning(
+                "Retrying image prompt preparation after HTTP %s", error.response.status_code
+            )
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError):
+            if attempt:
+                raise
+            logger.warning("Retrying image prompt preparation after a temporary connection failure")
+        await asyncio.sleep(PROMPT_PREPARATION_RETRY_DELAY_SECONDS)
+    raise RuntimeError("Unreachable preparation retry state")
 
 
 def _request_error(body: bytes) -> ImageGenerationError:
@@ -127,8 +159,8 @@ class ImageGenerationService:
         if len(compact) <= MAX_PROVIDER_PROMPT_CHARS:
             return compact
         failure = (
-            "I couldn't fit all the image instructions into the provider's 800-character limit. "
-            "Your original prompt is preserved. Please shorten it and try again."
+            "The image description couldn't be prepared right now. "
+            "Your full original prompt is preserved. Please retry shortly."
         )
         # Only compress before generation, never in response to a content refusal.
         # No string slicing: that would silently drop constraints near the end.
@@ -153,7 +185,10 @@ class ImageGenerationService:
             {"role": "user", "content": prompt},
         ]
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=10)) as client:
+            async with (
+                asyncio.timeout(PROMPT_PREPARATION_TIMEOUT_SECONDS),
+                httpx.AsyncClient(timeout=httpx.Timeout(40, connect=10)) as client,
+            ):
                 # One correction is allowed for the text model exceeding the budget.
                 # The image endpoint is still called exactly once.
                 for attempt in range(2):
@@ -167,14 +202,7 @@ class ImageGenerationService:
                     }
                     if "nemotron" in settings.NVIDIA_CHAT_MODEL.lower():
                         request_body["chat_template_kwargs"] = {"enable_thinking": False}
-                    async with client.stream(
-                        "POST",
-                        f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
-                        headers={"Authorization": f"Bearer {settings.NVIDIA_API_KEY}"},
-                        json=request_body,
-                    ) as response:
-                        response.raise_for_status()
-                        payload = json.loads(await _read_body(response, MAX_METADATA_BYTES))
+                    payload = json.loads(await _request_preparation(client, request_body))
                     choice = payload["choices"][0]
                     if choice.get("finish_reason") == "content_filter" or choice["message"].get(
                         "refusal"
@@ -185,11 +213,19 @@ class ImageGenerationService:
                             422,
                         )
                     if choice.get("finish_reason") != "stop":
-                        raise ImageGenerationError(failure, 422)
+                        raise ImageGenerationError(failure)
                     content = choice["message"]["content"]
-                    compact = json.loads(content).get("prompt")
+                    description = json.loads(content)
+                    if description.get("error") == "cannot_fit":
+                        raise ImageGenerationError(
+                            "This image model couldn't preserve all the requested details in its "
+                            "prepared description. Your original prompt is preserved. "
+                            "Please focus the description on the most important details.",
+                            422,
+                        )
+                    compact = description.get("prompt")
                     if not isinstance(compact, str) or not compact.strip():
-                        raise ImageGenerationError(failure, 422)
+                        raise ImageGenerationError(failure)
                     compact = compact.strip()
                     if len(compact) <= MAX_PROVIDER_PROMPT_CHARS:
                         return compact
@@ -212,18 +248,16 @@ class ImageGenerationService:
             raise
         except (
             httpx.HTTPError,
+            TimeoutError,
             ValueError,
             KeyError,
             IndexError,
             TypeError,
             AttributeError,
         ) as error:
-            raise ImageGenerationError(
-                "The image description couldn't be prepared right now. Your original prompt is "
-                "preserved. Please retry or use a description under 800 characters.",
-                503,
-            ) from error
-        raise ImageGenerationError(failure, 422)
+            logger.warning("Image prompt preparation failed (%s)", type(error).__name__)
+            raise ImageGenerationError(failure) from error
+        raise ImageGenerationError(failure)
 
     async def generate(self, prompt: str, aspect_ratio: str = "auto") -> GeneratedImage:
         if not settings.ENABLE_IMAGE_GENERATION or not settings.NVIDIA_API_KEY:

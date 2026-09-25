@@ -13,7 +13,8 @@ Never put the key in Angular environment files or source control.
 
 - `ENABLE_IMAGE_GENERATION=true` (default): enables creation when the NVIDIA key is present.
 - `NVIDIA_IMAGE_TIMEOUT_SECONDS=120` (default): provider read timeout.
-- One image per request; four inference steps; the app accepts up to 10,000 prompt characters.
+- One image per request; four inference steps; the app accepts up to **20,000 prompt characters**
+  in both the composer and API, including Unicode characters.
 - The NVIDIA hosted endpoint currently enforces **800 characters** (verified against the
   live endpoint; its reference page currently says 10,000). Longer requests are prepared
   using the existing NVIDIA chat model before image generation. The preparation instruction
@@ -23,9 +24,13 @@ Never put the key in Angular environment files or source control.
 - The original request is kept in chat and attachment metadata. The exact provider prompt,
   whether it was compacted, the resolved aspect ratio and actual pixel dimensions are also
   saved with the attachment. Prompts and raw provider errors are not logged.
-- Short prompts require no extra text-model call. Preparation has a 30-second timeout per
-  call and at most one correction if the prepared description is still too long. Invalid,
-  truncated or refused preparation output never reaches the image endpoint.
+- Short prompts require no extra text-model call. Preparation has a 90-second total deadline,
+  a 40-second timeout per text-model call, and at most one correction if the prepared
+  description is still too long. Each text call retries a temporary connection failure or
+  HTTP 502/503/504 once. Authorization, quota and content rejections are not retried.
+  Temporary failures preserve the entire draft and report a preparation error rather than
+  incorrectly asking the user to stay under 800 characters. Invalid, truncated or refused
+  preparation output never reaches the image endpoint.
 - Square by default; portrait/9:16 and landscape/16:9 descriptions select the provider's
   supported portrait/landscape dimensions. `/chat/images` also accepts `aspect_ratio`.
 - Five requests per minute per the application's rate limiter.
