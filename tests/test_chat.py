@@ -11,6 +11,7 @@ from app.models.chat import ChatMessageRecord, ChatSession
 from app.schemas.chat import ChatHistoryMessage
 from app.services.chat_service import ChatModelUnavailableError, ChatService, _NvidiaFallbackError
 from app.services.chat_vision_service import ChatVisionService
+from app.services.conversation_guidance import PERSONAL_CONVERSATION_PROMPT
 from app.services.image_parser_service import VisionModelUnavailableError
 
 
@@ -921,6 +922,38 @@ def test_system_prompt_no_longer_deprioritizes_conversation_history():
     assert "use conversation history only as context" not in prompt
     assert "stated conversation topic" in prompt
     assert "clearly changes the subject" in prompt
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_personal_reply_retains_context_without_report_instructions(stream):
+    history = [
+        ChatHistoryMessage(
+            role="user", content="My friend hasn't replied. I keep checking my phone."
+        ),
+        ChatHistoryMessage(role="user", content="Please reply in Tanglish."),
+    ]
+    language, body = ChatService()._build_request_body("What can I do?", history, [], stream=stream)
+    assert language == "Tanglish (Tamil written in Latin letters)"
+    assert body["messages"][0]["content"] == PERSONAL_CONVERSATION_PROMPT
+    assert any(item["content"] == history[0].content for item in body["messages"])
+    assert body["messages"][-1] == {"role": "user", "content": "What can I do?"}
+
+
+@pytest.mark.parametrize("source", ["web", "document"])
+def test_personal_wording_does_not_replace_grounded_answer_instructions(source):
+    reference = ChatHistoryMessage(
+        role="user", content=ChatService.DOCUMENT_CONTEXT_PREFIX + "Uploaded report contents"
+    )
+    _, body = ChatService()._build_request_body(
+        "I'm feeling low. Explain the support options in this report.",
+        [],
+        [reference] if source == "document" else [],
+        stream=True,
+        web_search_context="Verified support options" if source == "web" else None,
+    )
+    assert body["messages"][0]["content"] == ChatService.SYSTEM_PROMPT
+    expected_source = reference.content if source == "document" else "Verified support options"
+    assert any(expected_source in item["content"] for item in body["messages"])
 
 
 def test_language_detection_uses_latest_message_only():

@@ -11,7 +11,11 @@ import requests
 
 from app.config import settings
 from app.schemas.chat import ChatHistoryMessage
-from app.services.conversation_guidance import CONVERSATION_GUIDANCE
+from app.services.conversation_guidance import (
+    CONVERSATION_GUIDANCE,
+    PERSONAL_CONVERSATION_PROMPT,
+    is_personal_conversation,
+)
 from app.services.web_lookup import (
     CitationFilter,
     WebEvidence,
@@ -1211,7 +1215,21 @@ maadhiri Thanglish-la explain panren."""
         web_search_context: str | None = None,
     ) -> tuple[str, dict]:
         response_language = self.response_language(message, history)
-        messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
+        # Personal conversation does not need the long report/document instructions.
+        # Keep the same history, language, grounding and safety handling below.
+        personal_turn = (
+            is_personal_conversation(message)
+            and not web_search_context
+            and not any(
+                item.content.startswith(self.DOCUMENT_CONTEXT_PREFIX) for item in reference_history
+            )
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": PERSONAL_CONVERSATION_PROMPT if personal_turn else self.SYSTEM_PROMPT,
+            }
+        ]
         if response_language == "Tanglish (Tamil written in Latin letters)":
             messages.append({"role": "system", "content": self.TANGLISH_STYLE_PROMPT})
 
@@ -1328,11 +1346,16 @@ maadhiri Thanglish-la explain panren."""
             "Do not mix in another language, apart from unavoidable names or technical terms. "
             "The language of older messages must not affect this choice. Never imitate the "
             "language of an older assistant response. "
-            "For substantive questions, give a detailed explanation with useful context, "
+            "For substantive informational questions, give a detailed explanation with useful context, "
             "examples, and relevant caveats now, even if the user wrote a short question. "
             "Respect explicit brevity and exact output formats; keep simple exchanges brief. "
             "Respond to what changed in this turn, including a correction or declined suggestion. "
-            "If someone is distressed, acknowledge their specific concern before advice. "
+            "For personal or emotional turns, use a few natural sentences suited to this user's "
+            "actual words; do not impose an explanation template or narrate their feelings. "
+            "Do not use 'I hear you' as your own acknowledgment or add a mandatory reassurance "
+            "preamble. Preserve exact wording when the user asks for a quote or translation. "
+            "If they ask what to do, answer with a manageable action. Honor a requested blunt "
+            "style without insults, shaming, or harshness toward someone vulnerable. "
             "If danger remains unresolved, pair a focused safety question with one practical "
             "immediate action; when a helpline was declined, offer a manageable alternative "
             "such as asking someone nearby to sit with them. Do not replace listening with a script."

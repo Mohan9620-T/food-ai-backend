@@ -44,6 +44,9 @@ def source(content="Verified current data", url="https://source.example/office")
         "What is the latest iPhone price?",
         "Find QA jobs in Chennai",
         "How does gravity work?",
+        "I'm not sure who the current Tamil Nadu CM is",
+        "I feel anxious. What are today's flight delays?",
+        "Today IPL score",
     ],
 )
 def test_factual_questions_automatically_require_lookup(question):
@@ -71,10 +74,57 @@ def test_factual_questions_automatically_require_lookup(question):
         "Group the rows by price and keep the original columns",
         "Please format my 2026 sales spreadsheet",
         "Give me a diet plan and workout sessions from this image",
+        "i feel so rejected and stuck right now, what can i do",
+        "I'm feeling really low today",
+        "i feel like nobody would care anyway",
+        "That makes me feel so anxious",
+        "I'm not okay today",
+        "I'm so sad right now",
+        "enakku romba kashtama irukku, enna panrathu?",
+        "எனக்கு ரொம்ப கஷ்டமாக இருக்கு",
+        "What can I do?",
+        "What should I do now?",
+        "Can we just talk?",
+        "I'm so happy, I passed my driving test today!",
     ],
 )
 def test_local_work_and_conversation_do_not_trigger_search(message):
     assert not automatic_web_question(message)
+
+
+def test_emotional_disclosure_containing_now_or_today_does_not_trigger_search():
+    # Regression: "now"/"today" used to be unconditional date-sensitivity triggers,
+    # so "I feel stuck right now" was misclassified as a current-events question and
+    # forced through the web-search pipeline, producing a cited self-help listicle
+    # instead of a plain conversational reply.
+    assert not automatic_web_question("i feel so rejected and stuck right now, what can i do")
+    assert not automatic_web_question("I'm feeling awful today")
+    assert automatic_web_question("What is the latest iPhone price today")  # still works
+
+
+def test_personal_disclosure_does_not_send_text_to_search(monkeypatch):
+    def unexpected_search(_message):
+        pytest.fail("A personal disclosure must stay in the conversation")
+
+    monkeypatch.setattr(web_search_provider, "search", unexpected_search)
+    assert lookup("I feel rejected and stuck right now, what can I do?") is None
+
+
+@pytest.mark.parametrize("forced", [False, True])
+def test_requested_support_search_still_runs(monkeypatch, forced):
+    searches = []
+
+    def search(message):
+        searches.append(message)
+        return [source("Local support services and their contact details")]
+
+    monkeypatch.setattr(web_search_provider, "search", search)
+    message = "I'm feeling low today"
+    if not forced:
+        message += "; search the web for local support services"
+    result = lookup(message, force=forced)
+    assert searches == [message]
+    assert result and result.sources and not result.error
 
 
 def test_wikipedia_topic_retains_event_year_but_resolves_office_topic():

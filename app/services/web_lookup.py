@@ -8,6 +8,7 @@ from urllib.parse import quote, urlsplit
 
 from app.config import settings
 from app.services import web_search_provider
+from app.services.conversation_guidance import is_personal_conversation
 from app.services.spreadsheet.column_grouping import ColumnGroupingRequest
 from app.services.web_page_reader import WebPageError, extract_urls, read_page
 
@@ -88,6 +89,11 @@ def automatic_web_question(message: str) -> bool:
         r"\b(?:uploaded|attached|(?:this|that|the|my|our) (?:image|photo|document|file|sheet))\b",
         text,
     ):
+        return False
+    # Personal conversation needs the user's context, not generic self-help search
+    # results. Keep factual queries such as "I'm not sure who the current CM is"
+    # searchable; a first-person pronoun alone does not imply an emotional disclosure.
+    if is_personal_conversation(message):
         return False
     if re.match(
         r"(?:translate|rewrite|rephrase|summari[sz]e|format|convert|correct|proofread)\b", text
