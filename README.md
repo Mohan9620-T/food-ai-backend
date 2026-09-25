@@ -251,15 +251,22 @@ API accepts requests from.
 
 6. Run the server:
    \`\`\`
-   python -m uvicorn app.main:app --reload
+   python run_dev.py
    \`\`\`
 
-   API docs available at \`http://127.0.0.1:8000/docs\`.
+   API docs available at `http://127.0.0.1:8002/docs`.
+
+   On Windows, run `.\.venv\Scripts\python.exe run_dev.py`. The launcher uses
+   `127.0.0.1:8002`, matching the frontend development configuration. The equivalent
+   command is `python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8002`.
+   Running Uvicorn without `--port` uses 8000, which may already belong to another
+   app. An occupied or Windows-reserved port can cause WinError 10013/10048.
+   Docker Compose and Railway keep their separately configured ports.
 
    `database_migration_check_failed` with connection refused/timeout means the API
    could not reach PostgreSQL at startup. Check `docker compose ps postgres`, then
    repeat step 4 before migrations or starting Uvicorn. Verify database availability
-   through `http://127.0.0.1:8000/health/ready`; `/health` only checks the API process.
+   through `http://127.0.0.1:8002/health/ready`; `/health` only checks the API process.
    Database connection attempts (including Alembic) time out after 5 seconds;
    pooled API connections are checked before reuse after a database restart.
 
