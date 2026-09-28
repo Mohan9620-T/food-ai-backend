@@ -113,7 +113,12 @@ def _public_target(url: str) -> tuple[str, int, str]:
 
 
 def _fetch(
-    url: str, deadline: float, *, extra_headers: dict[str, str] | None = None
+    url: str,
+    deadline: float,
+    *,
+    extra_headers: dict[str, str] | None = None,
+    allow_xml: bool = False,
+    max_bytes: int = MAX_BYTES,
 ) -> tuple[str, str, str]:
     # Keep credentials on the same origin, including scheme and port. In
     # particular, an HTTPS-to-HTTP redirect must never receive a GitHub token.
@@ -160,13 +165,16 @@ def _fetch(
                     f"The website returned HTTP {response.status}; it may require sign-in or be unavailable."
                 )
             media_type = response.getheader("Content-Type", "").split(";")[0].lower()
-            if media_type not in {
+            accepted_types = {
                 "text/html",
                 "application/xhtml+xml",
                 "text/plain",
                 "text/markdown",
                 "application/json",
-            }:
+            }
+            if allow_xml:
+                accepted_types.update({"application/atom+xml", "application/xml", "text/xml"})
+            if media_type not in accepted_types:
                 raise WebPageError(
                     "This link is not a readable text page. Upload the file to analyze it."
                 )
@@ -179,9 +187,9 @@ def _fetch(
                     raise WebPageError("The website took too long to respond.")
                 if connection.sock is not None:
                     connection.sock.settimeout(remaining)
-                chunk = response.read1(min(65536, MAX_BYTES + 1 - len(data)))
+                chunk = response.read1(min(65536, max_bytes + 1 - len(data)))
                 data.extend(chunk)
-                if len(data) > MAX_BYTES:
+                if len(data) > max_bytes:
                     raise WebPageError(
                         "The page is too large to read. Please link to a specific section or file."
                     )

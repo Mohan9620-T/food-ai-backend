@@ -484,7 +484,7 @@ def chat(
     history = _get_persisted_history(db, user_id, session.id)
 
     try:
-        web_request = request.web_search or service.requests_web(request.message)
+        web_request = request.web_search or service.requests_web(request.message, history=history)
         lookup = None if web_request else prepare_workbook_lookup(db, session.id, request.message)
         if lookup is not None:
             answer = lookup.answer()
@@ -655,7 +655,7 @@ async def stream_chat(
 
     history = _get_persisted_history(db, user_id, session.id)
     try:
-        web_request = payload.web_search or service.requests_web(payload.message)
+        web_request = payload.web_search or service.requests_web(payload.message, history=history)
         lookup = None if web_request else prepare_workbook_lookup(db, session.id, payload.message)
     except InvalidDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error

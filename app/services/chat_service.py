@@ -376,12 +376,14 @@ maadhiri Thanglish-la explain panren."""
             return immediate_answer
 
         web_search_context = (
-            self._maybe_web_search(message, force=True)
+            self._maybe_web_search(message, force=True, history=history)
             if web_search
-            else self._maybe_web_search(message)
+            else self._maybe_web_search(message, history=history)
         )
         if web_search_context and web_search_context.error:
             return web_search_context.error
+        if web_search_context and web_search_context.answer:
+            return web_search_context.answer
         response_language, body = self._build_request_body(
             message,
             history,
@@ -578,10 +580,16 @@ maadhiri Thanglish-la explain panren."""
             return
 
         web_search_context = await asyncio.to_thread(
-            self._maybe_web_search, message, **({"force": True} if web_search else {})
+            self._maybe_web_search,
+            message,
+            history=history,
+            **({"force": True} if web_search else {}),
         )
         if web_search_context and web_search_context.error:
             yield web_search_context.error
+            return
+        if web_search_context and web_search_context.answer:
+            yield web_search_context.answer
             return
         _, body = self._build_request_body(
             message,
@@ -825,13 +833,15 @@ maadhiri Thanglish-la explain panren."""
         return settings.APP_ENVIRONMENT == "production" or settings.LLM_PROVIDER == "nvidia"
 
     @staticmethod
-    def requests_web(message: str) -> bool:
+    def requests_web(message: str, *, history: list[ChatHistoryMessage] | None = None) -> bool:
         return explicit_web_request(message) or (
-            settings.ENABLE_WEB_SEARCH and automatic_web_question(message)
+            settings.ENABLE_WEB_SEARCH and automatic_web_question(message, history)
         )
 
-    def _maybe_web_search(self, message: str, *, force: bool = False) -> WebEvidence | None:
-        return lookup(message, force=force)
+    def _maybe_web_search(
+        self, message: str, *, force: bool = False, history: list[ChatHistoryMessage] | None = None
+    ) -> WebEvidence | None:
+        return lookup(message, force=force, history=history)
 
     def _chat_with_ollama(self, body: dict) -> str:
         try:

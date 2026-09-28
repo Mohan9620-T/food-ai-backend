@@ -110,6 +110,26 @@ def test_fetch_has_bounded_failures(monkeypatch, response, match):
     connection.close.assert_called_once()
 
 
+def test_feed_reader_opts_into_xml_and_keeps_response_size_bounded(monkeypatch):
+    install_transport(
+        monkeypatch, [Response(body=b"<feed />", headers={"Content-Type": "application/atom+xml"})]
+    )
+    with pytest.raises(reader.WebPageError, match="not a readable"):
+        reader._fetch("https://www.youtube.com/feeds/videos.xml", time.monotonic() + 10)
+    install_transport(
+        monkeypatch, [Response(body=b"<feed />", headers={"Content-Type": "application/atom+xml"})]
+    )
+    assert (
+        reader._fetch(
+            "https://www.youtube.com/feeds/videos.xml", time.monotonic() + 10, allow_xml=True
+        )[2]
+        == "<feed />"
+    )
+    install_transport(monkeypatch, [Response(body=b"x" * 101)])
+    with pytest.raises(reader.WebPageError, match="too large"):
+        reader._fetch("https://www.youtube.com/", time.monotonic() + 10, max_bytes=100)
+
+
 def test_html_text_preserves_table_values_and_drops_scripts(monkeypatch):
     monkeypatch.setattr(
         reader,

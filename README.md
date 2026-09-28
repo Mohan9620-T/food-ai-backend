@@ -150,6 +150,23 @@ Text chat retains automatic continuation when a
 provider reaches its output limit. Changing response depth does not add web search:
 the assistant must not invent sources or claim to have verified live information.
 
+### YouTube channel video lists
+
+With `ENABLE_WEB_SEARCH=true`, requests such as `Show the latest five videos from
+https://www.youtube.com/@Example` read that channel's public Videos tab. Follow-ups
+such as `show the latest video on the channel` use recent channel references from
+the same saved conversation; an explicitly named new channel takes precedence.
+Tavily can discover channel URLs from a channel name. Video search hits and snippets
+are never treated as proof of channel ownership or the latest upload.
+
+The backend checks the channel ID/handle, reads only upload cards in the selected
+Videos tab, and verifies the Latest ordering. A verified public upload feed provides
+a fallback when available. Results are numbered links with the publish-time labels
+returned by YouTube and a link to the retrieved channel page/feed. These lists do
+not need an LLM rewrite or a YouTube API key. Public pages/feeds can be unavailable;
+unverified or ambiguous channels return a clear message without unrelated videos.
+Lists are bounded to 30 recent entries per request, not a complete channel archive.
+
 ## Project structure
 
 \`\`\`

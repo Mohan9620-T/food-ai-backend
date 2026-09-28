@@ -7,10 +7,12 @@ from datetime import datetime, timezone
 from urllib.parse import quote, urlsplit
 
 from app.config import settings
+from app.schemas.chat import ChatHistoryMessage
 from app.services import web_search_provider
 from app.services.conversation_guidance import is_personal_conversation
 from app.services.spreadsheet.column_grouping import ColumnGroupingRequest
 from app.services.web_page_reader import WebPageError, extract_urls, read_page
+from app.services.youtube_lookup import channel_video_answer, video_request
 
 
 class CitationFilter:
@@ -103,9 +105,11 @@ def _information_request(text: str) -> str:
     return " ".join(remaining)
 
 
-def automatic_web_question(message: str) -> bool:
+def automatic_web_question(message: str, history: list[ChatHistoryMessage] | None = None) -> bool:
     if ColumnGroupingRequest.from_instruction(message) is not None:
         return False
+    if video_request(message, history or []) is not None:
+        return True
     text = message.strip().lower()
     if not text or re.fullmatch(
         r"(?:hi|hello|hey|thanks|thank you|ok(?:ay)?|yes|no|sure|continue|go on|next|done|vanakkam)[!.\s]*",
@@ -184,6 +188,7 @@ class WebEvidence:
     sources: str = ""
     error: str = ""
     citation_links: tuple[tuple[str, str], ...] = ()
+    answer: str = ""
 
 
 def evidence(results: list[dict], query: str, limitations: list[str] | None = None) -> WebEvidence:
@@ -250,9 +255,12 @@ def evidence(results: list[dict], query: str, limitations: list[str] | None = No
     )
 
 
-def lookup(message: str, *, force: bool = False) -> WebEvidence | None:
+def lookup(
+    message: str, *, force: bool = False, history: list[ChatHistoryMessage] | None = None
+) -> WebEvidence | None:
     explicit = force or explicit_web_request(message)
-    automatic = automatic_web_question(message)
+    videos = video_request(message, history or [])
+    automatic = automatic_web_question(message) or videos is not None
     if not settings.ENABLE_WEB_SEARCH:
         return (
             WebEvidence(
@@ -263,6 +271,8 @@ def lookup(message: str, *, force: bool = False) -> WebEvidence | None:
         )
     if not explicit and not automatic:
         return None
+    if videos is not None:
+        return WebEvidence(answer=channel_video_answer(videos))
     urls = extract_urls(message)
     results: list[dict] = []
     failures = []
