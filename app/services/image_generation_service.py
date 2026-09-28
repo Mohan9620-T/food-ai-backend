@@ -259,7 +259,9 @@ class ImageGenerationService:
             raise ImageGenerationError(failure) from error
         raise ImageGenerationError(failure)
 
-    async def generate(self, prompt: str, aspect_ratio: str = "auto") -> GeneratedImage:
+    async def generate(
+        self, prompt: str, aspect_ratio: str = "auto", *, subject_name: str | None = None
+    ) -> GeneratedImage:
         if not settings.ENABLE_IMAGE_GENERATION or not settings.NVIDIA_API_KEY:
             raise ImageGenerationError(image_capability_message())
         if aspect_ratio == "auto":
@@ -276,6 +278,12 @@ class ImageGenerationService:
             aspect_ratio
         ]
         provider_prompt = await self._prepare_prompt(prompt)
+        if subject_name and subject_name.casefold() not in provider_prompt.casefold():
+            raise ImageGenerationError(
+                "The prepared image description lost the verified person's name. "
+                "No image was generated. Please retry with a shorter description.",
+                422,
+            )
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(settings.NVIDIA_IMAGE_TIMEOUT_SECONDS, connect=10)

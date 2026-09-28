@@ -1,6 +1,7 @@
 """Authenticated image creation with the same private attachment/history storage as documents."""
 
 from typing import Literal, cast
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -20,6 +21,7 @@ from app.services.image_generation_service import (
     ImageGenerationService,
     image_request_help,
 )
+from app.services.image_subject_service import resolve_image_subject
 from app.utils.auth_dependency import get_current_user
 
 router = APIRouter(prefix="/chat/images", tags=["AI Chat Images"])
@@ -49,16 +51,44 @@ async def generate_image(
         raise HTTPException(status_code=404, detail="Chat session not found")
     prompt = payload.message.strip()
     help_message = image_request_help(prompt)
-    try:
-        image = None if help_message else await service.generate(prompt, payload.aspect_ratio)
-    except ImageGenerationError as error:
-        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     if session is None:
         session = repository.create_session(db, user_id, prompt[:60])
     session_id = cast(int, session.id)
-    answer = help_message or "Here is your generated image. You can view or download it below."
+    repository.add_message(db, session_id, "user", prompt)
+    invalidate_cached_history(user_id, session_id)
+    subject = None
     try:
-        _, bot = repository.add_turn(db, session_id, prompt, answer, commit=False)
+        if not help_message:
+            subject = await resolve_image_subject(prompt)
+        image_prompt = (
+            f"Subject: {subject['subject']}. Depict this named person. Original request: {prompt}"
+            if subject
+            else prompt
+        )
+        image = (
+            None
+            if help_message
+            else await service.generate(
+                image_prompt,
+                payload.aspect_ratio,
+                **({"subject_name": subject["subject"]} if subject else {}),
+            )
+        )
+    except ImageGenerationError as error:
+        repository.add_message(db, session_id, "bot", str(error))
+        invalidate_cached_history(user_id, session_id)
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    answer = help_message or "Here is your generated image. You can view or download it below."
+    if subject:
+        source_url = quote(subject["subject_source_url"], safe="/:?&=%#@!$+,-._~")
+        answer = (
+            f"AI-generated illustration intended to depict {subject['subject']}, "
+            f"resolved from [this source](<{source_url}>). "
+            "The image model cannot guarantee an accurate likeness. This is not an official "
+            "photograph; use the source page to check the person's actual appearance."
+        )
+    try:
+        bot = repository.add_message(db, session_id, "bot", answer, commit=False)
         attachment = None
         if image is not None:
             attachment = ChatDocumentAttachment(
@@ -78,6 +108,7 @@ async def generate_image(
                     "aspect_ratio": image.aspect_ratio,
                     "width": image.width,
                     "height": image.height,
+                    **(subject or {}),
                 },
             )
             # Do not replace latest_document_id: an illustration is not the active spreadsheet.

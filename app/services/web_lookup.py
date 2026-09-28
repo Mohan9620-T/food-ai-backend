@@ -106,7 +106,35 @@ def _information_request(text: str) -> str:
     return " ".join(remaining)
 
 
+def _short_follow_up(message: str) -> bool:
+    return bool(
+        re.fullmatch(
+            r"\s*(?:who (?:is|was) (?:he|she|that|this)|what about (?:him|her|it|that)|"
+            r"how old is (?:he|she)|what is (?:his|her) age|"
+            r"tell me more(?: about (?:him|her|it|that))?)\s*[?.!]*\s*",
+            message,
+            re.I,
+        )
+    )
+
+
+def _contextual_query(message: str, history: list[ChatHistoryMessage] | None) -> str | None:
+    if not _short_follow_up(message):
+        return message
+    for previous in reversed(history or []):
+        if previous.role != "user" or _short_follow_up(previous.content):
+            continue
+        # Only reuse a public factual question. Never send uploaded document text,
+        # a private conversation or the entire chat history to a search provider.
+        if automatic_web_question(previous.content):
+            return f"{previous.content[:1000]}\nFollow-up question: {message}"
+        break
+    return None
+
+
 def automatic_web_question(message: str, history: list[ChatHistoryMessage] | None = None) -> bool:
+    if _short_follow_up(message):
+        return _contextual_query(message, history) is not None
     if requests_word_output(message):
         return False
     if ColumnGroupingRequest.from_instruction(message) is not None:
@@ -261,9 +289,12 @@ def evidence(results: list[dict], query: str, limitations: list[str] | None = No
 def lookup(
     message: str, *, force: bool = False, history: list[ChatHistoryMessage] | None = None
 ) -> WebEvidence | None:
+    query = _contextual_query(message, history)
+    if query is None:
+        return None
     explicit = force or explicit_web_request(message)
     videos = video_request(message, history or [])
-    automatic = automatic_web_question(message) or videos is not None
+    automatic = automatic_web_question(message, history) or videos is not None
     if not settings.ENABLE_WEB_SEARCH:
         return (
             WebEvidence(
@@ -288,7 +319,7 @@ def lookup(
                 failures.append(f"{url}: {error}")
         direct_read_failed = not results
     if not urls or direct_read_failed:
-        search_results = web_search_provider.search(message) or []
+        search_results = web_search_provider.search(query) or []
         if direct_read_failed and not search_results:
             return WebEvidence(
                 error=(
@@ -317,4 +348,4 @@ def lookup(
             failures.append(
                 "Wikipedia fallback: only live article introductions were retrieved, not a comprehensive web search."
             )
-    return evidence(results, message, failures)
+    return evidence(results, query, failures)

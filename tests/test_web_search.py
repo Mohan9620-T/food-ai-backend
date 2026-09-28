@@ -5,6 +5,7 @@ import pytest
 import requests
 
 from app.config import settings
+from app.schemas.chat import ChatHistoryMessage
 from app.services import web_search_provider
 from app.services.chat_service import ChatService
 from app.services.web_lookup import CitationFilter, automatic_web_question, evidence, lookup
@@ -32,6 +33,35 @@ def search_settings(monkeypatch):
 
 def source(content="Verified current data", url="https://source.example/office"):
     return {"title": "Official office", "url": url, "content": content}
+
+
+def test_pronoun_follow_up_search_uses_previous_public_question(monkeypatch):
+    queries = []
+    monkeypatch.setattr(
+        web_search_provider, "search", lambda query: queries.append(query) or [source()]
+    )
+    history = [
+        ChatHistoryMessage(role="user", content="Who is the current chief minister of Tamil Nadu?"),
+        ChatHistoryMessage(role="assistant", content="A sourced answer."),
+    ]
+    result = lookup("who is he?", history=history)
+    assert result and result.context
+    assert len(queries) == 1
+    assert "chief minister of Tamil Nadu" in queries[0]
+    assert "who is he?" in queries[0]
+
+
+@pytest.mark.parametrize(
+    "prior", [None, "My uncle is named Private Person", "Read this uploaded document"]
+)
+def test_context_only_follow_up_is_not_searched_without_a_public_topic(monkeypatch, prior):
+    def unexpected(query):
+        raise AssertionError("Private or missing context must not be searched")
+
+    monkeypatch.setattr(web_search_provider, "search", unexpected)
+    history = [ChatHistoryMessage(role="user", content=prior)] if prior else []
+    assert not automatic_web_question("who is he?", history)
+    assert lookup("who is he?", history=history) is None
 
 
 @pytest.mark.parametrize(

@@ -412,7 +412,11 @@ def test_failed_generation_does_not_save_fake_success(client, db_session, monkey
         "/chat/images", headers=owner, json={"message": "Create an image of a cat"}
     )
     assert response.status_code == 504
-    assert db_session.query(ChatMessageRecord).count() == 0
+    messages = db_session.query(ChatMessageRecord).order_by(ChatMessageRecord.id).all()
+    assert [message.content for message in messages] == [
+        "Create an image of a cat",
+        "Image generation timed out",
+    ]
     assert db_session.query(ChatDocumentAttachment).count() == 0
 
 

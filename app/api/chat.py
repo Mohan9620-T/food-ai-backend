@@ -46,6 +46,7 @@ from app.services.chat_vision_service import ChatVisionService
 from app.services.document import semantic_retrieval
 from app.services.document.document_references import matches_document_topic, references_document
 from app.services.document.exceptions import InvalidDocumentError
+from app.services.generated_image_context import generated_image_follow_up
 from app.services.image_parser_service import VisionModelUnavailableError
 from app.services.image_validation import InvalidImageError, validate_image_content
 from app.services.spreadsheet.workbook_lookup_service import prepare_workbook_lookup
@@ -508,9 +509,16 @@ def chat(
     history = _get_persisted_history(db, user_id, session.id)
 
     try:
+        image_answer = generated_image_follow_up(db, session.id, request.message)
         web_request = request.web_search or service.requests_web(request.message, history=history)
-        lookup = None if web_request else prepare_workbook_lookup(db, session.id, request.message)
-        if lookup is not None:
+        lookup = (
+            None
+            if web_request or image_answer
+            else prepare_workbook_lookup(db, session.id, request.message)
+        )
+        if image_answer:
+            answer = image_answer
+        elif lookup is not None:
             answer = lookup.answer()
         else:
             document_references = (
@@ -678,6 +686,7 @@ async def stream_chat(
     session = _get_or_create_chat_session(db, user_id, session_id, payload.message)
 
     history = _get_persisted_history(db, user_id, session.id)
+    image_answer = generated_image_follow_up(db, session.id, payload.message)
     try:
         web_request = payload.web_search or service.requests_web(payload.message, history=history)
         lookup = None if web_request else prepare_workbook_lookup(db, session.id, payload.message)
@@ -731,7 +740,10 @@ async def stream_chat(
 
     async def produce_response():
         chunks: list[str] = []
-        if lookup is not None:
+        if image_answer:
+            chunks.append(image_answer)
+            await events.put({"type": "token", "content": image_answer})
+        elif lookup is not None:
             answer = await asyncio.to_thread(lookup.answer)
             chunks.append(answer)
             await events.put({"type": "token", "content": answer})
