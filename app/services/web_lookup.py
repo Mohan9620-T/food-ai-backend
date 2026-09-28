@@ -60,6 +60,46 @@ def explicit_web_request(message: str) -> bool:
     )
 
 
+_SOCIAL_CLAUSE = re.compile(
+    r"(?:hi+|hello+|hey+|hai|vanakkam|thanks|thank you|ok(?:ay)?|yes|no|sure|"
+    r"continue|go on|next|done|good (?:morning|afternoon|evening|night))"
+    r"(?:\s+(?:da+w*|bro|boss|friend|macha|mate))?|"
+    r"(?:how are you|how(?:'s| is| was) your day|how are things|what(?:'s| is) up)"
+    r"(?:\s+(?:doing|going|today|now))?|"
+    r"(?:(?:what|how)\s+)?about you(?:\s+(?:today|now))?|and you|"
+    r"who are you|what can you do|are you (?:an? )?(?:ai|human|bot)|"
+    r"can you (?:help me|create images|generate images)|"
+    r"i(?:'m| am)\s+(?:(?:doing|feeling)\s+)?(?:fine|good|great|well|okay|ok|alright)"
+    r"(?:\s+(?:today|now))?|"
+    r"(?:i wish\s+)?(?:today|my day|the day)\s+(?:is|was|has been)\s+"
+    r"(?:(?:a|very|really|so)\s+)*(?:great|good|nice|wonderful|amazing|bad|busy|rough)"
+    r"(?:\s+day)?(?:\s+(?:(?:what|how)\s+)?about you)?|"
+    r"i (?:had|am having)\s+a\s+(?:great|good|nice|busy|rough)\s+day(?:\s+today)?|"
+    r"(?:have|hope you have|i hope you have|wish you)\s+a\s+"
+    r"(?:great|good|nice|wonderful)\s+(?:day|week|weekend)|i wish|"
+    r"(?:nee|neenga|ni)\s+(?:eppadi|epdi)\s+iruk(?:ka|kinga|keenga)|"
+    r"(?:naan|na)\s+nalla\s+iruk(?:ken|kan)|saptiya|saptacha|"
+    r"வணக்கம்|நன்றி|நீங்கள் எப்படி இருக்கிறீர்கள்|நீ எப்படி இருக்கிறாய்|நான் நன்றாக இருக்கிறேன்",
+    re.I,
+)
+
+
+def _information_request(text: str) -> str:
+    """Remove whole social clauses; retain any factual question in a mixed message."""
+    text = text.replace("\u2019", "'")
+    clauses = re.split(r"[.!?,;\n]+", text)
+    remaining = []
+    for clause in clauses:
+        clause = clause.strip()
+        if not clause or _SOCIAL_CLAUSE.fullmatch(clause):
+            continue
+        # A greeting need not have punctuation: "Hi can you explain gravity?"
+        clause = re.sub(r"^(?:hi|hello|hey|vanakkam)\s+", "", clause)
+        if not _SOCIAL_CLAUSE.fullmatch(clause):
+            remaining.append(clause)
+    return " ".join(remaining)
+
+
 def automatic_web_question(message: str) -> bool:
     if ColumnGroupingRequest.from_instruction(message) is not None:
         return False
@@ -111,21 +151,27 @@ def automatic_web_question(message: str) -> bool:
         return False
     if re.fullmatch(r"(?:what is\s+|calculate\s+)?[\d\s+*/().=^%-]+\??", text):
         return False
-    # Date-sensitive queries must not depend on a model deciding it knows the answer.
+    information = _information_request(text)
+    if not information:
+        return False
+    # "Today", "now", a year, or Tamil script alone does not imply a web question.
+    # Concrete factual topics still search without relying on model knowledge.
     if re.search(
-        r"\b(?:current|latest|today|now|news|price|weather|cm|chief minister|prime minister|president|ceo|governor|20\d{2})\b",
-        text,
+        r"\b(?:current|latest|news|prices?|weather|scores?|delays|cm|chief minister|prime minister|president|ceo|governor)\b",
+        information,
     ):
         return True
     return bool(
         re.match(
             r"(?:who|what|when|where|why|how|which|can you (?:tell|explain|list|compare)|"
             r"could you (?:tell|explain)|tell me|explain|describe|compare|list|find|search|"
-            r"do you know|you know|enna|yaaru|ethana|eppadi|epdi)\b",
-            text,
+            r"do you know|you know|can you help me understand|"
+            r"i (?:have (?:a|one) (?:question|doubt)|want to know)|"
+            r"enna|yaaru|ethana|eppadi|epdi)\b",
+            information,
         )
         or text.endswith("?")
-        or re.search(r"[\u0b80-\u0bff]", text)
+        or re.search(r"யார்|என்ன|எது|எப்படி|எப்போது|ஏன்|எங்கே|எத்தனை", information)
     )
 
 

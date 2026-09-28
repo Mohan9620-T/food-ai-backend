@@ -47,6 +47,13 @@ def source(content="Verified current data", url="https://source.example/office")
         "I'm not sure who the current Tamil Nadu CM is",
         "I feel anxious. What are today's flight delays?",
         "Today IPL score",
+        "Hi, can you explain how gravity works?",
+        "Good morning! Who is the current chief minister?",
+        "I had a great day today. What is tomorrow's weather?",
+        "How are you? Explain the Milky Way",
+        "தமிழ்நாட்டின் முதலமைச்சர் யார்?",
+        "I have a doubt about how solar panels work",
+        "Can you help me understand photosynthesis",
     ],
 )
 def test_factual_questions_automatically_require_lookup(question):
@@ -86,6 +93,24 @@ def test_factual_questions_automatically_require_lookup(question):
         "What should I do now?",
         "Can we just talk?",
         "I'm so happy, I passed my driving test today!",
+        "I wish, Today was great day about you",
+        "I wish, Today was great day about you?",
+        "Hi daww",
+        "Hi, how are you today?",
+        "How was your day?",
+        "I had a great day today, how about you?",
+        "I'm good, thanks!",
+        "Have a great weekend!",
+        "Today was a really good day",
+        "I'm going to sleep now",
+        "My birthday is in 2026",
+        "nee epdi irukka?",
+        "வணக்கம்",
+        "நீங்கள் எப்படி இருக்கிறீர்கள்?",
+        "இன்று நல்ல நாள்",
+        "Who are you?",
+        "Can you create images?",
+        "How about you now?",
     ],
 )
 def test_local_work_and_conversation_do_not_trigger_search(message):
@@ -108,6 +133,30 @@ def test_personal_disclosure_does_not_send_text_to_search(monkeypatch):
 
     monkeypatch.setattr(web_search_provider, "search", unexpected_search)
     assert lookup("I feel rejected and stuck right now, what can I do?") is None
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_casual_reply_has_no_lookup_or_sources(monkeypatch, stream):
+    monkeypatch.setattr(
+        web_search_provider, "search", lambda _: pytest.fail("Small talk must not reach search")
+    )
+    reply = "Nice! What made your day great?"
+    monkeypatch.setattr(ChatService, "_chat_with_ollama", lambda *args, **kwargs: reply)
+
+    async def generate(self, body):
+        assert not any("WEB SEARCH RESULTS" in m["content"] for m in body["messages"])
+        yield reply
+
+    monkeypatch.setattr(ChatService, "_stream_ollama", generate)
+    message = "I wish, Today was great day about you"
+    assert not ChatService.requests_web(message)
+
+    async def collect():
+        return "".join([chunk async for chunk in ChatService().stream_chat(message, [], [])])
+
+    answer = asyncio.run(collect()) if stream else ChatService().chat(message, [], [])
+    assert answer == reply
+    assert "Sources" not in answer
 
 
 @pytest.mark.parametrize("forced", [False, True])

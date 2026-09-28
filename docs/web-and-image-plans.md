@@ -8,11 +8,17 @@ Do not commit API keys. Restart/redeploy after changing the environment.
 
 Factual questions, including current office-holder and dated questions, trigger
 lookup automatically. Users do not need to turn on **Search web**. That toggle
-forces a lookup for other prompts. Public HTTP(S) links are read directly.
+forces a lookup for the next message only, then returns to automatic routing.
+Public HTTP(S) links are read directly.
 Web questions bypass old uploaded-document and image context. Greetings,
 personal-file operations, creative writing and image-based plans retain their
 normal routes. Retrieved pages are appended as clickable **Sources** with a UTC
 retrieval time, in both streaming/non-streaming answers and saved chat history.
+Casual check-ins and wishes (including "Today was a great day, how about you?")
+do not search or add source lists. Words such as "today", "now", a year, or Tamil
+script alone are not search triggers. A greeting followed by a factual question
+still searches; an explicit web request or the Search web toggle overrides the
+automatic decision.
 
 When Tavily is unavailable or has no usable results, `WIKIPEDIA_SEARCH_ENABLED=true`
 (default) retrieves up to three live Wikipedia article introductions, their links
