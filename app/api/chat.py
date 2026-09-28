@@ -84,6 +84,9 @@ IMAGE_MATCH_STOP_WORDS = {
     "identify",
     "image",
     "picture",
+    "photo",
+    "screenshot",
+    "diagram",
     "please",
     "show",
     "shown",
@@ -94,30 +97,30 @@ IMAGE_MATCH_STOP_WORDS = {
     "which",
     "with",
     "you",
-}
-# Words that signal the user is still asking about a picture even when none of
-# its remembered content overlaps with the follow-up (e.g. "can you identify it?").
-IMAGE_INTENT_WORDS = {
-    "identify",
-    "image",
-    "picture",
-    "photo",
-    "show",
-    "shown",
-    "this",
-    "that",
-    "describe",
-    "explain",
+    "your",
+    "yourself",
+    "self",
+    "myself",
+    "okay",
+    "hello",
+    "thanks",
+    "thank",
+    "how",
+    "why",
+    "when",
+    "where",
+    "now",
+    "just",
+    "more",
     "tell",
+    "explain",
+    "describe",
     "analyze",
     "analyse",
     "detail",
     "details",
-    "zoom",
-    "caption",
-    "visible",
-    "depict",
-    "contains",
+    "know",
+    "help",
 }
 
 
@@ -229,9 +232,19 @@ def _document_reference_history(
     ]
 
 
+def _image_topic_tokens(text: str) -> set[str]:
+    # Match simple singular/plural follow-ups such as "food" after "foods".
+    tokens = {
+        token[:-1] if len(token) > 4 and token.endswith("s") and not token.endswith("ss") else token
+        for token in re.findall(r"[a-z0-9]+", text.lower())
+    }
+    return {token for token in tokens if len(token) >= 3 and token not in IMAGE_MATCH_STOP_WORDS}
+
+
 def _select_referenced_image(
     question: str,
     image_turns: list[tuple[ChatMessageRecord, str]],
+    history: list[ChatHistoryMessage] | None = None,
 ) -> ChatMessageRecord | None:
     """Choose the historical image whose original turn best matches a follow-up."""
     if not image_turns:
@@ -249,32 +262,43 @@ def _select_referenced_image(
     if re.search(r"\b(?:latest|last|current)\s+(?:image|picture|photo)\b", normalized):
         return image_turns[-1][0]
 
-    question_tokens = {
-        token
-        for token in re.findall(r"[a-z0-9]+", normalized)
-        if len(token) >= 3 and token not in IMAGE_MATCH_STOP_WORDS
-    }
-    if not question_tokens:
-        return image_turns[-1][0]
-
+    question_tokens = _image_topic_tokens(normalized)
     best_index = None
     best_score = 0
     for index, (image_message, immediate_response) in enumerate(image_turns):
         context = f"{getattr(image_message, 'content', '')} {immediate_response}".lower()
-        context_tokens = set(re.findall(r"[a-z0-9]+", context))
+        context_tokens = _image_topic_tokens(context)
         score = len(question_tokens & context_tokens)
         if score >= best_score and score > 0:
             best_index = index
             best_score = score
     if best_index is not None:
         return image_turns[best_index][0]
-    # No topic word overlaps with any image's content. Only fall back to the
-    # most recent image when the wording itself still signals a visual
-    # question (e.g. "can you identify it?"); otherwise this is a new,
-    # unrelated question and must not be forced through the vision model.
-    all_tokens = set(re.findall(r"[a-z0-9]+", normalized))
-    if all_tokens & IMAGE_INTENT_WORDS:
+    # Generic conversation must not revive an old image. A short "describe it"
+    # follow-up is visual only immediately after the actual image exchange.
+    if re.search(
+        r"\b(?:this|that|the|my|uploaded|attached)\s+(?:uploaded\s+)?"
+        r"(?:image|picture|photo|screenshot|diagram)\b",
+        normalized,
+    ):
         return image_turns[-1][0]
+    latest_image, latest_answer = image_turns[-1]
+    recent_image = bool(
+        history
+        and len(history) >= 2
+        and history[-2].role == "user"
+        and history[-2].content == latest_image.content
+        and history[-1].role == "assistant"
+        and history[-1].content == latest_answer
+    )
+    if recent_image and re.fullmatch(
+        r"\s*(?:(?:can|could|would) you )?(?:please )?"
+        r"(?:(?:identify|describe|explain|analy[sz]e) (?:this|that|it)|"
+        r"(?:what is|what's) (?:this|that|it)|"
+        r"(?:tell me|show me) more(?: about (?:this|that|it))?)\s*[.!?]*\s*",
+        normalized,
+    ):
+        return latest_image
     return None
 
 
@@ -664,7 +688,7 @@ async def stream_chat(
     )
     image_turns = repository.get_image_turns(db, session.id)
     referenced_image = (
-        None if web_request else _select_referenced_image(payload.message, image_turns)
+        None if web_request else _select_referenced_image(payload.message, image_turns, history)
     )
     referenced_turn = next(
         (turn for turn in image_turns if turn[0] is referenced_image),

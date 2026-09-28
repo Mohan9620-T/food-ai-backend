@@ -582,10 +582,24 @@ def test_chat_stream_honors_explicit_historical_image_number(
     assert selected_images == [b"image-2"]
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ramen noodles",
+        "okay can you explain you self",
+        "Can you explain yourself?",
+        "Tell me about yourself",
+        "How are you?",
+        "Hello",
+        "Thanks",
+        "Explain image compression",
+    ],
+)
 def test_chat_stream_treats_unrelated_topic_after_image_as_plain_text(
     client,
     db_session,
     monkeypatch,
+    message,
 ):
     token = _register_and_login(client, email="unrelated-topic-after-image@example.com")
     headers = {"Authorization": f"Bearer {token}"}
@@ -596,7 +610,7 @@ def test_chat_stream_treats_unrelated_topic_after_image_as_plain_text(
         ChatMessageRecord(
             session_id=session_id,
             sender="user",
-            content="What does this diagram show?",
+            content="Please explain this diagram in detail",
             image_data=b"testing-types-diagram",
             image_content_type="image/png",
         )
@@ -617,20 +631,20 @@ def test_chat_stream_treats_unrelated_topic_after_image_as_plain_text(
         raise AssertionError("An unrelated new topic must not reuse the earlier image")
 
     async def fake_text_stream(self, message, history, reference_history, **kwargs):
-        yield "Ramen noodles are a Japanese noodle dish served in broth."
+        yield "A text response to the new question."
 
     monkeypatch.setattr(ChatVisionService, "describe", unexpected_vision)
     monkeypatch.setattr(ChatService, "stream_chat", fake_text_stream)
 
     response = client.post(
         f"/chat/stream?session_id={session_id}",
-        json={"message": "ramen noodles", "history": [], "reference_history": []},
+        json={"message": message, "history": [], "reference_history": []},
         headers=headers,
     )
 
     events = [__import__("json").loads(line) for line in response.text.splitlines()]
     assert [event.get("content") for event in events if event["type"] == "token"] == [
-        "Ramen noodles are a Japanese noodle dish served in broth."
+        "A text response to the new question."
     ]
 
 
