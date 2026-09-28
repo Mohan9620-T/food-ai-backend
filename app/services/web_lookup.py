@@ -164,7 +164,7 @@ def automatic_web_question(message: str, history: list[ChatHistoryMessage] | Non
     ):
         return False
     if re.search(
-        r"\b(?:uploaded|attached|(?:this|that|the|my|our) (?:image|photo|document|file|sheet))\b",
+        r"\b(?:uploaded|attached|(?:this|that|these|those|both|the|my|our) (?:images?|pictures?|photos?|documents?|files?|sheets?))\b",
         text,
     ):
         return False

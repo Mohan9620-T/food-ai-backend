@@ -20,6 +20,7 @@ class OllamaVisionProvider(VisionProvider):
         user_prompt: str,
         encoded_image: str,
         *,
+        additional_images: tuple[str, ...] = (),
         max_tokens: int | None = None,
         timeout_seconds: float | None = None,
     ) -> VisionResult:
@@ -42,7 +43,7 @@ class OllamaVisionProvider(VisionProvider):
                         {
                             "role": "user",
                             "content": user_prompt,
-                            "images": [encoded_image],
+                            "images": [encoded_image, *additional_images],
                         },
                     ],
                 },

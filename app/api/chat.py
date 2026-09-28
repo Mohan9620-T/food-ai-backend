@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import cast
+from typing import TypedDict, cast
 
 from fastapi import (
     APIRouter,
@@ -59,7 +59,16 @@ vision_service = ChatVisionService()
 repository = ChatRepository()
 logger = logging.getLogger(__name__)
 stream_tasks: set[asyncio.Task] = set()
+
+
+class _VisionOptions(TypedDict, total=False):
+    conversation_history: list[ChatHistoryMessage]
+    additional_images: list[bytes]
+
+
 MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_CHAT_IMAGES = 5
+MAX_CHAT_IMAGES_TOTAL_BYTES = 20 * 1024 * 1024
 ALLOWED_CHAT_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 IMAGE_REFERENCE_ORDINALS = {
     "first": 0,
@@ -256,6 +265,10 @@ def _select_referenced_image(
         if re.search(
             rf"\b{re.escape(label)}\s+(?:uploaded\s+)?(?:image|picture|photo)\b", normalized
         ):
+            if image_turns[-1][0].additional_images and index <= len(
+                image_turns[-1][0].additional_images
+            ):
+                return image_turns[-1][0]
             if index < len(image_turns):
                 return image_turns[index][0]
     if re.search(r"\b(?:previous|prior)\s+(?:image|picture|photo)\b", normalized):
@@ -278,8 +291,8 @@ def _select_referenced_image(
     # Generic conversation must not revive an old image. A short "describe it"
     # follow-up is visual only immediately after the actual image exchange.
     if re.search(
-        r"\b(?:this|that|the|my|uploaded|attached)\s+(?:uploaded\s+)?"
-        r"(?:image|picture|photo|screenshot|diagram)\b",
+        r"\b(?:this|that|these|those|both|the|my|uploaded|attached)\s+(?:uploaded\s+)?"
+        r"(?:images?|pictures?|photos?|screenshots?|diagrams?)\b",
         normalized,
     ):
         return image_turns[-1][0]
@@ -294,7 +307,7 @@ def _select_referenced_image(
     )
     if recent_image and re.fullmatch(
         r"\s*(?:(?:can|could|would) you )?(?:please )?"
-        r"(?:(?:identify|describe|explain|analy[sz]e) (?:this|that|it)|"
+        r"(?:(?:identify|describe|explain|analy[sz]e|compare) (?:this|that|it|these|those|them|both)|"
         r"(?:what is|what's) (?:this|that|it)|"
         r"(?:tell me|show me) more(?: about (?:this|that|it))?)\s*[.!?]*\s*",
         normalized,
@@ -555,8 +568,8 @@ def chat(
 @router.post(
     "/vision",
     response_model=ChatResponse,
-    summary="Send an image chat message",
-    description="Analyze an uploaded image and persist the image, prompt, and response in a chat session.",
+    summary="Send up to five images in one chat message",
+    description="Analyze 1 to 5 images together (8 MB each, 20 MB combined) and save every image in chat history. Accepts legacy image or repeated images fields.",
     responses={
         401: {"description": "Missing, invalid, or expired access token."},
         404: {
@@ -572,42 +585,46 @@ def chat(
 @limiter.limit(settings.CHAT_VISION_RATE_LIMIT)
 async def chat_vision(
     request: Request,
-    image: UploadFile = File(...),
+    image: UploadFile | None = File(default=None),
+    images: list[UploadFile] | None = File(default=None),
     message: str | None = Form(default=None),
     session_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    uploads = ([image] if image is not None else []) + (images or [])
     try:
-        content_type = (image.content_type or "").lower().split(";", 1)[0]
-        if content_type not in ALLOWED_CHAT_IMAGE_TYPES:
+        if not uploads or len(uploads) > MAX_CHAT_IMAGES:
             raise HTTPException(
-                status_code=415,
-                detail="Unsupported file type. Upload a JPEG, PNG, WebP, or GIF image.",
+                status_code=422, detail="Attach between 1 and 5 images per message."
             )
-        image_bytes = await image.read(MAX_CHAT_IMAGE_BYTES + 1)
-        if len(image_bytes) > MAX_CHAT_IMAGE_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail="Image is too large. Maximum size is 8 MB.",
-            )
-        if not image_bytes:
-            raise HTTPException(status_code=422, detail="The uploaded image is empty.")
-        try:
-            validate_image_content(image_bytes, content_type)
-        except InvalidImageError as error:
-            raise HTTPException(status_code=422, detail=str(error))
-
-        logger.info(
-            "chat.vision_upload_validated",
-            extra={
-                "user_id": _get_user_id(current_user),
-                "session_id": session_id,
-                "has_message": bool(message and message.strip()),
-                "content_type": content_type,
-                "image_size_bytes": len(image_bytes),
-            },
-        )
+        validated: list[tuple[bytes, str]] = []
+        total_bytes = 0
+        for upload in uploads:
+            content_type = (upload.content_type or "").lower().split(";", 1)[0]
+            if content_type not in ALLOWED_CHAT_IMAGE_TYPES:
+                raise HTTPException(
+                    status_code=415,
+                    detail="Unsupported file type. Upload a JPEG, PNG, WebP, or GIF image.",
+                )
+            image_bytes = await upload.read(MAX_CHAT_IMAGE_BYTES + 1)
+            if len(image_bytes) > MAX_CHAT_IMAGE_BYTES:
+                raise HTTPException(
+                    status_code=413, detail="Image is too large. Maximum size is 8 MB."
+                )
+            total_bytes += len(image_bytes)
+            if total_bytes > MAX_CHAT_IMAGES_TOTAL_BYTES:
+                raise HTTPException(
+                    status_code=413, detail="Images exceed the 20 MB combined limit."
+                )
+            if not image_bytes:
+                raise HTTPException(status_code=422, detail="The uploaded image is empty.")
+            try:
+                validate_image_content(image_bytes, content_type)
+            except InvalidImageError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            validated.append((image_bytes, content_type))
+        image_bytes, content_type = validated[0]
         user_id = _get_user_id(current_user)
         message_text = (message or "").strip()
         persisted_user_message = message_text or "[Image]"
@@ -623,11 +640,13 @@ async def chat_vision(
                 if ChatVisionService._requests_plan(message_text)
                 else []
             )
+            options: _VisionOptions = {}
+            if plan_history:
+                options["conversation_history"] = plan_history
+            if len(validated) > 1:
+                options["additional_images"] = [data for data, _ in validated[1:]]
             answer = await asyncio.to_thread(
-                vision_service.describe,
-                image_bytes,
-                message_text or None,
-                **({"conversation_history": plan_history} if plan_history else {}),
+                vision_service.describe, image_bytes, message_text or None, **options
             )
         except (VisionModelUnavailableError, ChatModelUnavailableError) as error:
             logger.warning(
@@ -635,12 +654,6 @@ async def chat_vision(
                 extra={"user_id": user_id, "session_id": session.id},
             )
             raise HTTPException(status_code=503, detail=str(error))
-        if await request.is_disconnected():
-            logger.info(
-                "chat.vision_disconnected",
-                extra={"user_id": user_id, "session_id": session.id},
-            )
-            return ChatResponse(response=answer, session_id=session.id)
         repository.add_turn(
             db,
             session.id,
@@ -648,6 +661,7 @@ async def chat_vision(
             answer,
             image_data=image_bytes,
             image_content_type=content_type,
+            additional_images=validated[1:],
         )
         invalidate_cached_history(user_id, session.id)
         logger.info(
@@ -656,7 +670,8 @@ async def chat_vision(
         )
         return ChatResponse(response=answer, session_id=session.id)
     finally:
-        await image.close()
+        for upload in uploads:
+            await upload.close()
 
 
 @router.post(
@@ -687,17 +702,21 @@ async def stream_chat(
 
     history = _get_persisted_history(db, user_id, session.id)
     image_answer = generated_image_follow_up(db, session.id, payload.message)
+    image_turns = repository.get_image_turns(db, session.id)
+    referenced_image = (
+        None
+        if payload.web_search
+        else _select_referenced_image(payload.message, image_turns, history)
+    )
     try:
-        web_request = payload.web_search or service.requests_web(payload.message, history=history)
+        web_request = payload.web_search or (
+            referenced_image is None and service.requests_web(payload.message, history=history)
+        )
         lookup = None if web_request else prepare_workbook_lookup(db, session.id, payload.message)
     except InvalidDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     document_references = (
         [] if web_request else _document_reference_history(db, user_id, session.id, payload.message)
-    )
-    image_turns = repository.get_image_turns(db, session.id)
-    referenced_image = (
-        None if web_request else _select_referenced_image(payload.message, image_turns, history)
     )
     referenced_turn = next(
         (turn for turn in image_turns if turn[0] is referenced_image),
@@ -754,6 +773,15 @@ async def stream_chat(
                     cast(bytes, referenced_image.image_data),
                     payload.message,
                     vision_history,
+                    **(
+                        {
+                            "additional_images": [
+                                item.image_data for item in referenced_image.additional_images
+                            ]
+                        }
+                        if referenced_image.additional_images
+                        else {}
+                    ),
                 )
                 chunks.append(answer)
                 await events.put({"type": "token", "content": answer})

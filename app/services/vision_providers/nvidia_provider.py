@@ -57,6 +57,7 @@ class NvidiaVisionProvider(VisionProvider):
         user_prompt: str,
         encoded_image: str,
         *,
+        additional_images: tuple[str, ...] = (),
         max_tokens: int | None = None,
         timeout_seconds: float | None = None,
     ) -> VisionResult:
@@ -95,10 +96,13 @@ class NvidiaVisionProvider(VisionProvider):
                             "role": "user",
                             "content": [
                                 {"type": "text", "text": user_prompt},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"},
-                                },
+                                *[
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
+                                    }
+                                    for encoded in (encoded_image, *additional_images)
+                                ],
                             ],
                         },
                     ],

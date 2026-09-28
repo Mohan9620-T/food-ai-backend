@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class _InferenceOptions(TypedDict, total=False):
+    additional_images: tuple[str, ...]
     max_tokens: int
     timeout_seconds: float
 
@@ -33,11 +34,14 @@ class FailoverVisionProvider(VisionProvider):
         user_prompt: str,
         encoded_image: str,
         *,
+        additional_images: tuple[str, ...] = (),
         max_tokens: int | None = None,
         timeout_seconds: float | None = None,
     ) -> VisionResult:
         started = monotonic()
         options: _InferenceOptions = {}
+        if additional_images:
+            options["additional_images"] = additional_images
         if max_tokens is not None:
             options["max_tokens"] = max_tokens
         if timeout_seconds is not None:

@@ -26,6 +26,7 @@ class ChatMessageOut(BaseModel):
     content: str
     created_at: datetime
     image_url: str | None = None
+    image_urls: list[str] = Field(default_factory=list)
     document_attachment: ChatDocumentAttachmentOut | None = None
     attachments: list[ChatDocumentAttachmentOut] = Field(
         default_factory=list, validation_alias="history_attachments"

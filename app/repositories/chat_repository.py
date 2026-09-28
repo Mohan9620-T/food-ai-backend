@@ -6,7 +6,12 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import or_
 from sqlalchemy.orm import QueryableAttribute, Session, load_only
 
-from app.models.chat import ChatDocumentAttachment, ChatMessageRecord, ChatSession
+from app.models.chat import (
+    ChatDocumentAttachment,
+    ChatImageAttachment,
+    ChatMessageRecord,
+    ChatSession,
+)
 from app.schemas.chat import (
     ChatDocumentAutomationRequest,
     ChatDocumentAutomationResponse,
@@ -341,6 +346,7 @@ class ChatRepository:
         *,
         image_data: bytes | None = None,
         image_content_type: str | None = None,
+        additional_images: list[tuple[bytes, str]] | None = None,
         commit: bool = True,
     ) -> tuple[ChatMessageRecord, ChatMessageRecord]:
         user_message = ChatMessageRecord(
@@ -349,6 +355,10 @@ class ChatRepository:
             content=user_content,
             image_data=image_data,
             image_content_type=image_content_type,
+            additional_images=[
+                ChatImageAttachment(image_data=data, content_type=kind)
+                for data, kind in (additional_images or [])
+            ],
         )
         bot_message = ChatMessageRecord(
             session_id=session_id,

@@ -22,6 +22,7 @@ class VisionProvider(ABC):
         user_prompt: str,
         encoded_image: str,
         *,
+        additional_images: tuple[str, ...] = (),
         max_tokens: int | None = None,
         timeout_seconds: float | None = None,
     ) -> VisionResult:

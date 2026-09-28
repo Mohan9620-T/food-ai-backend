@@ -84,6 +84,9 @@ class ChatMessageRecord(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     session = relationship("ChatSession", back_populates="messages")
+    additional_images = relationship(
+        "ChatImageAttachment", cascade="all, delete-orphan", order_by="ChatImageAttachment.id"
+    )
     document_attachment = relationship(
         "ChatDocumentAttachment",
         back_populates="message",
@@ -97,6 +100,29 @@ class ChatMessageRecord(Base):
             return None
         encoded = base64.b64encode(self.image_data).decode("ascii")
         return f"data:{self.image_content_type};base64,{encoded}"
+
+    @property
+    def image_urls(self) -> list[str]:
+        first = self.image_url
+        return ([first] if first else []) + [image.image_url for image in self.additional_images]
+
+
+class ChatImageAttachment(Base):
+    """Additional images on one user turn; the first retains its legacy storage."""
+
+    __tablename__ = "chat_image_attachments"
+
+    id = Column(Integer, primary_key=True)
+    message_id = Column(
+        Integer, ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    image_data = Column(LargeBinary, nullable=False)
+    content_type = Column(String(50), nullable=False)
+
+    @property
+    def image_url(self) -> str:
+        encoded = base64.b64encode(self.image_data).decode("ascii")
+        return f"data:{self.content_type};base64,{encoded}"
 
 
 class ChatDocumentAttachment(Base):
