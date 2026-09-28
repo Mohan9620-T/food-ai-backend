@@ -24,13 +24,21 @@ Never put the key in Angular environment files or source control.
 - The original request is kept in chat and attachment metadata. The exact provider prompt,
   whether it was compacted, the resolved aspect ratio and actual pixel dimensions are also
   saved with the attachment. Prompts and raw provider errors are not logged.
-- Short prompts require no extra text-model call. Preparation has a 90-second total deadline,
-  a 40-second timeout per text-model call, and at most one correction if the prepared
-  description is still too long. Each text call retries a temporary connection failure or
-  HTTP 502/503/504 once. Authorization, quota and content rejections are not retried.
+- Short prompts require no extra text-model call. Preparation uses a JSON schema with an
+  800-character maximum for the provider description, followed by local validation.
+  It has a 90-second total deadline, a 40-second timeout per text-model call, and at most
+  three attempts to produce valid, complete output. Oversized, malformed or incomplete
+  descriptions are retried using the full original request. Incomplete responses receive
+  a larger output budget (1,024, then 2,048, then 4,096 tokens).
+  Each text call retries a temporary connection failure or HTTP 502/503/504 once.
+  Authorization, quota, explicit content rejections and `cannot_fit` are not retried.
+  Quota errors return HTTP 429 with a specific retry-later message.
   Temporary failures preserve the entire draft and report a preparation error rather than
   incorrectly asking the user to stay under 800 characters. Invalid, truncated or refused
   preparation output never reaches the image endpoint.
+- Preparation logs record character counts, attempt number and failure category, without
+  recording prompt contents, credentials or raw provider responses. Image generation itself
+  still runs once after preparation succeeds.
 - Square by default; portrait/9:16 and landscape/16:9 descriptions select the provider's
   supported portrait/landscape dimensions. `/chat/images` also accepts `aspect_ratio`.
 - Five requests per minute per the application's rate limiter.
@@ -55,3 +63,6 @@ https://ai.google.dev/gemini-api/docs/pricing#gemini-3-pro-image
 `tests/test_image_generation.py` covers provider responses, validation, failures, history,
 authentication and cross-user download isolation. Frontend tests cover intent routing,
 composer cleanup/retry, private preview loading and the browser generation/history flow.
+The long cinematic prompt fixture covers recovery from oversized, malformed, empty and
+token-limited preparation responses while retaining the original request on every attempt.
+A live provider check also generated a valid 1024-by-1024 PNG from the 3,273-character fixture.

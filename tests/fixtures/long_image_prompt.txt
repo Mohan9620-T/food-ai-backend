@@ -1,0 +1,17 @@
+Create an ultra-realistic cinematic Godzilla, an enormous ancient kaiju standing with overwhelming physical presence. He should look like a living prehistoric biological creature, not a costume, robot, or toy.
+ANATOMY:
+One enormous head on a short powerful neck. A massive muscular body, two thick legs, two arms with huge claws, one long heavy tail, and distinct jagged dorsal plates along his spine. Preserve the iconic silhouette from head to tail. Detailed black reptilian scales, rough weathered skin, scars, and realistic skin folds. His weight must visibly affect the ground beneath him. Keep the entire body visible with enough space around his feet, tail, and head.
+POSE:
+Godzilla stands ready to attack, claws partially open, legs firmly planted, tail extending behind him for balance. His posture should communicate enormous weight and power without looking exaggerated or anatomically impossible.
+ATMOSPHERE:
+Epic dark cinematic atmosphere, destroyed modern city, heavy rain, smoke, mist, dust and atmospheric particles. Distant fires and emergency lights reflecting subtly through the rain. Massive storm clouds above him. Godzilla emerging through the environment as if he has just awakened after thousands of years.
+LIGHTING:
+High-end Hollywood creature cinematography. Strong cinematic rim lighting separating Godzilla from the dark environment, subtle volumetric light through smoke and rain, realistic reflections on wet scales, deep natural shadows, dramatic contrast, atmospheric depth. Lighting should reveal the texture of his skin without making him look artificially glossy.
+CAMERA:
+Low-angle ground-level cinematic camera looking upward toward Godzilla, emphasizing his enormous scale. Full-body composition with enough environmental context to communicate his size. 24mm cinematic lens, realistic perspective, deep atmospheric depth, subtle anamorphic characteristics.
+VISUAL QUALITY:
+Photorealistic, physically based rendering, extremely detailed creature anatomy, realistic reptile biology, realistic skin displacement, cinematic VFX quality, Hollywood creature design, natural environmental interaction, realistic rain droplets, volumetric fog, physically accurate shadows, realistic reflections, extreme high texture detail, 8K-quality appearance, film-quality composition.
+IMPORTANT:
+Godzilla must remain visually consistent from head to tail. Preserve the iconic silhouette: massive muscular body, short powerful neck, enormous head, thick legs, huge claws, long heavy tail and distinctive dorsal plates. Make him terrifying through scale, anatomy and realism, not excessive gore.
+NEGATIVE PROMPT:
+cartoon, anime, manga, illustration, comic book, toy, action figure, rubber suit, human in costume, robot, mechanical parts, cyborg, overly dinosaur-like anatomy, T-rex body proportions, tiny body, skinny legs, oversized eyes, cute expression, smooth skin, plastic skin, clean skin, symmetrical teeth, unrealistic armor, floating dorsal plates, disconnected anatomy, extra limbs, extra fingers, malformed hands, duplicate head, distorted face, blurry details, low resolution, oversaturated colors, fantasy dragon features, wings, horns, feathers, goofy expression, exaggerated smile, bad anatomy, unrealistic perspective, artificial CGI look.

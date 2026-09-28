@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import httpx
@@ -97,7 +98,9 @@ def test_long_prompt_is_prepared_before_generation_and_keeps_landscape(
         calls.append(str(request.url))
         if request.url.path.endswith("/chat/completions"):
             assert body["messages"][1]["content"] == original
-            assert body["response_format"] == {"type": "json_object"}
+            assert body["response_format"]["type"] == "json_schema"
+            schema = body["response_format"]["json_schema"]["schema"]
+            assert schema["properties"]["prompt"]["anyOf"][0]["maxLength"] == 800
             return httpx.Response(
                 200,
                 json={
@@ -138,6 +141,92 @@ def test_whitespace_can_fit_without_text_model(monkeypatch, valid_png_bytes):
     assert result.provider_prompt == "A black dragon"
 
 
+@pytest.mark.parametrize("failure", ["length", "invalid_json", "empty", "too_long"])
+def test_long_cinematic_prompt_recovers_without_losing_original_or_duplicate_images(
+    monkeypatch, valid_png_bytes, caplog, failure
+):
+    original = (
+        (Path(__file__).parent / "fixtures" / "long_image_prompt.txt")
+        .read_text(encoding="utf-8")
+        .strip()
+    )
+    assert len(original) > 3000
+    prepared = "Godzilla, massive scaled kaiju in a rain-soaked ruined city, cinematic rim light."
+    preparation_calls = []
+    image_calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        if request.url.path.endswith("/chat/completions"):
+            preparation_calls.append(body)
+            assert [message["role"] for message in body["messages"]] == ["system", "user"]
+            assert body["messages"][1]["content"] == original
+            finish = "stop"
+            content = json.dumps({"prompt": prepared, "error": None})
+            if len(preparation_calls) < 3:
+                if failure == "length":
+                    finish, content = "length", '{"prompt": "partial description'
+                elif failure == "invalid_json":
+                    content = "private provider detail"
+                elif failure == "empty":
+                    content = None
+                else:
+                    content = json.dumps({"prompt": "x" * 1200, "error": None})
+            return httpx.Response(
+                200,
+                json={"choices": [{"finish_reason": finish, "message": {"content": content}}]},
+            )
+        image_calls.append(body)
+        return httpx.Response(
+            200, json={"artifacts": [{"base64": base64.b64encode(valid_png_bytes).decode()}]}
+        )
+
+    transport(monkeypatch, handler)
+    caplog.set_level("INFO", logger=generation.__name__)
+    result = asyncio.run(generation.ImageGenerationService().generate(original))
+    assert result.data == valid_png_bytes
+    assert result.provider_prompt == prepared
+    assert [call["max_tokens"] for call in preparation_calls] == (
+        [1024, 2048, 4096] if failure == "length" else [1024, 1024, 1024]
+    )
+    assert len(image_calls) == 1
+    assert image_calls[0]["prompt"] == prepared
+    recovery_logs = [r for r in caplog.records if r.message == "image.prompt_preparation_invalid"]
+    assert len(recovery_logs) == 2
+    assert [r.attempt for r in recovery_logs] == [1, 2]
+    success = next(r for r in caplog.records if r.message == "image.prompt_prepared")
+    assert success.prepared_chars == len(prepared)
+    assert success.original_chars == len(original)
+    assert original not in caplog.text
+    assert "private provider detail" not in caplog.text
+    assert "test-key" not in caplog.text
+
+
+def test_explicit_preparation_refusal_is_not_retried_even_with_stop_finish(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.url.path.endswith("/chat/completions")
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": None, "refusal": "private provider detail"},
+                    }
+                ]
+            },
+        )
+
+    transport(monkeypatch, handler)
+    with pytest.raises(generation.ImageGenerationError, match="content rules") as error:
+        asyncio.run(generation.ImageGenerationService().generate("scene " * 200))
+    assert error.value.status_code == 422
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize(
     "outcome",
     ["valid", "still_long", "invalid", "truncated", "refused", "unavailable", "cannot_fit"],
@@ -164,7 +253,7 @@ def test_preparation_is_bounded_and_never_truncates_or_generates_invalid_output(
         if outcome == "refused":
             finish = "content_filter"
         if outcome == "cannot_fit":
-            content = json.dumps({"error": "cannot_fit"})
+            content = json.dumps({"prompt": None, "error": "cannot_fit"})
         return httpx.Response(
             200, json={"choices": [{"finish_reason": finish, "message": {"content": content}}]}
         )
@@ -176,7 +265,7 @@ def test_preparation_is_bounded_and_never_truncates_or_generates_invalid_output(
         result = asyncio.run(service._prepare_prompt("scene " * 200))
         assert result == "Three black dragons under an orange sky."
         assert len(calls) == 2
-        assert "600 characters" in calls[1]["messages"][-1]["content"]
+        assert "600 characters" in calls[1]["messages"][0]["content"]
     else:
         with pytest.raises(generation.ImageGenerationError) as error:
             asyncio.run(service.generate("scene " * 200))
@@ -188,7 +277,13 @@ def test_preparation_is_bounded_and_never_truncates_or_generates_invalid_output(
         assert "under 800" not in str(error.value)
         assert error.value.status_code == (422 if outcome in {"refused", "cannot_fit"} else 503)
         assert "private provider detail" not in str(error.value)
-        assert len(calls) == (2 if outcome in {"still_long", "unavailable"} else 1)
+        assert len(calls) == (
+            3
+            if outcome in {"still_long", "invalid", "truncated"}
+            else 2
+            if outcome == "unavailable"
+            else 1
+        )
 
 
 @pytest.mark.parametrize("failure", [502, 503, 504, "timeout", "connection"])
@@ -252,6 +347,9 @@ def test_preparation_does_not_retry_rejections_or_quota_errors(monkeypatch, stat
         asyncio.run(generation.ImageGenerationService().generate("scene " * 200))
     assert "private provider detail" not in str(error.value)
     assert "800" not in str(error.value)
+    assert error.value.status_code == (429 if status == 429 else 503)
+    if status == 429:
+        assert "busy or its quota is exhausted" in str(error.value)
     assert len(calls) == 1
 
 
