@@ -26,7 +26,7 @@ from app.services.spreadsheet.column_grouping import ColumnGroupingRequest
 from app.services.spreadsheet.row_append import AppendRowsRequest
 from app.services.spreadsheet.row_selection import RowSelection
 from app.utils.document_clarification import spreadsheet_layout_question
-from app.utils.document_output import requests_pdf_output
+from app.utils.document_output import requests_pdf_output, requests_word_output
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +287,10 @@ class DocumentAutomationService:
             documents,
             explicit_source=explicit_source,
             conversation_history=conversation_history or [],
-            allow_without_source=description_only
+            allow_without_source=(
+                description_only
+                or (source_free_creation and requests_word_output(source_instruction))
+            )
             and self._has_written_requirements(source_instruction),
             ignore_image_type=description_only,
         )
@@ -935,13 +938,19 @@ class DocumentAutomationService:
 
     @staticmethod
     def _has_written_requirements(instruction: str) -> bool:
-        return bool(
-            re.search(
-                r"\b(?:about|for|with|include|including|containing|columns?|sheets?|blank|empty)\b",
-                instruction,
-                re.I,
+        if re.search(r"\b(?:blank|empty)\b", instruction, re.I):
+            return True
+        for match in re.finditer(
+            r"\b(?:about|for|with|include|including|containing|columns?|sheets?)\b(.*)",
+            instruction,
+            re.I | re.S,
+        ):
+            content = re.sub(
+                r"\b(?:me|us|please|thanks|thank you|now)\b", " ", match[1], flags=re.I
             )
-        )
+            if re.search(r"\w", content):
+                return True
+        return False
 
     def _plan_unambiguous_conversion(
         self,

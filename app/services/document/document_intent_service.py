@@ -21,6 +21,7 @@ from app.services.document.extraction_models import (
     OperationPlan,
     OperationPlanStep,
 )
+from app.utils.document_output import requests_word_output
 
 if TYPE_CHECKING:
     from app.services.chat_document_service import ChatDocumentService
@@ -631,7 +632,7 @@ class DocumentIntentService:
             candidates.append(DocumentOperation.SUMMARIZE_DOCUMENT)
         if self._READ_PATTERN.search(instruction):
             candidates.append(DocumentOperation.READ_DOCUMENT)
-        if self._CREATE_PATTERN.search(instruction) and not candidates:
+        if self.is_creation_request(instruction) and not candidates:
             explicitly_converts_selected_type = (
                 input_type is not None
                 and input_type in mentioned_types
@@ -681,7 +682,9 @@ class DocumentIntentService:
 
     @classmethod
     def is_creation_request(cls, instruction: str | None) -> bool:
-        return bool(instruction and cls._CREATE_PATTERN.search(instruction))
+        return bool(instruction and cls._CREATE_PATTERN.search(instruction)) or (
+            requests_word_output(instruction) and not cls.is_conversion_request(instruction)
+        )
 
     @classmethod
     def is_conversion_request(cls, instruction: str | None) -> bool:

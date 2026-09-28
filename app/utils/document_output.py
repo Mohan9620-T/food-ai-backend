@@ -3,6 +3,28 @@
 import re
 
 
+def requests_word_output(instruction: str | None) -> bool:
+    """Recognize Word delivery, including common conversational phrasing."""
+    text = re.sub(r'"[^"]*"|“[^”]*”|`[^`]*`', " ", positive_instruction(instruction or ""))
+    target = r"(?:word(?:\s+documents?)?|docx)"
+    return bool(
+        re.search(
+            r"\b(?:create|crate|creat|generate|make|build|prepare|produce|draft|write|"
+            r"give|send|deliver|download)\s+"
+            r"(?:(?:me|us|one|a|an|the|new|only|downloadable|microsoft|ms)\s+)*"
+            + target
+            + r"\b|\b(?:convert|export|save|give|send|make|turn)\b[^.\n]{0,140}?"
+            r"\b(?:to|as|into)\s+(?:(?:a|an|the|microsoft|ms)\s+)*"
+            + target
+            + r"\b|\b"
+            + target
+            + r"\s+(?:file\s+)?(?:(?:ah|la|aa)\s+)?(?:kudu|venum|pannu|create|crate|creat|generate)\b",
+            text,
+            re.I,
+        )
+    )
+
+
 def positive_instruction(instruction: str) -> str:
     return re.sub(r"\b(?:do not|don't|never)\b[^.\n]*", " ", instruction, flags=re.I)
 

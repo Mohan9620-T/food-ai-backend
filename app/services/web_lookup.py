@@ -13,6 +13,7 @@ from app.services.conversation_guidance import is_personal_conversation
 from app.services.spreadsheet.column_grouping import ColumnGroupingRequest
 from app.services.web_page_reader import WebPageError, extract_urls, read_page
 from app.services.youtube_lookup import channel_video_answer, video_request
+from app.utils.document_output import requests_word_output
 
 
 class CitationFilter:
@@ -106,6 +107,8 @@ def _information_request(text: str) -> str:
 
 
 def automatic_web_question(message: str, history: list[ChatHistoryMessage] | None = None) -> bool:
+    if requests_word_output(message):
+        return False
     if ColumnGroupingRequest.from_instruction(message) is not None:
         return False
     if video_request(message, history or []) is not None:
