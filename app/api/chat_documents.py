@@ -1481,6 +1481,7 @@ async def automate_document(
                     DocumentOperation.EXTRACT_MATCHING_ROWS,
                     DocumentOperation.APPEND_WORKBOOK_ROWS,
                     DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN,
+                    DocumentOperation.EXPORT_PRICE_LIST_PDF,
                 }:
                     completion_details.append(result.summary)
 

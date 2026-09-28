@@ -51,6 +51,7 @@ class DocumentOperation(str, Enum):
     EXTRACT_MATCHING_ROWS = "extract_matching_rows"
     APPEND_WORKBOOK_ROWS = "append_workbook_rows"
     SPLIT_WORKBOOK_BY_COLUMN = "split_workbook_by_column"
+    EXPORT_PRICE_LIST_PDF = "export_price_list_pdf"
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,17 @@ class DocumentOperationRegistry:
         self._definitions = {
             definition.operation: definition
             for definition in (
+                DocumentOperationDefinition(
+                    DocumentOperation.EXPORT_PRICE_LIST_PDF,
+                    ("price-wise PDF", "group prices in PDF"),
+                    True,
+                    spreadsheet,
+                    frozenset({DocumentType.PDF}),
+                    optional_parameters=frozenset(
+                        {"title", "filename", "sheet_name", "expected_count", "max_groups"}
+                    ),
+                    expected_fidelity=Fidelity.HIGH,
+                ),
                 DocumentOperationDefinition(
                     DocumentOperation.EXPAND_DISH_BY_DIETARY_CATEGORY,
                     ("expand dish categories", "create category rows", "generate rows for x"),

@@ -161,6 +161,11 @@ class ChatDocumentService:
     def spreadsheet_operation(instruction: str | None) -> SpreadsheetOperation | None:
         if not instruction or not instruction.strip():
             return None
+        from app.utils.document_output import positive_instruction, requests_pdf_output
+
+        if requests_pdf_output(instruction):
+            return None
+        instruction = positive_instruction(instruction)
         if ChatDocumentService.is_dish_category_expansion_request(instruction):
             return SpreadsheetOperation.EXPAND_DISH_BY_DIETARY_CATEGORY
         if ChatDocumentService.is_category_split_request(instruction):
@@ -943,6 +948,8 @@ class ChatDocumentService:
                 continue
             header_words = cls._normalize_words(str(cell.value))
             header_key = header_words.replace(" ", "")
+            if not header_key:
+                continue
             if any(
                 phrase in instruction_words
                 for phrase in (

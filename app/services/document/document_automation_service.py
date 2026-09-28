@@ -21,10 +21,12 @@ from app.services.document.document_pipeline_service import (
     StructuredPipelineStep,
 )
 from app.services.document.document_references import references_document, references_image
+from app.services.pdf.price_list_pdf import PriceListPdfRequest
 from app.services.spreadsheet.column_grouping import ColumnGroupingRequest
 from app.services.spreadsheet.row_append import AppendRowsRequest
 from app.services.spreadsheet.row_selection import RowSelection
 from app.utils.document_clarification import spreadsheet_layout_question
+from app.utils.document_output import requests_pdf_output
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +140,18 @@ class DocumentAutomationService:
         conversation_history: list[ChatHistoryMessage] | None = None,
         source_mode: Literal["auto", "description"] = "auto",
     ) -> DocumentAutomationPlan:
+        if source_mode != "description" and requests_pdf_output(instruction):
+            pdf_plan = self._plan_source_pdf(
+                instruction, documents, explicit_source=explicit_source
+            )
+            if pdf_plan is not None:
+                return pdf_plan
         grouping = ColumnGroupingRequest.from_instruction(instruction)
-        if grouping is not None and source_mode != "description":
+        if (
+            grouping is not None
+            and source_mode != "description"
+            and not requests_pdf_output(instruction)
+        ):
             return self._plan_column_grouping(
                 instruction, documents, grouping, explicit_source=explicit_source
             )
@@ -214,7 +226,7 @@ class DocumentAutomationService:
                 selection,
                 explicit_source=explicit_source,
             )
-        if source_mode != "description":
+        if source_mode != "description" and not requests_pdf_output(instruction):
             sort_plan = self._plan_workbook_sort(
                 instruction, documents, explicit_source=explicit_source
             )
@@ -398,6 +410,61 @@ class DocumentAutomationService:
         steps = self.pipeline_service.plan_structured(
             tuple(requested_steps),
             input_filename=default_source.filename if default_source else None,
+            request_instruction=instruction,
+        )
+        return DocumentAutomationPlan(status="ready", clarifying_question=None, steps=steps)
+
+    def _plan_source_pdf(
+        self, instruction: str, documents: tuple[AvailableDocument, ...], *, explicit_source: bool
+    ) -> DocumentAutomationPlan | None:
+        request = PriceListPdfRequest.from_instruction(instruction)
+        plain_conversion = (
+            len(instruction) < 300
+            and re.search(r"\b(?:convert|covert|export|save)\b", instruction, re.I)
+            and not re.search(
+                r"\b(?:group|sort|summari\w*|rewrite|translate|remove|add|explain|how|guide)\b",
+                instruction,
+                re.I,
+            )
+        )
+        if request is None and not plain_conversion:
+            return None
+        sources = tuple(
+            doc for doc in documents if request is None or doc.document_type == DocumentType.XLSX
+        )
+        if not explicit_source and any(doc.kind == "uploaded" for doc in sources):
+            sources = tuple(doc for doc in sources if doc.kind == "uploaded")
+        if not sources:
+            return self._clarification(
+                "Please upload the source workbook."
+                if request
+                else "Please upload the document to convert to PDF."
+            )
+        resolved = self._resolve_input_reference(
+            None,
+            instruction,
+            sources,
+            {doc.filename.casefold(): doc.filename for doc in sources},
+            index=0,
+            explicit_source=explicit_source,
+            multi_input=False,
+        )
+        if isinstance(resolved, str) and resolved.startswith("clarify:"):
+            return self._clarification(resolved.removeprefix("clarify:"))
+        selected = next((doc for doc in sources if doc.filename == resolved), sources[-1])
+        steps = self.pipeline_service.plan_structured(
+            (
+                StructuredPipelineStep(
+                    document_type=selected.document_type,
+                    operation=DocumentOperation.EXPORT_PRICE_LIST_PDF
+                    if request
+                    else DocumentOperation.CONVERT_DOCUMENT,
+                    input_file=selected.filename,
+                    output_type=DocumentType.PDF,
+                    parameters=request.model_dump(exclude_none=True) if request else {},
+                ),
+            ),
+            input_filename=selected.filename,
             request_instruction=instruction,
         )
         return DocumentAutomationPlan(status="ready", clarifying_question=None, steps=steps)

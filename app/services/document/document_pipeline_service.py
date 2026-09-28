@@ -38,6 +38,7 @@ from app.services.document.extraction_models import (
     StructuredDocumentContent,
 )
 from app.services.document.image_document_reader import ImageDocumentReader
+from app.services.pdf.price_list_pdf import PriceListPdf, PriceListPdfRequest
 from app.services.spreadsheet.column_grouping import ColumnGroupingRequest, WorkbookColumnGrouper
 from app.services.spreadsheet.row_append import AppendRowsRequest, WorkbookRowAppender
 from app.services.spreadsheet.row_selection import RowSelection, WorkbookRowSelector
@@ -108,6 +109,7 @@ class DocumentPipelineService:
             DocumentOperation.EXTRACT_MATCHING_ROWS,
             DocumentOperation.APPEND_WORKBOOK_ROWS,
             DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN,
+            DocumentOperation.EXPORT_PRICE_LIST_PDF,
         }
     )
     _TEXT_OPERATIONS = frozenset(
@@ -391,6 +393,19 @@ class DocumentPipelineService:
                 fidelity_note="Selected row values and column order preserved in a new workbook.",
             )
             summary = result.summary
+        elif step.intent.operation == DocumentOperation.EXPORT_PRICE_LIST_PDF:
+            request = PriceListPdfRequest.model_validate(step.intent.parameters)
+            data, summary = PriceListPdf().generate(selected.file_data, request)
+            generated = GeneratedDocument(
+                file_data=data,
+                filename=DocumentGenerationService.safe_filename(
+                    request.filename, DocumentType.PDF
+                ),
+                content_type="application/pdf",
+                document_type=DocumentType.PDF,
+                fidelity=Fidelity.HIGH,
+                fidelity_note="All item records read from source cells; grouped only by numeric Price. Blank prices remain separate.",
+            )
         elif step.intent.operation == DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN:
             grouped = WorkbookColumnGrouper().split(
                 selected.file_data,
@@ -771,6 +786,13 @@ class DocumentPipelineService:
                 "The document plan contains unsupported parameters."
             )
         parameters = dict(requested.parameters)
+        if requested.operation == DocumentOperation.EXPORT_PRICE_LIST_PDF:
+            try:
+                return PriceListPdfRequest.model_validate(parameters).model_dump(exclude_none=True)
+            except ValidationError as error:
+                raise InvalidDocumentParametersError(
+                    "Invalid price-list PDF parameters."
+                ) from error
         if requested.operation == DocumentOperation.SPLIT_WORKBOOK_BY_COLUMN:
             try:
                 return ColumnGroupingRequest.model_validate(parameters).model_dump(
@@ -880,6 +902,11 @@ class DocumentPipelineService:
         operation: DocumentOperation,
         parameters: dict[str, object] | None = None,
     ) -> str:
+        if operation == DocumentOperation.EXPORT_PRICE_LIST_PDF:
+            return DocumentGenerationService.safe_filename(
+                str((parameters or {}).get("filename", "Catering_Menu_Price_Wise.pdf")),
+                DocumentType.PDF,
+            )
         if operation == DocumentOperation.CONVERT_DOCUMENT:
             return DocumentConversionService.output_filename(current_filename, output_type)
         if operation == DocumentOperation.CREATE_DOCUMENT:
@@ -915,6 +942,8 @@ class DocumentPipelineService:
         request_instruction: str | None,
     ) -> str:
         source = source_filenames[0] if source_filenames else "the supplied context"
+        if operation == DocumentOperation.EXPORT_PRICE_LIST_PDF:
+            return request_instruction or "Export all items grouped by Price to PDF"
         if operation in {
             DocumentOperation.CREATE_DOCUMENT,
             DocumentOperation.READ_DOCUMENT,
