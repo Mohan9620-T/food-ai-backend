@@ -48,7 +48,13 @@ class PdfGenerator:
 
                 headers = cells(line.text)
                 rows = [cells(item.text) for item in lines[index + 2 : end]]
-                if all(len(row) == len(headers) for row in rows):
+                # Direct text exports may exceed the structured-content contract.
+                # Keep those tables as literal text rather than rejecting an export.
+                if (
+                    len(headers) <= 100
+                    and len(rows) <= 10_000
+                    and all(len(row) == len(headers) for row in rows)
+                ):
                     self._append_table(
                         story,
                         GeneratedTableContent(headers=headers, rows=rows),

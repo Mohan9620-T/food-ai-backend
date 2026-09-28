@@ -190,3 +190,13 @@ def test_headerless_table_keeps_first_row_as_data():
     )
     with pdfplumber.open(BytesIO(data)) as document:
         assert document.pages[1].extract_tables()[0] == [["One", "1"], ["Two", "2"]]
+
+
+def test_text_export_beyond_structured_table_limits_preserves_all_cells():
+    headers = "| " + " | ".join(f"H{index:03}" for index in range(101)) + " |"
+    separator = "| " + " | ".join(["---"] * 101) + " |"
+    values = [f"VALUE-{index:03}" for index in range(101)]
+    source = "# Wide source\n" + headers + "\n" + separator + "\n| " + " | ".join(values) + " |"
+    text = "\n".join(_text(PdfGenerator().generate(source))[1:])
+    for value in values:
+        assert value in text
