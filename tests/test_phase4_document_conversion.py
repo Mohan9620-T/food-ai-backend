@@ -111,7 +111,7 @@ def test_pdf_to_xlsx_requires_and_reopens_real_extracted_tables():
     with closing(
         load_workbook(BytesIO(generated.file_data), read_only=True, data_only=True)
     ) as workbook:
-        assert workbook.sheetnames == ["Page 1 table 1"]
+        assert workbook.sheetnames == ["Page 2 table 1"]
         assert list(workbook.active.values) == [
             ("Item", "Total"),
             ("Apple", "12"),

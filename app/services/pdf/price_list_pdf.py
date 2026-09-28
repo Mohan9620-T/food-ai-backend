@@ -7,33 +7,29 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from html import escape
 from io import BytesIO
-from pathlib import Path
 
 from openpyxl import load_workbook
 from pydantic import BaseModel, ConfigDict, Field
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import (
-    Flowable,
     PageBreak,
     Paragraph,
-    SimpleDocTemplate,
     Spacer,
     Table,
     TableStyle,
 )
 
 from app.services.document.exceptions import InvalidDocumentError
+from app.services.pdf.pdf_theme import (
+    CONTENT_WIDTH,
+    NAVY,
+    StatusBadge,
+    build_pdf,
+    document_fonts,
+    table_style,
+)
 from app.utils.document_output import positive_instruction, requests_pdf_output
-
-NAVY = colors.HexColor("#1F3A5F")
-GOLD = colors.HexColor("#C9A227")
-GREY = colors.HexColor("#F4F6F8")
 
 
 class PriceListPdfRequest(BaseModel):
@@ -170,7 +166,7 @@ class PriceListPdf:
         self, data: bytes, request: PriceListPdfRequest, *, today: date | None = None
     ) -> tuple[bytes, str]:
         records = self.read(data, request)
-        regular, bold = self._fonts()
+        regular, bold = document_fonts()
         body = ParagraphStyle(
             "PriceListBody", fontName=regular, fontSize=10, leading=14, textColor=NAVY
         )
@@ -178,19 +174,8 @@ class PriceListPdf:
             "PriceListHeading", parent=body, fontName=bold, fontSize=18, leading=23, spaceAfter=16
         )
         white = ParagraphStyle("PriceListWhite", parent=body, fontName=bold, textColor=colors.white)
-        buffer = BytesIO()
-        # SimpleDocTemplate frames reserve six points of padding on either side.
-        width = A4[0] - 36 * mm - 12
-        document = SimpleDocTemplate(
-            buffer,
-            pagesize=A4,
-            leftMargin=18 * mm,
-            rightMargin=18 * mm,
-            topMargin=23 * mm,
-            bottomMargin=20 * mm,
-            title=request.title,
-        )
-        story = [Spacer(1, 1), PageBreak(), Paragraph("Price summary", heading)]
+        width = CONTENT_WIDTH
+        story = [Paragraph("Price summary", heading)]
         summary = [[Paragraph("Price", white), Paragraph("No. of Items", white)]]
         summary.extend(
             [
@@ -200,7 +185,7 @@ class PriceListPdf:
         )
         summary.append([Paragraph("Grand total", body), Paragraph(str(records.count), body)])
         table = Table(summary, colWidths=[width * 0.7, width * 0.3], repeatRows=1)
-        table.setStyle(self._table_style())
+        table.setStyle(table_style())
         table.setStyle(TableStyle([("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E0E8F0"))]))
         story.extend([table, Spacer(1, 14), Paragraph(escape(records.note), body), PageBreak()])
         for price, items in records.groups.items():
@@ -224,7 +209,7 @@ class PriceListPdf:
                         Paragraph(escape(code), body),
                         Paragraph(escape(name), body),
                         Paragraph(escape(category), body),
-                        _StatusBadge(status, regular),
+                        StatusBadge(status, regular),
                     ]
                     for code, name, category, status in items
                 ]
@@ -235,131 +220,24 @@ class PriceListPdf:
                 repeatRows=2,
                 hAlign="LEFT",
             )
-            table.setStyle(self._table_style())
+            table.setStyle(table_style(header_rows=2))
             table.setStyle(
                 TableStyle(
                     [
                         ("SPAN", (0, 0), (-1, 0)),
                         ("BACKGROUND", (0, 1), (-1, 1), NAVY),
-                        ("ROWBACKGROUNDS", (0, 2), (-1, -1), [colors.white, GREY]),
                     ]
                 )
             )
             story.extend([table, Spacer(1, 15)])
 
-        def cover(canvas, doc):
-            canvas.saveState()
-            canvas.setFillColor(NAVY)
-            canvas.rect(0, 0, *A4, stroke=0, fill=1)
-            canvas.setFillColor(GOLD)
-            canvas.setFont(bold, 34)
-            # Wrap a caller-supplied long title without reducing body readability.
-            title_style = ParagraphStyle(
-                "CoverTitle", fontName=bold, fontSize=34, leading=42, textColor=GOLD, alignment=1
-            )
-            title = Paragraph(escape(request.title), title_style)
-            _, height = title.wrap(width, 200)
-            title.drawOn(canvas, 18 * mm, 520 - height)
-            canvas.setFont(regular, 18)
-            canvas.drawCentredString(A4[0] / 2, 400, "Price-wise Item List")
-            canvas.setStrokeColor(GOLD)
-            canvas.line(65 * mm, 370, A4[0] - 65 * mm, 370)
-            canvas.setFont(bold, 14)
-            canvas.drawCentredString(A4[0] / 2, 330, f"Total Items: {records.count}")
-            canvas.setFont(regular, 11)
-            canvas.drawCentredString(A4[0] / 2, 300, (today or date.today()).strftime("%d %B %Y"))
-            canvas.restoreState()
-
-        document.build(
-            story,
-            onFirstPage=cover,
-            canvasmaker=lambda *args, **kwargs: _NumberedCanvas(
-                *args, title=request.title, font=regular, **kwargs
+        return (
+            build_pdf(
+                story,
+                title=request.title,
+                subtitle="Price-wise Item List",
+                detail=f"Total Items: {records.count}",
+                today=today,
             ),
+            records.summary,
         )
-        return buffer.getvalue(), records.summary
-
-    @staticmethod
-    def _fonts() -> tuple[str, str]:
-        if "PriceListSans" not in pdfmetrics.getRegisteredFontNames():
-            pairs = [
-                (
-                    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-                    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
-                ),
-                (Path("C:/Windows/Fonts/arial.ttf"), Path("C:/Windows/Fonts/arialbd.ttf")),
-            ]
-            pair = next((pair for pair in pairs if all(path.is_file() for path in pair)), None)
-            if pair is None:
-                raise InvalidDocumentError(
-                    "Install DejaVu Sans fonts to export Unicode prices to PDF."
-                )
-            for name, path in zip(("PriceListSans", "PriceListSansBold"), pair, strict=True):
-                pdfmetrics.registerFont(TTFont(name, str(path)))
-        return "PriceListSans", "PriceListSansBold"
-
-    @staticmethod
-    def _table_style() -> TableStyle:
-        return TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), NAVY),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, GREY]),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 9),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 9),
-                ("TOPPADDING", (0, 0), (-1, -1), 7),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-                ("LINEBELOW", (0, 1), (-1, -1), 0.25, colors.HexColor("#E2E7EC")),
-            ]
-        )
-
-
-class _StatusBadge(Flowable):
-    def __init__(self, text: str, font: str):
-        super().__init__()
-        self.text, self.font = text, font
-        self.width = pdfmetrics.stringWidth(text, font, 9) + 14
-        self.height = 19
-
-    def wrap(self, available_width, available_height):
-        if self.width > available_width:
-            raise InvalidDocumentError(
-                "A Status value is too long for the PDF badge; use a short status label."
-            )
-        return self.width, self.height
-
-    def draw(self):
-        active = self.text.casefold() == "active"
-        self.canv.setFillColor(colors.HexColor("#E4F3E8" if active else "#E8EBEF"))
-        self.canv.roundRect(0, 0, self.width, self.height, 7, stroke=0, fill=1)
-        self.canv.setFillColor(colors.HexColor("#22633C" if active else "#505966"))
-        self.canv.setFont(self.font, 9)
-        self.canv.drawString(7, 6, self.text)
-
-
-class _NumberedCanvas(Canvas):
-    def __init__(self, *args, title: str, font: str, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._pages: list[dict] = []
-        self._title, self._font = title, font
-
-    def showPage(self):
-        self._pages.append(dict(self.__dict__))
-        self._startPage()
-
-    def save(self):
-        count = len(self._pages)
-        for state in self._pages:
-            self.__dict__.update(state)
-            if self._pageNumber > 1:
-                self.setFillColor(NAVY)
-                self.setFont(self._font, 10)
-                self.drawString(18 * mm, A4[1] - 14 * mm, self._title)
-                self.setStrokeColor(colors.HexColor("#D8E0E8"))
-                self.line(18 * mm, A4[1] - 17 * mm, A4[0] - 18 * mm, A4[1] - 17 * mm)
-                self.setFont(self._font, 9)
-                self.drawRightString(
-                    A4[0] - 18 * mm, 11 * mm, f"Page {self._pageNumber} of {count}"
-                )
-            super().showPage()
-        super().save()

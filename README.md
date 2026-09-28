@@ -385,7 +385,13 @@ For production or staging, add the exact frontend origin to `ALLOWED_ORIGINS`.
   the requested output type.
   A source export uses the **full extracted text**, not the shortened chat preview,
   and does not require AI. The original file's layout/images are not reproduced.
-  The current PDF font supports Windows-1252 text. If the text contains unsupported
+  Newly generated PDFs use the approved A4 navy-and-gold design: a dated cover with
+  the document's title, navy section bands, 10-point body text, alternating table rows,
+  Active/Inactive badges, repeated table headers, and Page X of Y footers. This applies
+  to AI-generated reports/plans, text exports, Markdown tables, and price-wise menus.
+  Wide tables use readable portrait panels with the first column repeated. Office-to-PDF
+  conversions preserve the source layout instead of applying a new design.
+  The embedded PDF font supports Windows-1252 text and the rupee sign. If the text contains unsupported
   characters (for example Tamil, Chinese, or emoji), export as Word (.docx) instead;
   PDF creation reports a clear error rather than silently replacing text with boxes.
 - Backend AI document operations have a total 45-second
