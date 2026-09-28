@@ -111,6 +111,11 @@ def test_factual_questions_automatically_require_lookup(question):
         "Who are you?",
         "Can you create images?",
         "How about you now?",
+        "How's it going?",
+        "What are you doing today?",
+        "Are you doing well?",
+        "Have you eaten yet?",
+        "I'm good today how are you?",
     ],
 )
 def test_local_work_and_conversation_do_not_trigger_search(message):
