@@ -52,6 +52,32 @@ Never put the key in Angular environment files or source control.
 The provider's hosted API terms, quotas and content restrictions apply.
 API reference: https://docs.api.nvidia.com/nim/reference/black-forest-labs-flux_2-klein-4b-infer
 
+## People, comparisons and follow-up questions
+
+Requests for a CM or other office-holder are resolved using current source evidence.
+By default, the app returns that source and explains the portrait limitation without generating
+an inaccurate face. Explicit requests for an artistic illustration, cartoon, painting or sketch
+can still generate an image, labeled with the intended subject and an unverified likeness.
+This hosted integration cannot use an uploaded portrait as a generation reference, so it does
+not promise accurate real-person likenesses. The provider's preview editing API only accepts
+its predefined example images.
+
+Generated images remain available as visual evidence after reload, alongside uploaded images.
+"Who is he?" about a generated image uses the saved request and source, not a face identification
+or a generic web search. Legacy images without a saved subject report the original request
+without inventing a name. Unrelated conversation clears implicit references; an explicit
+"the generated image" reference can select it again. Following a multi-image upload, an
+ambiguous identity question asks which image the user means.
+
+Uploaded comparisons receive recent conversation and relevant generation provenance. Exact
+file copies can be associated with their saved generation request; this is file comparison,
+not facial recognition. The response separates intended subject, visible differences, and
+the generator's limitation. It must not invent captions, identify people from faces or decide
+whether two photographs show the same person. Only the user's owned session is consulted.
+Generated-image comparisons first inspect every supplied image, then use the text model to
+explain those observations alongside the saved intended subject. This second step does not
+search the web, has a 45-second deadline, and retains the visual observations if unavailable.
+
 NVIDIA's hosted access is a trial service, not a promise of unlimited free production use.
 Google's Gemini 3 Pro Image API has no free tier; switching to it requires a separate billed
 Google API account and integration. It is not enabled by this fix. Free model weights also

@@ -3,6 +3,7 @@ import base64
 import pytest
 
 from app.config import settings
+from app.schemas.chat import ChatHistoryMessage
 from app.schemas.vision_result import VisionResult
 from app.services.chat_vision_service import ChatVisionService
 from app.services.image_parser_service import VisionModelUnavailableError
@@ -62,6 +63,83 @@ def test_describe_returns_natural_language_image_description(monkeypatch):
     assert result == "I can see a bicycle (two wheels beside a tree)."
     assert provider.calls[0]["user_prompt"] == "Please describe this image."
     assert provider.calls[0]["encoded_image"] == base64.b64encode(b"image-bytes").decode("ascii")
+
+
+def test_generated_comparison_combines_visual_evidence_and_saved_intent_without_web(monkeypatch):
+    from app.services.chat_vision_service import _ImageComparisonChatService
+
+    evidence = "Image 1: glasses, pink shirt. Image 2: dark jacket, white shirt."
+    install_provider(monkeypatch, vision_result(answer=evidence))
+    history = [
+        ChatHistoryMessage(
+            role="assistant",
+            content="Saved image-generation provenance: intended subject Example Minister, unverified likeness.",
+        )
+    ]
+    calls = []
+
+    async def complete(self, message, conversation, references):
+        assert self._maybe_web_search(message, force=True, history=conversation) is None
+        calls.append((message, conversation, references))
+        yield "## Intended subject\nThe request named Example Minister.\n"
+        yield "The two images depict different individuals. "
+        yield "## Visible differences\nImage 1 has glasses. Image 2 has a dark jacket."
+
+    monkeypatch.setattr(_ImageComparisonChatService, "stream_chat", complete)
+    answer = ChatVisionService().describe(
+        b"generated", "Compare both images", history, additional_images=[b"reference"]
+    )
+    assert "Example Minister" in answer and "Visible differences" in answer
+    assert "different individuals" not in answer
+    assert calls[0][1] == history
+    assert evidence in calls[0][2][0].content
+
+
+def test_uploaded_face_identity_question_is_answered_without_face_recognition(monkeypatch):
+    provider = install_provider(monkeypatch, vision_result(answer="Should not run"))
+    answer = ChatVisionService().describe(b"portrait", "who is he?")
+    assert "can't identify a person from their face" in answer
+    assert not provider.calls
+
+
+def test_comparison_drops_unsupported_identity_claim_but_keeps_visible_features(monkeypatch):
+    install_provider(
+        monkeypatch,
+        vision_result(
+            answer="Image 1 wears glasses. These are different people. Image 2 wears a dark jacket."
+        ),
+    )
+    answer = ChatVisionService().describe(
+        b"first", "Compare these images", additional_images=[b"second"]
+    )
+    assert "different people" not in answer
+    assert "Image 1 wears glasses." in answer and "Image 2 wears a dark jacket." in answer
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "timeout"])
+def test_comparison_keeps_visual_evidence_when_explanation_fails(monkeypatch, failure):
+    from app.services.chat_service import ChatModelUnavailableError
+
+    evidence = "Image 1 has glasses. Image 2 has a dark jacket."
+    install_provider(monkeypatch, vision_result(answer=evidence))
+    history = [
+        ChatHistoryMessage(
+            role="assistant", content="Saved image-generation provenance: earlier request"
+        )
+    ]
+
+    async def unavailable(*args):
+        raise (
+            TimeoutError() if failure == "timeout" else ChatModelUnavailableError("private detail")
+        )
+
+    monkeypatch.setattr(ChatVisionService, "_complete_comparison", unavailable)
+    answer = ChatVisionService().describe(
+        b"one", "Compare both images", history, additional_images=[b"two"]
+    )
+    assert evidence in answer
+    assert "temporarily unavailable" in answer
+    assert "private detail" not in answer
 
 
 def test_describe_passes_accompanying_user_question(monkeypatch):

@@ -219,7 +219,17 @@ class ChatRepository:
         db: Session,
         session_id: int,
     ) -> list[tuple[ChatMessageRecord, str]]:
-        """Return every persisted image and its immediate assistant response."""
+        """Return uploaded/generated visual evidence without modifying persisted records."""
+        generated = {
+            item.message_id: item
+            for item in db.query(ChatDocumentAttachment)
+            .filter(
+                ChatDocumentAttachment.session_id == session_id,
+                ChatDocumentAttachment.kind == "generated",
+                ChatDocumentAttachment.content_type.like("image/%"),
+            )
+            .all()
+        }
         messages = (
             db.query(ChatMessageRecord)
             .filter(ChatMessageRecord.session_id == session_id)
@@ -228,6 +238,24 @@ class ChatRepository:
         )
         turns: list[tuple[ChatMessageRecord, str]] = []
         for index, message in enumerate(messages):
+            attachment = generated.get(message.id)
+            if attachment is not None:
+                # Detached evidence object: do not assign image_data on the persisted
+                # bot record (that would duplicate the generated image in history).
+                original = next(
+                    (item.content for item in reversed(messages[:index]) if item.sender == "user"),
+                    message.content,
+                )
+                evidence = ChatMessageRecord(
+                    id=message.id,
+                    session_id=session_id,
+                    sender="bot",
+                    content=original,
+                    image_data=attachment.file_data,
+                    image_content_type=attachment.content_type,
+                )
+                turns.append((evidence, str(message.content)))
+                continue
             if message.image_data is None or message.image_content_type is None:
                 continue
             response = ""

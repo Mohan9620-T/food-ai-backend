@@ -46,7 +46,11 @@ from app.services.chat_vision_service import ChatVisionService
 from app.services.document import semantic_retrieval
 from app.services.document.document_references import matches_document_topic, references_document
 from app.services.document.exceptions import InvalidDocumentError
-from app.services.generated_image_context import generated_image_follow_up
+from app.services.generated_image_context import (
+    generated_image_analysis_context,
+    generated_image_follow_up,
+    is_image_identity_follow_up,
+)
 from app.services.image_parser_service import VisionModelUnavailableError
 from app.services.image_validation import InvalidImageError, validate_image_content
 from app.services.spreadsheet.workbook_lookup_service import prepare_workbook_lookup
@@ -83,6 +87,11 @@ IMAGE_REFERENCE_ORDINALS = {
     "5th": 4,
 }
 IMAGE_MATCH_STOP_WORDS = {
+    "compare",
+    "compared",
+    "comparison",
+    "difference",
+    "differences",
     "about",
     "also",
     "and",
@@ -261,6 +270,17 @@ def _select_referenced_image(
         return None
 
     normalized = question.lower()
+    if (
+        image_turns[-1][0].additional_images
+        and re.search(r"\b(?:compare|comparison|differences?)\b", normalized)
+        and re.search(r"\b(?:images?|pictures?|photos?|these|both|them)\b", normalized)
+    ):
+        return image_turns[-1][0]
+    if re.search(
+        r"\b(?:generated|created|drawn)\s+(?:image|picture|photo|portrait)\b|\b(?:image|picture|photo)\s+(?:you\s+)?(?:generated|created|drew)\b",
+        normalized,
+    ):
+        return next((item for item, _ in reversed(image_turns) if item.sender == "bot"), None)
     for label, index in IMAGE_REFERENCE_ORDINALS.items():
         if re.search(
             rf"\b{re.escape(label)}\s+(?:uploaded\s+)?(?:image|picture|photo)\b", normalized
@@ -305,12 +325,15 @@ def _select_referenced_image(
         and history[-1].role == "assistant"
         and history[-1].content == latest_answer
     )
-    if recent_image and re.fullmatch(
-        r"\s*(?:(?:can|could|would) you )?(?:please )?"
-        r"(?:(?:identify|describe|explain|analy[sz]e|compare) (?:this|that|it|these|those|them|both)|"
-        r"(?:what is|what's) (?:this|that|it)|"
-        r"(?:tell me|show me) more(?: about (?:this|that|it))?)\s*[.!?]*\s*",
-        normalized,
+    if recent_image and (
+        is_image_identity_follow_up(question)
+        or re.fullmatch(
+            r"\s*(?:(?:can|could|would) you )?(?:please )?"
+            r"(?:(?:identify|describe|explain|analy[sz]e|compare) (?:this|that|it|these|those|them|both)|"
+            r"(?:what is|what's) (?:this|that|it)|"
+            r"(?:tell me|show me) more(?: about (?:this|that|it))?)\s*[.!?]*\s*",
+            normalized,
+        )
     ):
         return latest_image
     return None
@@ -523,14 +546,38 @@ def chat(
 
     try:
         image_answer = generated_image_follow_up(db, session.id, request.message)
-        web_request = request.web_search or service.requests_web(request.message, history=history)
+        referenced_image = (
+            None
+            if request.web_search or image_answer
+            else _select_referenced_image(
+                request.message, repository.get_image_turns(db, session.id), history
+            )
+        )
+        web_request = (
+            not image_answer
+            and referenced_image is None
+            and (request.web_search or service.requests_web(request.message, history=history))
+        )
         lookup = (
             None
-            if web_request or image_answer
+            if web_request or image_answer or referenced_image is not None
             else prepare_workbook_lookup(db, session.id, request.message)
         )
         if image_answer:
             answer = image_answer
+        elif referenced_image is not None:
+            image_bytes = cast(bytes, referenced_image.image_data)
+            additional = [item.image_data for item in referenced_image.additional_images]
+            vision_history = [
+                *history,
+                *generated_image_analysis_context(db, session.id, [image_bytes, *additional]),
+            ]
+            answer = vision_service.describe(
+                image_bytes,
+                request.message,
+                vision_history,
+                **({"additional_images": additional} if additional else {}),
+            )
         elif lookup is not None:
             answer = lookup.answer()
         else:
@@ -549,7 +596,7 @@ def chat(
             )
     except InvalidDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    except ChatModelUnavailableError as error:
+    except (ChatModelUnavailableError, VisionModelUnavailableError) as error:
         logger.warning(
             "chat.text_model_unavailable",
             extra={"user_id": user_id, "session_id": session.id},
@@ -635,14 +682,13 @@ async def chat_vision(
             persisted_user_message,
         )
         try:
-            plan_history = (
-                _get_persisted_history(db, user_id, session.id)
-                if ChatVisionService._requests_plan(message_text)
-                else []
+            vision_history = _get_persisted_history(db, user_id, session.id)
+            vision_history.extend(
+                generated_image_analysis_context(db, session.id, [data for data, _ in validated])
             )
             options: _VisionOptions = {}
-            if plan_history:
-                options["conversation_history"] = plan_history
+            if vision_history:
+                options["conversation_history"] = vision_history
             if len(validated) > 1:
                 options["additional_images"] = [data for data, _ in validated[1:]]
             answer = await asyncio.to_thread(
@@ -709,10 +755,15 @@ async def stream_chat(
         else _select_referenced_image(payload.message, image_turns, history)
     )
     try:
-        web_request = payload.web_search or (
-            referenced_image is None and service.requests_web(payload.message, history=history)
+        web_request = not image_answer and (
+            payload.web_search
+            or (referenced_image is None and service.requests_web(payload.message, history=history))
         )
-        lookup = None if web_request else prepare_workbook_lookup(db, session.id, payload.message)
+        lookup = (
+            None
+            if web_request or image_answer or referenced_image is not None
+            else prepare_workbook_lookup(db, session.id, payload.message)
+        )
     except InvalidDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     document_references = (
@@ -733,6 +784,17 @@ async def stream_chat(
     # The selected image is evidence, but the current conversation supplies intent
     # and emotional context even if the latest message is very short.
     vision_history.extend(item for item in history if item not in vision_history)
+    if referenced_image is not None:
+        vision_history.extend(
+            generated_image_analysis_context(
+                db,
+                session.id,
+                [
+                    cast(bytes, referenced_image.image_data),
+                    *(item.image_data for item in referenced_image.additional_images),
+                ],
+            )
+        )
     repository.add_message(db, session.id, "user", payload.message)
     invalidate_cached_history(user_id, session.id)
     logger.info("chat.stream_started", extra={"user_id": user_id, "session_id": session.id})

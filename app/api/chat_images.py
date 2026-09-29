@@ -1,5 +1,6 @@
 """Authenticated image creation with the same private attachment/history storage as documents."""
 
+import re
 from typing import Literal, cast
 from urllib.parse import quote
 from uuid import uuid4
@@ -60,6 +61,28 @@ async def generate_image(
     try:
         if not help_message:
             subject = await resolve_image_subject(prompt)
+        if subject:
+            style_request = re.sub(
+                r"\b(?:not|no|without)\s+(?:an?\s+)?(?:illustration|cartoon|caricature|painting|sketch)\b",
+                "",
+                prompt,
+                flags=re.I,
+            )
+            if not re.search(
+                r"\b(?:illustration|cartoon|caricature|painting|sketch|stylized|artistic)\b",
+                style_request,
+                re.I,
+            ):
+                source_url = quote(subject["subject_source_url"], safe="/:?&=%#@!$+,-._~")
+                help_message = (
+                    f"The current source identifies **{subject['subject']}** for your request: "
+                    f"[view the source](<{source_url}>). "
+                    "This image provider cannot reliably reproduce a real person's likeness or use "
+                    "an uploaded reference portrait. I haven't generated a portrait because it could "
+                    "show an inaccurate face. Use the source to check their actual appearance. "
+                    "If you want artwork, ask for an artistic illustration; it will be labeled as "
+                    "an AI interpretation with an unverified likeness."
+                )
         image_prompt = (
             f"Subject: {subject['subject']}. Depict this named person. Original request: {prompt}"
             if subject
@@ -79,7 +102,7 @@ async def generate_image(
         invalidate_cached_history(user_id, session_id)
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     answer = help_message or "Here is your generated image. You can view or download it below."
-    if subject:
+    if subject and image is not None:
         source_url = quote(subject["subject_source_url"], safe="/:?&=%#@!$+,-._~")
         answer = (
             f"AI-generated illustration intended to depict {subject['subject']}, "

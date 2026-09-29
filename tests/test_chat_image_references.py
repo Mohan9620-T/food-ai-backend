@@ -52,3 +52,27 @@ def test_empty_question_does_not_select_historical_image():
     image = ChatMessageRecord(sender="user", content="Earlier upload")
 
     assert _select_referenced_image("", [(image, "A scene")]) is None
+
+
+def test_explicit_generated_reference_does_not_choose_a_newer_upload():
+    generated = ChatMessageRecord(sender="bot", content="Draw a portrait")
+    uploaded = ChatMessageRecord(sender="user", content="Another photo")
+    turns = [(generated, "A generated image"), (uploaded, "An uploaded image")]
+    assert _select_referenced_image("Describe the generated image", turns) is generated
+
+
+def test_compare_current_pair_does_not_drop_the_reference_image():
+    from app.models.chat import ChatImageAttachment
+
+    generated = ChatMessageRecord(sender="bot", content="Draw a portrait")
+    comparison = ChatMessageRecord(
+        sender="user",
+        content="Compare both",
+        additional_images=[ChatImageAttachment(image_data=b"reference", content_type="image/png")],
+    )
+    turns = [(generated, "A generated portrait"), (comparison, "Both compared")]
+    assert (
+        _select_referenced_image("Compare the generated image and reference image", turns)
+        is comparison
+    )
+    assert _select_referenced_image("Compare BMW and Audi prices", turns) is None
