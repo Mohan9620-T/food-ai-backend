@@ -202,6 +202,7 @@ NVIDIA_VISION_MAX_TOKENS = int(os.getenv("NVIDIA_VISION_MAX_TOKENS", "2048"))
 
 # Text-to-image uses a separate endpoint; the chat/vision models cannot render images.
 ENABLE_IMAGE_GENERATION = os.getenv("ENABLE_IMAGE_GENERATION", "true").lower() == "true"
+NVIDIA_IMAGE_MODEL = os.getenv("NVIDIA_IMAGE_MODEL", "black-forest-labs/flux.1-dev").strip()
 NVIDIA_IMAGE_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_IMAGE_TIMEOUT_SECONDS", "120"))
 CHAT_VISION_OCR_ENABLED = os.getenv("CHAT_VISION_OCR_ENABLED", "false").lower() == "true"
 

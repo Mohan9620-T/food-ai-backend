@@ -1,7 +1,7 @@
 """Authenticated image creation with the same private attachment/history storage as documents."""
 
 import re
-from typing import Literal, cast
+from typing import Literal, TypedDict, cast
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -16,8 +16,9 @@ from app.rate_limit import limiter
 from app.repositories.chat_repository import ChatRepository
 from app.schemas.chat import ChatDocumentAttachmentOut, ChatDocumentResponse
 from app.services.image_generation_service import (
-    IMAGE_MODEL,
     MAX_IMAGE_REQUEST_CHARS,
+    MAX_IMAGE_SEED,
+    PROMPT_PREPARATION_VERSION,
     ImageGenerationError,
     ImageGenerationService,
     image_request_help,
@@ -34,6 +35,12 @@ class ImageGenerationRequest(BaseModel):
     message: str = Field(min_length=1, max_length=MAX_IMAGE_REQUEST_CHARS, pattern=r"\S")
     session_id: int | None = Field(default=None, gt=0)
     aspect_ratio: Literal["auto", "1:1", "9:16", "16:9"] = "auto"
+    seed: int | None = Field(default=None, ge=1, le=MAX_IMAGE_SEED, strict=True)
+
+
+class GenerationOptions(TypedDict, total=False):
+    subject_name: str
+    seed: int
 
 
 @router.post("", response_model=ChatDocumentResponse)
@@ -88,13 +95,18 @@ async def generate_image(
             if subject
             else prompt
         )
+        options: GenerationOptions = {}
+        if subject:
+            options["subject_name"] = subject["subject"]
+        if payload.seed is not None:
+            options["seed"] = payload.seed
         image = (
             None
             if help_message
             else await service.generate(
                 image_prompt,
                 payload.aspect_ratio,
-                **({"subject_name": subject["subject"]} if subject else {}),
+                **options,
             )
         )
     except ImageGenerationError as error:
@@ -124,10 +136,14 @@ async def generate_image(
                 kind="generated",
                 generation_metadata={
                     "provider": "nvidia",
-                    "model": IMAGE_MODEL,
+                    "model": image.model,
+                    "seed": image.seed,
+                    "steps": image.steps,
+                    "guidance": image.guidance,
+                    "preparation_version": PROMPT_PREPARATION_VERSION,
                     "prompt": prompt,
                     "provider_prompt": image.provider_prompt,
-                    "prompt_compacted": image.provider_prompt != prompt,
+                    "prompt_compacted": len(image.provider_prompt) < len(image_prompt),
                     "aspect_ratio": image.aspect_ratio,
                     "width": image.width,
                     "height": image.height,
