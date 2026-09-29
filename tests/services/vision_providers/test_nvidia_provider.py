@@ -9,7 +9,61 @@ from app.services.image_parser_service import VisionModelUnavailableError
 from app.services.vision_providers.nvidia_provider import (
     NvidiaConfigurationError,
     NvidiaVisionProvider,
+    VisionRequestDeclinedError,
 )
+
+
+@pytest.mark.parametrize(
+    "content,finish_reason", [(None, "stop"), ("{", "length"), ("not JSON", "stop")]
+)
+def test_incomplete_response_retries_same_evidence_within_budget(
+    monkeypatch, content, finish_reason
+):
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    first = response_with(content)
+    first.json.return_value["choices"][0]["finish_reason"] = finish_reason
+    post = Mock(side_effect=[first, response_with(valid_result_json())])
+    monkeypatch.setattr("app.services.vision_providers.nvidia_provider._HTTP_SESSION.post", post)
+    result = NvidiaVisionProvider().infer(
+        "system",
+        "compare images",
+        "first",
+        additional_images=("second",),
+        max_tokens=2048,
+        timeout_seconds=12,
+    )
+    assert result.answer == "The image contains idli."
+    assert post.call_count == 2
+    original, retry = [call.kwargs for call in post.call_args_list]
+    assert original["json"]["messages"] == retry["json"]["messages"]
+    assert retry["json"]["max_tokens"] == 4096
+    assert 0 < retry["timeout"][1] <= 12
+
+
+@pytest.mark.parametrize("reason,refusal", [("content_filter", None), ("stop", "Declined")])
+def test_provider_refusal_is_not_retried(monkeypatch, reason, refusal):
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    response = response_with(None)
+    response.json.return_value["choices"][0].update(
+        {"finish_reason": reason, "message": {"refusal": refusal, "content": None}}
+    )
+    post = Mock(return_value=response)
+    monkeypatch.setattr("app.services.vision_providers.nvidia_provider._HTTP_SESSION.post", post)
+    with pytest.raises(VisionRequestDeclinedError, match="declined"):
+        NvidiaVisionProvider().infer("system", "question", "image")
+    assert post.call_count == 1
+
+
+def test_exhausted_deadline_does_not_start_recovery(monkeypatch):
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    post = Mock(return_value=response_with("{"))
+    monkeypatch.setattr("app.services.vision_providers.nvidia_provider._HTTP_SESSION.post", post)
+    monkeypatch.setattr(
+        "app.services.vision_providers.nvidia_provider.time.monotonic", Mock(side_effect=[0, 0, 13])
+    )
+    with pytest.raises(VisionModelUnavailableError, match="timed out"):
+        NvidiaVisionProvider().infer("system", "question", "image", timeout_seconds=12)
+    assert post.call_count == 1
 
 
 def valid_result_json() -> str:
@@ -79,6 +133,20 @@ def test_infer_rejects_invalid_schema(monkeypatch):
 
     with pytest.raises(ValueError, match="NVIDIA vision response was not valid JSON"):
         NvidiaVisionProvider().infer("system", "user", "encoded-image")
+
+
+@pytest.mark.parametrize(
+    "payload", [{"choices": [None]}, {"choices": [{"message": None}]}, {"choices": []}]
+)
+def test_missing_message_is_a_bounded_parse_failure(monkeypatch, payload):
+    monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    response = Mock()
+    response.json.return_value = payload
+    post = Mock(return_value=response)
+    monkeypatch.setattr("app.services.vision_providers.nvidia_provider._HTTP_SESSION.post", post)
+    with pytest.raises(ValueError, match="not valid JSON"):
+        NvidiaVisionProvider().infer("system", "question", "image")
+    assert post.call_count == 2
 
 
 def test_infer_translates_timeout(monkeypatch):

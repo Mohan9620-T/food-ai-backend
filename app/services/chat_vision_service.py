@@ -12,6 +12,7 @@ from app.schemas.chat import ChatHistoryMessage
 from app.schemas.vision_result import VisionResult
 from app.services.chat_service import ChatModelUnavailableError, ChatService
 from app.services.conversation_guidance import CONVERSATION_GUIDANCE
+from app.services.image_edit_intent import image_edit_response
 from app.services.vision_image_preprocessor import prepare_vision_image
 from app.services.vision_providers import get_vision_provider
 from app.services.vision_runtime import vision_inference_slot
@@ -169,6 +170,8 @@ when the user requests JSON, code, plain text, a specific format, or only the di
     ) -> str:
         from app.services.generated_image_context import is_image_identity_follow_up
 
+        if edit_answer := image_edit_response(user_message or ""):
+            return edit_answer
         if is_image_identity_follow_up(user_message or ""):
             return (
                 "I can't identify a person from their face. If you provide their name or a caption, "

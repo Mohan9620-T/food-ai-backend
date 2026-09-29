@@ -42,6 +42,10 @@ class NvidiaConfigurationError(VisionModelUnavailableError):
     """Raised when NVIDIA is selected but its API key is not set."""
 
 
+class VisionRequestDeclinedError(VisionModelUnavailableError):
+    """A provider refusal is final, not a reason to switch providers."""
+
+
 class NvidiaVisionProvider(VisionProvider):
     """
     Hosted inference via NVIDIA's free NIM API catalog (build.nvidia.com).
@@ -70,6 +74,49 @@ class NvidiaVisionProvider(VisionProvider):
             f"{json.dumps(VisionResult.model_json_schema())}"
         )
 
+        budget = (
+            min(timeout_seconds, settings.NVIDIA_VISION_TIMEOUT_SECONDS)
+            if timeout_seconds is not None
+            else settings.NVIDIA_VISION_TIMEOUT_SECONDS
+        )
+        started = time.monotonic()
+        token_budget = max_tokens or settings.NVIDIA_VISION_MAX_TOKENS
+        for attempt in range(2):
+            remaining = budget if attempt == 0 else budget - (time.monotonic() - started)
+            if remaining <= 0:
+                raise VisionModelUnavailableError(
+                    "Image analysis timed out. Please retry your message."
+                )
+            try:
+                return self._infer_once(
+                    system_prompt + schema_instructions,
+                    user_prompt,
+                    (encoded_image, *additional_images),
+                    token_budget,
+                    remaining,
+                )
+            except VisionRequestDeclinedError:
+                raise
+            except ValueError:
+                logger.warning(
+                    "chat.vision_response_invalid",
+                    extra={"provider": "nvidia", "attempt": attempt + 1},
+                )
+                if attempt:
+                    raise
+                # Retry the same evidence before showing anything, with enough room
+                # to finish JSON. Never ask another provider to bypass a refusal.
+                token_budget = min(8192, max(4096, token_budget * 2))
+        raise ValueError("NVIDIA vision response was not valid JSON")
+
+    def _infer_once(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        images: tuple[str, ...],
+        max_tokens: int,
+        timeout_seconds: float,
+    ) -> VisionResult:
         try:
             response = _post_with_retry(
                 f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
@@ -81,7 +128,7 @@ class NvidiaVisionProvider(VisionProvider):
                     "model": settings.NVIDIA_CHAT_VISION_MODEL,
                     "stream": False,
                     "temperature": 0,
-                    "max_tokens": max_tokens or settings.NVIDIA_VISION_MAX_TOKENS,
+                    "max_tokens": max_tokens,
                     **(
                         {"chat_template_kwargs": {"enable_thinking": False}}
                         if "nemotron-3-nano-omni" in settings.NVIDIA_CHAT_VISION_MODEL
@@ -90,7 +137,7 @@ class NvidiaVisionProvider(VisionProvider):
                     "messages": [
                         {
                             "role": "system",
-                            "content": system_prompt + schema_instructions,
+                            "content": system_prompt,
                         },
                         {
                             "role": "user",
@@ -101,7 +148,7 @@ class NvidiaVisionProvider(VisionProvider):
                                         "type": "image_url",
                                         "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
                                     }
-                                    for encoded in (encoded_image, *additional_images)
+                                    for encoded in images
                                 ],
                             ],
                         },
@@ -109,9 +156,7 @@ class NvidiaVisionProvider(VisionProvider):
                 },
                 timeout=(
                     settings.NVIDIA_VISION_CONNECT_TIMEOUT_SECONDS,
-                    min(timeout_seconds, settings.NVIDIA_VISION_TIMEOUT_SECONDS)
-                    if timeout_seconds is not None
-                    else settings.NVIDIA_VISION_TIMEOUT_SECONDS,
+                    timeout_seconds,
                 ),
             )
             response.raise_for_status()
@@ -123,7 +168,16 @@ class NvidiaVisionProvider(VisionProvider):
                 "again."
             ) from error
         except requests.RequestException as error:
-            logger.warning("chat.vision_model_unavailable", extra={"provider": "nvidia"})
+            logger.warning(
+                "chat.vision_model_unavailable",
+                extra={
+                    "provider": "nvidia",
+                    "error_type": type(error).__name__,
+                    "status_code": error.response.status_code
+                    if error.response is not None
+                    else None,
+                },
+            )
             raise VisionModelUnavailableError(
                 "NVIDIA vision API unavailable: configured model "
                 f"'{settings.NVIDIA_CHAT_VISION_MODEL}'. Confirm NVIDIA_API_KEY "
@@ -131,7 +185,23 @@ class NvidiaVisionProvider(VisionProvider):
             ) from error
 
         try:
-            content = response.json()["choices"][0]["message"]["content"]
+            choice = response.json()["choices"][0]
+            if not isinstance(choice, dict):
+                raise ValueError("Missing vision choice")
+            message = choice.get("message")
+            if choice.get("finish_reason") == "content_filter" or (
+                isinstance(message, dict) and message.get("refusal")
+            ):
+                raise VisionRequestDeclinedError(
+                    "The image service declined this request. Please try a different request."
+                )
+            if not isinstance(message, dict):
+                raise ValueError("Missing vision message")
+            if choice.get("finish_reason") == "length":
+                raise ValueError("Incomplete vision response")
+            content = message["content"]
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("Missing vision response")
             content = _strip_markdown_fence(content)
             return VisionResult.model_validate_json(content)
         except (KeyError, IndexError, TypeError, ValueError, ValidationError) as error:

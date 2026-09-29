@@ -84,7 +84,25 @@ Google API account and integration. It is not enabled by this fix. Free model we
 require GPU hosting, which has its own operating cost. Pricing reference:
 https://ai.google.dev/gemini-api/docs/pricing#gemini-3-pro-image
 
-## Validation
+## Image follow-up reliability
+
+Editing commands about an attached/referenced image (for example, "enhance the cinematic
+atmosphere" or "make it brighter") receive an explanation of the text-only generator's
+capability, without calling image analysis or claiming the file was edited. A new generated
+version cannot guarantee the original face, pose or composition.
+
+NVIDIA image analysis retries incomplete/malformed output once using the same images and
+remaining request deadline, increasing the output budget up to 8192 tokens. Provider refusals
+are not retried or passed to another provider. Production chat and vision use Ollama fallback
+only when `ENABLE_OLLAMA_FALLBACK=true` is explicitly set for a provisioned model server;
+the default remains enabled in development. This is separate from readiness configuration.
+
+Failure responses retain partial output and offer a retry without exposing model setup
+instructions. The UI also normalizes those older failure notices when restoring history.
+Unexpected stream failures send a terminal error event so the composer does not stay busy.
+Provider availability still depends on network access, capacity and account quota.
+
+## Regression checks
 
 `tests/test_image_generation.py` covers provider responses, validation, failures, history,
 authentication and cross-user download isolation. Frontend tests cover intent routing,

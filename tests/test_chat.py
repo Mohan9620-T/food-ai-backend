@@ -121,7 +121,10 @@ def test_chat_vision_returns_503_when_model_is_unavailable(client, monkeypatch, 
         files={"image": ("sample.png", valid_png_bytes, "image/png")},
     )
     assert response.status_code == 503
-    assert response.json()["detail"] == "Chat vision model unavailable. Pull the model."
+    assert (
+        response.json()["detail"]
+        == "Image analysis is temporarily unavailable. Please retry your message."
+    )
 
 
 def test_chat_vision_rejects_oversized_image(client):
@@ -1269,6 +1272,7 @@ def test_nvidia_chat_success_does_not_call_ollama(monkeypatch):
 
 
 def test_nvidia_chat_failure_calls_ollama_once_with_same_messages(monkeypatch):
+    monkeypatch.setattr(settings, "ENABLE_OLLAMA_FALLBACK", True)
     monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
     calls = []
@@ -1295,6 +1299,7 @@ def test_nvidia_chat_failure_calls_ollama_once_with_same_messages(monkeypatch):
 
 
 def test_malformed_nvidia_chat_200_response_calls_ollama_once(monkeypatch):
+    monkeypatch.setattr(settings, "ENABLE_OLLAMA_FALLBACK", True)
     monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
     calls = []
@@ -1350,6 +1355,7 @@ def test_nvidia_language_correction_stays_on_nvidia(monkeypatch):
 
 
 def test_stream_falls_back_before_nvidia_content_is_exposed(monkeypatch):
+    monkeypatch.setattr(settings, "ENABLE_OLLAMA_FALLBACK", True)
     monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
     calls = {"nvidia": 0, "ollama": 0}
 
@@ -1400,6 +1406,7 @@ def test_stream_does_not_fallback_after_nvidia_content_is_exposed(monkeypatch):
 
 
 def test_nvidia_sse_error_event_falls_back_before_content_is_exposed(monkeypatch):
+    monkeypatch.setattr(settings, "ENABLE_OLLAMA_FALLBACK", True)
     monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
     original_client = httpx.AsyncClient
@@ -1464,6 +1471,7 @@ def test_complete_chat_uses_nvidia_non_streaming_response(monkeypatch):
 
 
 def test_complete_chat_falls_back_once_and_uses_document_output_budget(monkeypatch):
+    monkeypatch.setattr(settings, "ENABLE_OLLAMA_FALLBACK", True)
     monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
     captured = {}
@@ -1488,6 +1496,7 @@ def test_complete_chat_falls_back_once_and_uses_document_output_budget(monkeypat
 
 @pytest.mark.parametrize("statuses", [[503, 200], [503, 503, 200], [503, 503, 503], [401]])
 def test_document_completion_retries_transient_gateway_failure(monkeypatch, statuses):
+    monkeypatch.setattr(settings, "ENABLE_OLLAMA_FALLBACK", True)
     monkeypatch.setattr(settings, "APP_ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
     original_client = httpx.AsyncClient

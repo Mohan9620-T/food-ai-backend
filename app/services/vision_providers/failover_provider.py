@@ -4,8 +4,12 @@ from typing import TypedDict
 
 from app.schemas.vision_result import VisionResult
 from app.services.image_parser_service import VisionModelUnavailableError
+from app.services.provider_policy import ollama_fallback_enabled
 from app.services.vision_providers.base import VisionProvider
-from app.services.vision_providers.nvidia_provider import NvidiaVisionProvider
+from app.services.vision_providers.nvidia_provider import (
+    NvidiaVisionProvider,
+    VisionRequestDeclinedError,
+)
 from app.services.vision_providers.ollama_provider import OllamaVisionProvider
 
 logger = logging.getLogger(__name__)
@@ -18,7 +22,7 @@ class _InferenceOptions(TypedDict, total=False):
 
 
 class FailoverVisionProvider(VisionProvider):
-    """Try NVIDIA once, then retry the same logical request once with Ollama."""
+    """Use NVIDIA, with optional fallback to a provisioned Ollama service."""
 
     def __init__(
         self,
@@ -48,7 +52,14 @@ class FailoverVisionProvider(VisionProvider):
             options["timeout_seconds"] = timeout_seconds
         try:
             return self.nvidia.infer(system_prompt, user_prompt, encoded_image, **options)
-        except (VisionModelUnavailableError, ValueError):
+        except VisionRequestDeclinedError:
+            # A declined request must never be retried through another provider.
+            raise
+        except (VisionModelUnavailableError, ValueError) as error:
+            if not ollama_fallback_enabled():
+                raise VisionModelUnavailableError(
+                    "Image analysis is temporarily unavailable. Please retry your message."
+                ) from error
             logger.warning("chat.vision_nvidia_fallback_to_ollama")
             if timeout_seconds is not None:
                 remaining = timeout_seconds - (monotonic() - started)

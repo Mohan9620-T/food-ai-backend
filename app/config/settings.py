@@ -122,10 +122,17 @@ OLLAMA_VISION_MAX_DIMENSION = int(os.getenv("OLLAMA_VISION_MAX_DIMENSION", "1024
 OLLAMA_CHAT_VISION_MODEL = os.getenv("OLLAMA_CHAT_VISION_MODEL", "qwen3-vl:4b").strip()
 OLLAMA_CHAT_VISION_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_CHAT_VISION_TIMEOUT_SECONDS", "660"))
 
-# Production always uses NVIDIA first with one Ollama fallback. In development,
+# Production uses NVIDIA with Ollama fallback only when explicitly enabled. In development,
 # LLM_PROVIDER=ollama keeps inference local-only and nvidia exercises failover.
 APP_ENVIRONMENT = os.getenv("APP_ENVIRONMENT", "development").strip().lower()
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+# Unset: local fallback is enabled in development and disabled in production.
+# Set true only when a reachable Ollama server and the required models are provisioned.
+ENABLE_OLLAMA_FALLBACK = (
+    os.environ["ENABLE_OLLAMA_FALLBACK"].strip().lower() == "true"
+    if os.getenv("ENABLE_OLLAMA_FALLBACK", "").strip()
+    else None
+)
 
 NVIDIA_API_KEY = (_read_secret("NVIDIA_API_KEY", "") or "").strip()
 NVIDIA_API_BASE_URL = os.getenv(
@@ -202,9 +209,8 @@ CHAT_VISION_OCR_ENABLED = os.getenv("CHAT_VISION_OCR_ENABLED", "false").lower() 
 # /health/ready reports it and gates readiness on it. For an NVIDIA-only
 # deployment that doesn't run Ollama at all (e.g. Railway without an Ollama
 # service), set this to false: its status is still reported for visibility,
-# it just no longer gates readiness. The NVIDIA->Ollama chat/vision failover
-# code itself is unaffected either way - it simply fails cleanly per-request
-# if Ollama is unreachable.
+# it just no longer gates readiness. Fallback is controlled separately by
+# ENABLE_OLLAMA_FALLBACK and is disabled by default in production.
 OLLAMA_REQUIRED_FOR_READINESS = os.getenv("OLLAMA_REQUIRED_FOR_READINESS", "true").lower() == "true"
 USDA_API_KEY = os.getenv("USDA_API_KEY", "").strip()
 USDA_API_URL = os.getenv("USDA_API_URL", "https://api.nal.usda.gov/fdc/v1").rstrip("/")

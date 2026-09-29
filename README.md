@@ -95,7 +95,8 @@ use the documented default or disable the associated integration when empty.
 | `OLLAMA_VISION_TIMEOUT_SECONDS` | Optional | Meal-image request timeout; default `660`. |
 | `OLLAMA_VISION_MAX_DIMENSION` | Optional | Longest image edge sent to Ollama; default `1024`. Stored originals are unchanged. |
 | `OLLAMA_CHAT_VISION_MODEL` | Optional | General image-chat model; default `qwen3-vl:4b`. |
-| `APP_ENVIRONMENT` | Optional | Set to `production` to enforce NVIDIA-first, Ollama-fallback routing regardless of `LLM_PROVIDER`; default `development`. |
+| `APP_ENVIRONMENT` | Optional | Set to `production` to use NVIDIA regardless of `LLM_PROVIDER`; default `development`. |
+| `ENABLE_OLLAMA_FALLBACK` | Optional | Chat and vision fallback to Ollama. Unset: enabled in development, disabled in production. Set `true` only with a reachable Ollama server and installed models. Independent of readiness checks. |
 | `LLM_PROVIDER` | Optional | Development override: `ollama` is local-only; `nvidia` uses NVIDIA first with one Ollama fallback. |
 | `NVIDIA_API_KEY` | Required for NVIDIA | NVIDIA API credential. Never commit a real value. |
 | `NVIDIA_API_BASE_URL` | Optional | NVIDIA OpenAI-compatible API base URL. |

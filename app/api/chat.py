@@ -51,8 +51,10 @@ from app.services.generated_image_context import (
     generated_image_follow_up,
     is_image_identity_follow_up,
 )
+from app.services.image_edit_intent import image_edit_response
 from app.services.image_parser_service import VisionModelUnavailableError
 from app.services.image_validation import InvalidImageError, validate_image_content
+from app.services.response_errors import public_model_error
 from app.services.spreadsheet.workbook_lookup_service import prepare_workbook_lookup
 from app.utils.auth_dependency import get_current_user
 
@@ -327,6 +329,7 @@ def _select_referenced_image(
     )
     if recent_image and (
         is_image_identity_follow_up(question)
+        or image_edit_response(question)
         or re.fullmatch(
             r"\s*(?:(?:can|could|would) you )?(?:please )?"
             r"(?:(?:identify|describe|explain|analy[sz]e|compare) (?:this|that|it|these|those|them|both)|"
@@ -601,7 +604,7 @@ def chat(
             "chat.text_model_unavailable",
             extra={"user_id": user_id, "session_id": session.id},
         )
-        raise HTTPException(status_code=503, detail=str(error))
+        raise HTTPException(status_code=503, detail=public_model_error(error)) from error
 
     repository.add_turn(db, session.id, request.message, answer)
     invalidate_cached_history(user_id, session.id)
@@ -699,7 +702,7 @@ async def chat_vision(
                 "chat.vision_unavailable",
                 extra={"user_id": user_id, "session_id": session.id},
             )
-            raise HTTPException(status_code=503, detail=str(error))
+            raise HTTPException(status_code=503, detail=public_model_error(error)) from error
         repository.add_turn(
             db,
             session.id,
@@ -821,6 +824,24 @@ async def stream_chat(
 
     async def produce_response():
         chunks: list[str] = []
+        try:
+            await produce_answer(chunks)
+        except Exception as error:
+            # Every producer branch must terminate the stream, including an
+            # unexpected parsing/preprocessing failure before its first token.
+            logger.warning(
+                "chat.response_generation_failed",
+                extra={
+                    "user_id": user_id,
+                    "session_id": session.id,
+                    "error_type": type(error).__name__,
+                },
+            )
+            await report_interruption(
+                chunks, "The response could not be completed. Please retry your message."
+            )
+
+    async def produce_answer(chunks: list[str]):
         if image_answer:
             chunks.append(image_answer)
             await events.put({"type": "token", "content": image_answer})
@@ -852,7 +873,7 @@ async def stream_chat(
                     "chat.follow_up_vision_unavailable",
                     extra={"user_id": user_id, "session_id": session.id},
                 )
-                await report_interruption(chunks, str(error))
+                await report_interruption(chunks, public_model_error(error))
                 return
         else:
             if not await _produce_text_stream(chunks):
@@ -894,7 +915,7 @@ async def stream_chat(
                 "chat.stream_model_unavailable",
                 extra={"user_id": user_id, "session_id": session.id},
             )
-            await report_interruption(chunks, str(error))
+            await report_interruption(chunks, public_model_error(error))
             return False
         except Exception:
             logger.exception(

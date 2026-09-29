@@ -16,6 +16,7 @@ from app.services.conversation_guidance import (
     PERSONAL_CONVERSATION_PROMPT,
     is_personal_conversation,
 )
+from app.services.provider_policy import ollama_fallback_enabled
 from app.services.web_lookup import (
     CitationFilter,
     WebEvidence,
@@ -400,7 +401,8 @@ maadhiri Thanglish-la explain panren."""
             try:
                 answer = self._chat_with_continuations(body, self._chat_with_nvidia)
                 provider = "nvidia"
-            except _NvidiaFallbackError:
+            except _NvidiaFallbackError as error:
+                self._require_ollama_fallback(error)
                 logger.warning("chat.text_nvidia_fallback_to_ollama")
                 answer = self._chat_with_continuations(body, self._chat_with_ollama)
         else:
@@ -478,8 +480,8 @@ maadhiri Thanglish-la explain panren."""
         if self._use_nvidia_primary():
             try:
                 return await self._complete_with_nvidia(body)
-            except _NvidiaFallbackError:
-                pass
+            except _NvidiaFallbackError as error:
+                self._require_ollama_fallback(error)
         return await self._complete_with_ollama(body)
 
     async def complete_chat(
@@ -529,7 +531,8 @@ maadhiri Thanglish-la explain panren."""
             try:
                 answer = await self._complete_with_continuations(body, self._complete_with_nvidia)
                 provider = "nvidia"
-            except _NvidiaFallbackError:
+            except _NvidiaFallbackError as error:
+                self._require_ollama_fallback(error)
                 logger.warning("chat.text_complete_nvidia_fallback_to_ollama")
                 answer = await self._complete_with_continuations(body, self._complete_with_ollama)
         else:
@@ -642,6 +645,7 @@ maadhiri Thanglish-la explain panren."""
                     ):
                         await asyncio.sleep(self.NVIDIA_RETRY_DELAYS[attempt])
                         continue
+                    self._require_ollama_fallback(error)
                     logger.warning("chat.text_stream_nvidia_fallback_to_ollama")
                     async with aclosing(
                         self._stream_with_continuations(body, self._stream_ollama)
@@ -827,6 +831,13 @@ maadhiri Thanglish-la explain panren."""
                     raise
                 logger.warning("chat.continuation_retry", extra={"attempt": attempt + 1})
                 await asyncio.sleep(self.NVIDIA_RETRY_DELAYS[attempt])
+
+    @staticmethod
+    def _require_ollama_fallback(error: Exception) -> None:
+        if not ollama_fallback_enabled():
+            raise ChatModelUnavailableError(
+                "The response service is temporarily unavailable. Please retry your message."
+            ) from error
 
     @staticmethod
     def _use_nvidia_primary() -> bool:
