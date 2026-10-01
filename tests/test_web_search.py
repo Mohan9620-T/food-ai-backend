@@ -243,13 +243,63 @@ def test_disabled_search_does_not_call_network(monkeypatch):
 
 
 @pytest.mark.parametrize("suffix", ["", "†L1-L4"])
-def test_known_article_title_citation_becomes_an_actual_retrieved_link(suffix):
+def test_known_article_title_citation_is_reserved_for_sources_footer(suffix):
     sources = evidence([source()], "question")
     clean = CitationFilter(sources.citation_links)
     assert (
-        clean.feed("Fact【Official ") + clean.feed("office" + suffix + "】.", final=True)
-        == "Fact [Official office](<https://source.example/office>)."
+        clean.feed("Fact【Official ") + clean.feed("office" + suffix + "】.", final=True) == "Fact."
     )
+
+
+@pytest.mark.parametrize("size", [1, 3, 11, 1000])
+def test_reference_links_stay_out_of_streamed_answer_body(size):
+    text = (
+        "- First fact.\n[Official office — source.example](<https://source.example/office>)\n"
+        "- Another fact [Official office](https://source.example/office).\n"
+        "The [office holder](https://source.example/office#biography) has a public profile.\n"
+        "### Sources\n- [1](https://source.example/office)\n"
+    )
+    clean = CitationFilter(evidence([source()], "question").citation_links)
+    chunks = [clean.feed(text[i : i + size]) for i in range(0, len(text), size)]
+    chunks.append(clean.feed("", final=True))
+    assert "".join(chunks) == (
+        "- First fact.\n- Another fact.\nThe office holder has a public profile.\n"
+    )
+    assert all("https://" not in chunk and "Sources" not in chunk for chunk in chunks)
+
+
+def test_citation_filter_releases_answer_lines_before_completion():
+    clean = CitationFilter(evidence([source()], "question").citation_links)
+    assert clean.feed("The first fact.\n") == "The first fact.\n"
+    assert clean.feed("Another fact [Official") == ""
+    assert clean.feed(" office](https://source.example/office).\n") == "Another fact.\n"
+
+
+@pytest.mark.parametrize("size", [1, 1000])
+def test_citation_filter_preserves_useful_links_markdown_and_code(size):
+    text = (
+        "Use [another page](https://elsewhere.example).\n"
+        "[Download the report](https://source.example/office)\n"
+        "![An image](https://source.example/office)\n"
+        "Keep 【Tamil Nadu】, [an unfinished label and **bold text**.\n\n"
+        "`[Official office](https://source.example/office)`\n"
+        "```markdown\n### Sources\n[Official office](https://source.example/office)\n```\n"
+    )
+    clean = CitationFilter(evidence([source()], "question").citation_links)
+    answer = "".join(clean.feed(text[i : i + size]) for i in range(0, len(text), size))
+    assert answer + clean.feed("", final=True) == text
+
+
+@pytest.mark.parametrize("size", [1, 1000])
+def test_multiline_citations_and_parenthesized_source_urls(size):
+    sources = evidence([source(url="https://source.example/Office_(state)")], "question")
+    text = (
+        'Fact【{\n"id":0,"cursor":0,"loc":0\n}】.\n'
+        "Another fact [Official\noffice](https://source.example/Office_(state)).\n"
+    )
+    clean = CitationFilter(sources.citation_links)
+    answer = "".join(clean.feed(text[i : i + size]) for i in range(0, len(text), size))
+    assert answer + clean.feed("", final=True) == "Fact.\nAnother fact.\n"
 
 
 def test_automatic_lookup_does_not_ask_old_model_for_permission(monkeypatch):
@@ -531,6 +581,38 @@ def test_plain_chat_appends_real_sources_even_if_model_omits_citations(monkeypat
     answer = ChatService().chat("Who is the CM in 2026?", [], [])
     assert "### Sources" in answer and "source.example/office" in answer
     assert any("New office holder" in m["content"] for m in captured)
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_complete_answer_precedes_one_deduplicated_sources_section(monkeypatch, streaming):
+    monkeypatch.setattr(web_search_provider, "search", lambda _: [source(), source()])
+    generated = (
+        "First fact [Official office](https://source.example/office).\n"
+        "Second fact【Official office†L1-L4】.\n"
+        "Final explanation.\n\n### Sources\n"
+        "- [Official office — source.example](<https://source.example/office>)\n"
+    )
+    monkeypatch.setattr(ChatService, "_chat_with_ollama", lambda self, body: generated)
+
+    async def generate(self, body):
+        for char in generated:
+            yield char
+
+    monkeypatch.setattr(ChatService, "_stream_ollama", generate)
+
+    async def run():
+        return "".join(
+            [chunk async for chunk in ChatService().stream_chat("Who is the CM in 2026?", [], [])]
+        )
+
+    answer = (
+        asyncio.run(run()) if streaming else ChatService().chat("Who is the CM in 2026?", [], [])
+    )
+    body, footer = answer.split("### Sources")
+    assert body.strip() == "First fact.\nSecond fact.\nFinal explanation."
+    assert answer.count("https://source.example/office") == 1
+    assert "Official office — source.example" in footer
+    assert "Retrieved" in footer
 
 
 def test_stream_sources_are_request_scoped_and_appended_once(monkeypatch):
