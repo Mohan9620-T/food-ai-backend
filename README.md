@@ -133,6 +133,10 @@ use the documented default or disable the associated integration when empty.
 | `MEAL_CREATE_RATE_LIMIT` | Optional | Meal-creation limit; default `10/minute`. |
 | `CHAT_VISION_RATE_LIMIT` | Optional | Image-chat limit; default `2/minute`. |
 | `MIGRATION_CHECK_ENABLED` | Optional | Enables the startup warning for pending Alembic migrations; default `true`. |
+| `CONTEXT_TOKEN_BUDGET` | Optional | Approximate total token budget for one assembled chat request (system prompt, persistent user memory, rolling summary, document references, recent history); default `24000`. |
+| `CONTEXT_TOKEN_CHAR_DIVISOR` | Optional | Characters-per-token approximation used only for budgeting, not a real tokenizer; default `4`. |
+| `ENABLE_REDIS_CACHE` | Optional | Caches recently-assembled chat history in Redis; default `false`. PostgreSQL remains the source of truth - every read/write degrades to a no-op (falling back to PostgreSQL) when disabled or unreachable. See `REDIS_URL`/`REDIS_HOST`/`REDIS_PORT`/`REDIS_DB`/`REDIS_PASSWORD`/`REDIS_TIMEOUT_SECONDS`/`REDIS_CHAT_TTL_SECONDS`. |
+| `ENABLE_SEMANTIC_RAG` | Optional | Adds ChromaDB-backed semantic chunk retrieval for uploaded documents, on top of (never instead of) the deterministic raw-text extraction path; default `false`. Falls back to that deterministic path when Chroma or the embedding provider is unreachable. See `CHROMA_HOST`/`CHROMA_PORT`/`CHROMA_COLLECTION_PREFIX`/`CHROMA_TIMEOUT_SECONDS`/`EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`. |
 
 ### Chat response detail
 
@@ -191,6 +195,12 @@ subdirectory of this repo). It talks to this API purely over HTTP/CORS, so the
 two can be developed, versioned, and deployed independently. See its own
 README for setup; `ALLOWED_ORIGINS` below controls which frontend origins this
 API accepts requests from.
+
+For how the chat memory system, NVIDIA/Ollama provider routing, and the document
+upload/retrieval pipeline fit together (with diagrams), see
+[docs/architecture.md](docs/architecture.md). Deployment to Railway is covered in
+[docs/railway-deployment.md](docs/railway-deployment.md) and
+[docs/production-deployment.md](docs/production-deployment.md), not duplicated here.
 
 ## Prerequisites
 

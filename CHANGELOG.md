@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `docs/architecture.md`: a verified overview (with Mermaid diagrams) of the chat
+  memory system, NVIDIA/Ollama provider routing, and the document upload/retrieval
+  pipeline, linked from the README.
+- Documented `CONTEXT_TOKEN_BUDGET`, `CONTEXT_TOKEN_CHAR_DIVISOR`,
+  `ENABLE_REDIS_CACHE`, and `ENABLE_SEMANTIC_RAG` in the README environment-variable
+  reference; they were implemented but undocumented.
+- Explicit per-section token-budget shares for chat context assembly: document
+  and saved-chat references are capped to their own share of the context budget
+  so a large semantic-RAG retrieval cannot crowd out persistent user memory, the
+  rolling summary, or recent conversation history.
+- Food/diet-specific emotional guidance: the assistant no longer answers guilt or
+  body-image distress with a calorie number, restriction target, or diet correction
+  offered as comfort, while still answering calm nutrition questions normally, and
+  routes patterns beyond ordinary diet frustration to the existing safety guidance.
+- Persistent per-user chat memory (`user_memory_facts`): allergies, dietary
+  restrictions, dislikes, goals, and cooking constraints stated once in chat are
+  extracted deterministically (no extra LLM call) and recalled in later sessions
+  instead of aging out of the rolling conversation summary.
 - Configurable `LLM_PROVIDER` routing for general image chat, with local Ollama and
   hosted NVIDIA vision provider implementations and provider-specific tests.
 - A production Docker Compose configuration using file-based secrets, with deployment

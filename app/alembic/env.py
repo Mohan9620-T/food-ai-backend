@@ -12,6 +12,7 @@ from app.models.mail_credential import MailCredential  # noqa: F401
 from app.models.meal_log import MealLog, MealLogItem  # noqa: F401
 from app.models.refresh_token import RefreshToken  # noqa: F401
 from app.models.user import User  # noqa: F401
+from app.models.user_memory import UserMemoryFact  # noqa: F401
 from app.models.user_profile import UserProfile  # noqa: F401
 
 config = context.config

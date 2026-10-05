@@ -40,7 +40,7 @@ from app.schemas.chat_session import (
     ChatSessionOut,
     ChatSessionRename,
 )
-from app.services import chat_memory_service
+from app.services import chat_memory_service, user_memory_service
 from app.services.chat_service import ChatModelUnavailableError, ChatService
 from app.services.chat_vision_service import ChatVisionService
 from app.services.document import semantic_retrieval
@@ -546,6 +546,7 @@ def chat(
     session = _get_or_create_chat_session(db, user_id, session_id, request.message)
 
     history = _get_persisted_history(db, user_id, session.id)
+    user_memory_context = user_memory_service.context_block(db, user_id)
 
     try:
         image_answer = generated_image_follow_up(db, session.id, request.message)
@@ -595,6 +596,7 @@ def chat(
                 [*request.reference_history, *document_references],
                 session_title=session.title,
                 rolling_summary=cast(str | None, session.rolling_summary),
+                user_memory=user_memory_context,
                 **({"web_search": True} if request.web_search else {}),
             )
     except InvalidDocumentError as error:
@@ -608,6 +610,7 @@ def chat(
 
     repository.add_turn(db, session.id, request.message, answer)
     invalidate_cached_history(user_id, session.id)
+    user_memory_service.sync_from_message(db, user_id, session.id, request.message)
     background_tasks.add_task(_refresh_rolling_summary_task, db.get_bind(), session.id)
 
     logger.info("chat.completed", extra={"user_id": user_id, "session_id": session.id})
@@ -750,6 +753,7 @@ async def stream_chat(
     session = _get_or_create_chat_session(db, user_id, session_id, payload.message)
 
     history = _get_persisted_history(db, user_id, session.id)
+    user_memory_context = user_memory_service.context_block(db, user_id)
     image_answer = generated_image_follow_up(db, session.id, payload.message)
     image_turns = repository.get_image_turns(db, session.id)
     referenced_image = (
@@ -800,6 +804,7 @@ async def stream_chat(
         )
     repository.add_message(db, session.id, "user", payload.message)
     invalidate_cached_history(user_id, session.id)
+    user_memory_service.sync_from_message(db, user_id, session.id, payload.message)
     logger.info("chat.stream_started", extra={"user_id": user_id, "session_id": session.id})
 
     events: asyncio.Queue[dict] = asyncio.Queue()
@@ -904,6 +909,7 @@ async def stream_chat(
             [*payload.reference_history, *document_references],
             session_title=session.title,
             rolling_summary=cast(str | None, session.rolling_summary),
+            user_memory=user_memory_context,
             **({"web_search": True} if payload.web_search else {}),
         )
         try:

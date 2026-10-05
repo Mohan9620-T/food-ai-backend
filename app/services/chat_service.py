@@ -50,6 +50,11 @@ class ChatService:
     REFERENCE_MESSAGE_LIMIT = 4
     NVIDIA_RETRY_DELAYS = (0.5, 1.5)
     CONTEXT_MESSAGE_CHAR_LIMIT = 2000
+    # Explicit shares of CONTEXT_TOKEN_BUDGET so a large semantic-RAG retrieval
+    # (ENABLE_SEMANTIC_RAG) cannot crowd out persistent user memory, the rolling
+    # summary, or recent history - see _fit_references_to_token_budget.
+    DOCUMENT_REFERENCE_TOKEN_BUDGET_SHARE = 0.25
+    OPTIONAL_REFERENCE_TOKEN_BUDGET_SHARE = 0.10
     STANDING_PREFERENCE_PATTERN = re.compile(
         r"\b(?:call|address|refer to)\s+(?:me\s+)?(?:as\s+)?[a-z0-9_-]+"
         r"|\bmy name is\b|\bi (?:prefer|always (?:prefer|like|want))\b"
@@ -370,6 +375,7 @@ maadhiri Thanglish-la explain panren."""
         temperature: float | None = None,
         session_title: str | None = None,
         rolling_summary: str | None = None,
+        user_memory: str | None = None,
         web_search: bool = False,
     ) -> str:
         immediate_answer = self._immediate_answer(message)
@@ -393,6 +399,7 @@ maadhiri Thanglish-la explain panren."""
             temperature=temperature,
             session_title=session_title,
             rolling_summary=rolling_summary,
+            user_memory=user_memory,
             web_search_context=web_search_context.context if web_search_context else None,
         )
 
@@ -494,6 +501,7 @@ maadhiri Thanglish-la explain panren."""
         temperature: float | None = None,
         session_title: str | None = None,
         rolling_summary: str | None = None,
+        user_memory: str | None = None,
     ) -> str:
         """Return one complete answer without depending on an SSE stream.
 
@@ -518,6 +526,7 @@ maadhiri Thanglish-la explain panren."""
             ),
             session_title=session_title,
             rolling_summary=rolling_summary,
+            user_memory=user_memory,
         )
         token_budget = (
             settings.DOCUMENT_AI_MAX_TOKENS
@@ -574,6 +583,7 @@ maadhiri Thanglish-la explain panren."""
         temperature: float | None = None,
         session_title: str | None = None,
         rolling_summary: str | None = None,
+        user_memory: str | None = None,
         web_search: bool = False,
     ) -> AsyncGenerator[str, None]:
         """Continue length-limited answers with the same provider in one visible turn."""
@@ -602,6 +612,7 @@ maadhiri Thanglish-la explain panren."""
             temperature=temperature,
             session_title=session_title,
             rolling_summary=rolling_summary,
+            user_memory=user_memory,
             web_search_context=web_search_context.context if web_search_context else None,
         )
         citations = (
@@ -1236,8 +1247,23 @@ maadhiri Thanglish-la explain panren."""
         temperature: float | None = None,
         session_title: str | None = None,
         rolling_summary: str | None = None,
+        user_memory: str | None = None,
         web_search_context: str | None = None,
     ) -> tuple[str, dict]:
+        """Assemble the provider request body.
+
+        Messages are appended in a fixed, labeled order so more specific,
+        higher-trust context always sits closer to the current question:
+        system prompt -> Tanglish style (if selected) -> persistent user memory
+        (Phase 1 facts) -> session title + rolling summary -> document
+        references -> optional saved-chat context -> web-search context ->
+        standing preferences -> recent verbatim history -> current message.
+        Only recent history and the reference-context blocks are trimmed to a
+        token budget (see _fit_history_to_token_budget and
+        _fit_references_to_token_budget); user memory and the rolling summary
+        are bounded at the source instead, so neither is ever silently dropped
+        to make room for a large document retrieval.
+        """
         response_language = self.response_language(message, history)
         # Personal conversation does not need the long report/document instructions.
         # Keep the same history, language, grounding and safety handling below.
@@ -1256,6 +1282,9 @@ maadhiri Thanglish-la explain panren."""
         ]
         if response_language == "Tanglish (Tamil written in Latin letters)":
             messages.append({"role": "system", "content": self.TANGLISH_STYLE_PROMPT})
+
+        if user_memory:
+            messages.append({"role": "system", "content": user_memory})
 
         memory_sections = []
         if session_title and session_title != "New chat":
@@ -1288,7 +1317,13 @@ maadhiri Thanglish-la explain panren."""
                 if item.role == "user" and item.content.startswith(self.DOCUMENT_CONTEXT_PREFIX)
             ]
             optional_references = [
-                item for item in bounded_references if item not in document_references
+                item
+                for item in bounded_references
+                if item not in document_references
+                and (
+                    item.role == "user"
+                    or not self.response_uses_wrong_language(item.content, response_language)
+                )
             ]
             if document_references:
                 messages.append(
@@ -1303,7 +1338,12 @@ maadhiri Thanglish-la explain panren."""
                         ),
                     }
                 )
-                messages.extend(self._context_message(item) for item in document_references)
+                messages.extend(
+                    self._fit_references_to_token_budget(
+                        [self._context_message(item) for item in document_references],
+                        self.DOCUMENT_REFERENCE_TOKEN_BUDGET_SHARE,
+                    )
+                )
             if optional_references:
                 messages.append(
                     {
@@ -1316,10 +1356,10 @@ maadhiri Thanglish-la explain panren."""
                     }
                 )
                 messages.extend(
-                    self._context_message(item)
-                    for item in optional_references
-                    if item.role == "user"
-                    or not self.response_uses_wrong_language(item.content, response_language)
+                    self._fit_references_to_token_budget(
+                        [self._context_message(item) for item in optional_references],
+                        self.OPTIONAL_REFERENCE_TOKEN_BUDGET_SHARE,
+                    )
                 )
 
         if web_search_context:
@@ -1442,6 +1482,27 @@ maadhiri Thanglish-la explain panren."""
         based estimate is honestly approximate and costs no new dependency.
         """
         return max(1, len(text) // settings.CONTEXT_TOKEN_CHAR_DIVISOR)
+
+    @classmethod
+    def _fit_references_to_token_budget(cls, items: list[dict], budget_share: float) -> list[dict]:
+        """Cap combined reference context to its own explicit share of the budget.
+
+        Semantic-RAG document retrieval (or loose saved-chat context) must not be
+        able to crowd out persistent user memory, the rolling summary, or recent
+        conversation history just because a retrieval pulled in a lot of text.
+        Keeps the newest items and drops the oldest first, same strategy as
+        _fit_history_to_token_budget, and always keeps at least one item.
+        """
+        budget = int(settings.CONTEXT_TOKEN_BUDGET * budget_share)
+        kept: list[dict] = []
+        running_total = 0
+        for item in reversed(items):
+            cost = cls._estimate_tokens(item["content"])
+            if kept and running_total + cost > budget:
+                break
+            running_total += cost
+            kept.append(item)
+        return list(reversed(kept))
 
     @classmethod
     def _fit_history_to_token_budget(

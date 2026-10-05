@@ -15,7 +15,11 @@ from app.schemas.chat import ChatHistoryMessage
 from app.schemas.vision_result import VisionResult
 from app.services.chat_service import ChatModelUnavailableError, ChatService
 from app.services.chat_vision_service import ChatVisionService
-from app.services.conversation_guidance import CONVERSATION_GUIDANCE, PERSONAL_CONVERSATION_PROMPT
+from app.services.conversation_guidance import (
+    CONVERSATION_GUIDANCE,
+    PERSONAL_CONVERSATION_PROMPT,
+    is_personal_conversation,
+)
 
 
 def _install_nvidia_stream(monkeypatch, events):
@@ -295,6 +299,164 @@ def test_personal_conversation_does_not_end_with_bug_report_instructions():
     assert "Respond to what changed in this turn" in final_instruction
     assert "when a helpline was declined" in final_instruction
     assert "For formatting tasks:" not in final_instruction
+
+
+def test_food_distress_guidance_present_in_full_system_prompt():
+    """The food/diet-specific extension to CONVERSATION_GUIDANCE must reach the
+    model on ordinary (non personal-turn) requests, since that is the prompt
+    used whenever is_personal_conversation() does not match."""
+    _, body = ChatService()._build_request_body("Build me a 7-day diet plan", [], [], stream=True)
+    system_prompt = body["messages"][0]["content"]
+    assert CONVERSATION_GUIDANCE in system_prompt
+    assert "Food, weight, and body-image comments" in system_prompt
+    assert "specific calorie number" in system_prompt.replace("\n", " ")
+
+
+def test_personal_conversation_prompt_also_withholds_numbers_during_food_distress():
+    """A message emotional enough to trigger the short personal-conversation
+    prompt (is_personal_conversation) must still carry the hard rule, since
+    PERSONAL_CONVERSATION_PROMPT does not include the full CONVERSATION_GUIDANCE
+    text - this is the prompt actually used for a distressed message like this."""
+    message = "I feel so upset, I completely messed up my diet today"
+    assert is_personal_conversation(message)
+
+    _, body = ChatService()._build_request_body(message, [], [], stream=True)
+
+    system_prompt = body["messages"][0]["content"]
+    assert system_prompt == PERSONAL_CONVERSATION_PROMPT
+    assert "calorie number" in system_prompt
+    assert "restriction target" in system_prompt
+
+
+def test_food_distress_hard_rule_explicitly_preserves_calm_nutrition_questions():
+    """This checks the deterministic prompt contract, not a live model's output:
+    the withholding rule must explicitly scope itself to distress, not to
+    nutrition questions in general, so a calm factual question is unaffected."""
+    normalized_guidance = " ".join(CONVERSATION_GUIDANCE.split())
+    normalized_personal = " ".join(PERSONAL_CONVERSATION_PROMPT.split())
+    assert "not about nutrition questions in general" in normalized_guidance
+    assert "Answer a nutrition question normally, with real numbers" in normalized_personal
+
+
+def test_food_distress_guidance_does_not_add_manufactured_rapport_language():
+    assert "emotionally attached" in CONVERSATION_GUIDANCE
+    assert "not a substitute for the real people" in CONVERSATION_GUIDANCE
+
+
+def test_context_sections_are_assembled_in_the_documented_order():
+    reference_history = [
+        ChatHistoryMessage(
+            role="user",
+            content=f"{ChatService.DOCUMENT_CONTEXT_PREFIX}\nFilename: menu.pdf\nExtracted content:\nSpecials",
+        )
+    ]
+    history = [ChatHistoryMessage(role="user", content="Earlier turn")]
+
+    _, body = ChatService()._build_request_body(
+        "What can I cook tonight?",
+        history,
+        reference_history,
+        stream=True,
+        session_title="Dinner planning",
+        rolling_summary="User previously asked about quick dinners.",
+        user_memory="ESTABLISHED USER FACTS (explicitly stated ...):\nAllergies: Allergic to peanuts",
+    )
+
+    contents = [item["content"] for item in body["messages"]]
+
+    def index_containing(needle: str) -> int:
+        return next(i for i, content in enumerate(contents) if needle in content)
+
+    system_index = 0
+    memory_index = index_containing("ESTABLISHED USER FACTS")
+    summary_index = index_containing("User previously asked about quick dinners")
+    title_index = index_containing('"Dinner planning"')
+    document_index = index_containing("Specials")
+    history_index = index_containing("Earlier turn")
+    current_index = index_containing("What can I cook tonight?")
+
+    # system prompt -> persistent user memory -> (session title + rolling summary,
+    # a single combined block) -> document references -> recent history -> current.
+    assert (
+        system_index
+        < memory_index
+        < summary_index
+        == title_index
+        < document_index
+        < history_index
+        < current_index
+    )
+
+
+def test_document_reference_budget_share_does_not_crowd_out_user_memory_or_summary(
+    monkeypatch,
+):
+    # A tiny total budget makes even the already length-capped reference context
+    # exceed its 25% share, so the trimming path is actually exercised.
+    monkeypatch.setattr(settings, "CONTEXT_TOKEN_BUDGET", 200)
+    large_chunk = "Ingredient list line.\n" * 400  # comfortably exceeds CONTEXT_MESSAGE_CHAR_LIMIT
+    reference_history = [
+        ChatHistoryMessage(
+            role="user",
+            content=(
+                f"{ChatService.DOCUMENT_CONTEXT_PREFIX}\nFilename: doc{i}.pdf\n"
+                f"Extracted content:\n{large_chunk}"
+            ),
+        )
+        for i in range(4)
+    ]
+    memory_text = "ESTABLISHED USER FACTS (...):\nAllergies: Allergic to peanuts"
+    summary_text = "User previously asked about quick dinners."
+
+    _, body = ChatService()._build_request_body(
+        "What can I cook tonight?",
+        [],
+        reference_history,
+        stream=True,
+        rolling_summary=summary_text,
+        user_memory=memory_text,
+    )
+
+    contents = [item["content"] for item in body["messages"]]
+    assert any(memory_text == content for content in contents)
+    assert any(summary_text in content for content in contents)
+    document_messages = [c for c in contents if "Filename: doc" in c]
+    # Bounded by the document reference share, not all four full-size chunks.
+    assert 1 <= len(document_messages) < len(reference_history)
+
+
+def test_fit_references_to_token_budget_keeps_newest_and_always_keeps_one(monkeypatch):
+    monkeypatch.setattr(settings, "CONTEXT_TOKEN_BUDGET", 40)
+    monkeypatch.setattr(settings, "CONTEXT_TOKEN_CHAR_DIVISOR", 1)
+    items = [{"role": "user", "content": f"chunk-{i} " * 20} for i in range(5)]
+
+    kept = ChatService._fit_references_to_token_budget(items, budget_share=0.5)
+
+    assert kept[-1] == items[-1]
+    assert len(kept) < len(items)
+    assert len(kept) >= 1
+
+    # An enormous single item must still be kept rather than dropped to zero.
+    huge = [{"role": "user", "content": "x" * 10_000}]
+    assert ChatService._fit_references_to_token_budget(huge, budget_share=0.01) == huge
+
+
+def test_stored_user_fact_reaches_the_assembled_request_body(db_session):
+    """End-to-end across Phase 1 + Phase 3: a fact actually persisted in
+    PostgreSQL, read back through the real service, ends up in the request
+    body sent to the LLM - not just sitting unused in the database."""
+    from app.services import user_memory_service
+
+    user_memory_service.sync_from_message(db_session, 1, None, "I'm allergic to peanuts")
+    fact_block = user_memory_service.context_block(db_session, 1)
+    assert fact_block is not None
+
+    _, body = ChatService()._build_request_body(
+        "What snack can I have?", [], [], stream=True, user_memory=fact_block
+    )
+
+    assert any(fact_block == item["content"] for item in body["messages"])
+    assert any("Allergic to peanuts" in item["content"] for item in body["messages"])
 
 
 def test_saved_session_context_beyond_twelve_messages_reaches_model(client, monkeypatch):
