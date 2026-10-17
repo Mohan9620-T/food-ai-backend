@@ -244,3 +244,48 @@ def test_stream_api_persists_one_completed_answer_after_continuation(client, mon
         "Explain this",
         "Part one. Part two.",
     ]
+
+
+def test_default_profile_keeps_the_nvidia_body_byte_identical_to_before_profiles(monkeypatch):
+    """No mode sent -> general profile -> same request body as before chat profiles existed."""
+    calls = install_streams(monkeypatch, [("Answer.", "stop")])
+    chunks = []
+
+    async def run():
+        async for chunk in ChatService().stream_chat("Compare the devices", [], []):
+            chunks.append(chunk)
+
+    asyncio.run(run())
+    assert calls[0]["model"] == settings.NVIDIA_CHAT_MODEL
+    assert calls[0]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_reasoning_mode_enables_thinking_for_the_configured_model(monkeypatch):
+    calls = install_streams(monkeypatch, [("Answer.", "stop")])
+    chunks = []
+
+    async def run():
+        async for chunk in ChatService().stream_chat("Solve this", [], [], mode="reasoning"):
+            chunks.append(chunk)
+
+    asyncio.run(run())
+    assert calls[0]["chat_template_kwargs"] == {"enable_thinking": True}
+
+
+def test_reasoning_budget_special_case_still_applies_regardless_of_mode(monkeypatch):
+    """An operator who already set a reasoning budget keeps today's behavior unchanged,
+    even when no mode/profile is selected - this must not regress."""
+    monkeypatch.setattr(settings, "NVIDIA_CHAT_REASONING_BUDGET", 500)
+    calls = install_streams(monkeypatch, [("Answer.", "stop")])
+    chunks = []
+
+    async def run():
+        async for chunk in ChatService().stream_chat("Solve this", [], []):
+            chunks.append(chunk)
+
+    asyncio.run(run())
+    assert calls[0]["chat_template_kwargs"] == {
+        "enable_thinking": True,
+        "low_effort": True,
+        "reasoning_budget": 500,
+    }

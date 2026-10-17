@@ -35,6 +35,8 @@ jobs:
       DB_PASSWORD: postgres
       JWT_SECRET_KEY: ci-only-secret
       MIGRATION_CHECK_ENABLED: "false"
+      ENABLE_FILE_CLARIFY: "false"
+      ENABLE_TABLE_REVIEW: "false"
 
     steps:
       - uses: actions/checkout@v4

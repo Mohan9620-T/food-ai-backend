@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 
 import redis
 
@@ -96,3 +97,30 @@ def invalidate_cached_history(user_id: int, session_id: int) -> None:
         client.delete(_history_key(user_id, session_id))
     except Exception:
         logger.warning("redis.unavailable", extra={"operation": "invalidate_cached_history"})
+
+
+def _search_budget_key(day: str) -> str:
+    return f"foodai:websearch:{day}:count"
+
+
+def claim_daily_search(cap: int) -> bool:
+    """Atomically claim one unit of today's web-search budget.
+
+    Returns True (allow) when Redis is disabled or unreachable: the cap
+    protects a provider bill, not availability, so an outage must never
+    block ordinary chat.
+    """
+    client = get_redis_client()
+    if client is None:
+        return True
+    try:
+        now = datetime.now(timezone.utc)
+        day = now.strftime("%Y-%m-%d")
+        key = _search_budget_key(day)
+        used = client.incr(key)
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        client.expire(key, int((tomorrow - now).total_seconds()))
+        return used <= cap
+    except Exception:
+        logger.warning("redis.unavailable", extra={"operation": "claim_daily_search"})
+        return True

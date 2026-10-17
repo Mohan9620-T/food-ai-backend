@@ -5,8 +5,9 @@ import pytest
 import requests
 
 from app.config import settings
+from app.database import redis_client
 from app.schemas.chat import ChatHistoryMessage
-from app.services import web_search_provider
+from app.services import web_search_provider, web_search_safety
 from app.services.chat_service import ChatService
 from app.services.web_lookup import CitationFilter, automatic_web_question, evidence, lookup
 
@@ -243,13 +244,63 @@ def test_disabled_search_does_not_call_network(monkeypatch):
 
 
 @pytest.mark.parametrize("suffix", ["", "†L1-L4"])
-def test_known_article_title_citation_becomes_an_actual_retrieved_link(suffix):
+def test_known_article_title_citation_is_reserved_for_sources_footer(suffix):
     sources = evidence([source()], "question")
     clean = CitationFilter(sources.citation_links)
     assert (
-        clean.feed("Fact【Official ") + clean.feed("office" + suffix + "】.", final=True)
-        == "Fact [Official office](<https://source.example/office>)."
+        clean.feed("Fact【Official ") + clean.feed("office" + suffix + "】.", final=True) == "Fact."
     )
+
+
+@pytest.mark.parametrize("size", [1, 3, 11, 1000])
+def test_reference_links_stay_out_of_streamed_answer_body(size):
+    text = (
+        "- First fact.\n[Official office — source.example](<https://source.example/office>)\n"
+        "- Another fact [Official office](https://source.example/office).\n"
+        "The [office holder](https://source.example/office#biography) has a public profile.\n"
+        "### Sources\n- [1](https://source.example/office)\n"
+    )
+    clean = CitationFilter(evidence([source()], "question").citation_links)
+    chunks = [clean.feed(text[i : i + size]) for i in range(0, len(text), size)]
+    chunks.append(clean.feed("", final=True))
+    assert "".join(chunks) == (
+        "- First fact.\n- Another fact.\nThe office holder has a public profile.\n"
+    )
+    assert all("https://" not in chunk and "Sources" not in chunk for chunk in chunks)
+
+
+def test_citation_filter_releases_answer_lines_before_completion():
+    clean = CitationFilter(evidence([source()], "question").citation_links)
+    assert clean.feed("The first fact.\n") == "The first fact.\n"
+    assert clean.feed("Another fact [Official") == ""
+    assert clean.feed(" office](https://source.example/office).\n") == "Another fact.\n"
+
+
+@pytest.mark.parametrize("size", [1, 1000])
+def test_citation_filter_preserves_useful_links_markdown_and_code(size):
+    text = (
+        "Use [another page](https://elsewhere.example).\n"
+        "[Download the report](https://source.example/office)\n"
+        "![An image](https://source.example/office)\n"
+        "Keep 【Tamil Nadu】, [an unfinished label and **bold text**.\n\n"
+        "`[Official office](https://source.example/office)`\n"
+        "```markdown\n### Sources\n[Official office](https://source.example/office)\n```\n"
+    )
+    clean = CitationFilter(evidence([source()], "question").citation_links)
+    answer = "".join(clean.feed(text[i : i + size]) for i in range(0, len(text), size))
+    assert answer + clean.feed("", final=True) == text
+
+
+@pytest.mark.parametrize("size", [1, 1000])
+def test_multiline_citations_and_parenthesized_source_urls(size):
+    sources = evidence([source(url="https://source.example/Office_(state)")], "question")
+    text = (
+        'Fact【{\n"id":0,"cursor":0,"loc":0\n}】.\n'
+        "Another fact [Official\noffice](https://source.example/Office_(state)).\n"
+    )
+    clean = CitationFilter(sources.citation_links)
+    answer = "".join(clean.feed(text[i : i + size]) for i in range(0, len(text), size))
+    assert answer + clean.feed("", final=True) == "Fact.\nAnother fact.\n"
 
 
 def test_automatic_lookup_does_not_ask_old_model_for_permission(monkeypatch):
@@ -533,6 +584,38 @@ def test_plain_chat_appends_real_sources_even_if_model_omits_citations(monkeypat
     assert any("New office holder" in m["content"] for m in captured)
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+def test_complete_answer_precedes_one_deduplicated_sources_section(monkeypatch, streaming):
+    monkeypatch.setattr(web_search_provider, "search", lambda _: [source(), source()])
+    generated = (
+        "First fact [Official office](https://source.example/office).\n"
+        "Second fact【Official office†L1-L4】.\n"
+        "Final explanation.\n\n### Sources\n"
+        "- [Official office — source.example](<https://source.example/office>)\n"
+    )
+    monkeypatch.setattr(ChatService, "_chat_with_ollama", lambda self, body: generated)
+
+    async def generate(self, body):
+        for char in generated:
+            yield char
+
+    monkeypatch.setattr(ChatService, "_stream_ollama", generate)
+
+    async def run():
+        return "".join(
+            [chunk async for chunk in ChatService().stream_chat("Who is the CM in 2026?", [], [])]
+        )
+
+    answer = (
+        asyncio.run(run()) if streaming else ChatService().chat("Who is the CM in 2026?", [], [])
+    )
+    body, footer = answer.split("### Sources")
+    assert body.strip() == "First fact.\nSecond fact.\nFinal explanation."
+    assert answer.count("https://source.example/office") == 1
+    assert "Official office — source.example" in footer
+    assert "Retrieved" in footer
+
+
 def test_stream_sources_are_request_scoped_and_appended_once(monkeypatch):
     monkeypatch.setattr(
         web_search_provider,
@@ -583,3 +666,151 @@ def test_search_disabled_keeps_existing_single_model_call(monkeypatch):
     )
     assert ChatService().chat("Hello", [], []) == "answer"
     assert calls == [1]
+
+
+def test_budget_exhausted_answers_without_web_instead_of_erroring(monkeypatch):
+    monkeypatch.setattr("app.services.web_lookup.claim_daily_search", lambda cap: False)
+
+    def unexpected(query):
+        raise AssertionError("must not call the search provider when the budget is exhausted")
+
+    monkeypatch.setattr(web_search_provider, "search", unexpected)
+
+    result = lookup("can you tell the CM name on tamilnadu in 2026")
+
+    assert result is None
+
+
+def test_budget_available_still_searches(monkeypatch):
+    monkeypatch.setattr("app.services.web_lookup.claim_daily_search", lambda cap: True)
+    monkeypatch.setattr(web_search_provider, "search", lambda query: [source()])
+
+    result = lookup("can you tell the CM name on tamilnadu in 2026")
+
+    assert result is not None and result.context
+
+
+class _RaisingClient:
+    def incr(self, *args, **kwargs):
+        raise ConnectionError("connection refused")
+
+
+def test_redis_unreachable_still_allows_search(monkeypatch):
+    # claim_daily_search's own fail-open behavior on a Redis error is covered
+    # directly in tests/test_redis_client.py; this confirms lookup() keeps
+    # searching when that happens rather than treating it as "budget spent."
+    monkeypatch.setattr(settings, "ENABLE_REDIS_CACHE", True)
+    monkeypatch.setattr(redis_client, "get_redis_client", lambda: _RaisingClient())
+    monkeypatch.setattr(web_search_provider, "search", lambda query: [source()])
+
+    result = lookup("can you tell the CM name on tamilnadu in 2026")
+
+    assert result is not None and result.context
+
+
+def test_direct_link_reads_are_not_budgeted(monkeypatch):
+    monkeypatch.setattr("app.services.web_lookup.claim_daily_search", lambda cap: False)
+    monkeypatch.setattr("app.services.web_lookup.read_page", lambda url: [source(url=url)])
+
+    result = lookup("Read https://source.example/office")
+
+    assert result is not None and "Verified current data" in result.context
+
+
+def test_explicit_content_query_is_blocked_without_searching(monkeypatch):
+    def unexpected(query):
+        raise AssertionError("must not search for an explicit-content query")
+
+    monkeypatch.setattr(web_search_provider, "search", unexpected)
+
+    result = lookup("find me nude pics online", force=True)
+
+    assert result is not None and result.error
+    assert result.context == ""
+
+
+def test_explicit_results_are_filtered_before_becoming_evidence(monkeypatch):
+    explicit = source(url="https://pornhub.com/video", content="explicit content")
+    monkeypatch.setattr(web_search_provider, "search", lambda query: [source(), explicit])
+
+    result = lookup("can you tell the CM name on tamilnadu in 2026")
+
+    assert result is not None
+    assert "pornhub.com" not in result.context
+    assert "source.example/office" in result.context
+
+
+def test_tavily_request_excludes_known_explicit_domains(monkeypatch):
+    monkeypatch.setattr(settings, "TAVILY_API_KEY", "test-only")
+
+    def post(url, **kwargs):
+        assert kwargs["json"]["exclude_domains"] == web_search_safety.explicit_domains()
+        assert kwargs["json"]["include_images"] is True
+        return Response(payload={"results": [source()]})
+
+    monkeypatch.setattr(web_search_provider._session, "post", post)
+    assert web_search_provider.search("Tamil Nadu CM 2026") == [source()]
+
+
+def test_structured_sources_are_built_alongside_the_markdown_footer(monkeypatch):
+    monkeypatch.setattr(web_search_provider, "search", lambda query: [source()])
+
+    result = lookup("can you tell the CM name on tamilnadu in 2026")
+
+    assert result is not None
+    assert len(result.structured) == 1
+    assert result.structured[0]["url"] == "https://source.example/office"
+    assert result.structured[0]["domain"] == "source.example"
+    assert result.structured[0]["snippet"] == "Verified current data"
+    assert result.query
+
+
+def test_follow_up_after_a_sourced_answer_searches_again(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        web_search_provider, "search", lambda query: calls.append(query) or [source()]
+    )
+    history = [
+        ChatHistoryMessage(role="user", content="What is the capital of France?"),
+        ChatHistoryMessage(
+            role="assistant",
+            content="Paris is the capital.\n\n### Sources\n- [Example](<https://example.com>)",
+        ),
+    ]
+
+    result = lookup("and what about Japan", history=history)
+
+    assert result is not None and calls
+
+
+def test_follow_up_after_a_non_sourced_answer_does_not_force_a_search(monkeypatch):
+    def unexpected(query):
+        raise AssertionError("a follow-up after a non-sourced answer must not force a search")
+
+    monkeypatch.setattr(web_search_provider, "search", unexpected)
+    history = [
+        ChatHistoryMessage(role="user", content="Can you help me plan dinner?"),
+        ChatHistoryMessage(role="assistant", content="Sure, how about pasta tonight?"),
+    ]
+
+    result = lookup("and what about Japan", history=history)
+
+    assert result is None
+
+
+def test_social_reply_after_a_sourced_answer_does_not_force_a_search(monkeypatch):
+    def unexpected(query):
+        raise AssertionError("a plain thank-you must never force a search")
+
+    monkeypatch.setattr(web_search_provider, "search", unexpected)
+    history = [
+        ChatHistoryMessage(role="user", content="What is the capital of France?"),
+        ChatHistoryMessage(
+            role="assistant",
+            content="Paris is the capital.\n\n### Sources\n- [Example](<https://example.com>)",
+        ),
+    ]
+
+    result = lookup("thanks!", history=history)
+
+    assert result is None

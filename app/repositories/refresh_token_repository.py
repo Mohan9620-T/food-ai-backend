@@ -40,3 +40,9 @@ class RefreshTokenRepository:
     def revoke(self, db: Session, token: RefreshToken) -> None:
         setattr(token, "revoked_at", datetime.now(timezone.utc))
         db.commit()
+
+    def revoke_all_for_user(self, db: Session, user_id: int) -> None:
+        db.query(RefreshToken).filter(
+            RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None)
+        ).update({RefreshToken.revoked_at: datetime.now(timezone.utc)}, synchronize_session=False)
+        db.commit()

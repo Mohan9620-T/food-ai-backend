@@ -291,6 +291,34 @@ async def upload_document(
         resolved_session = repository.get_session(db, session_id, user_id)
         if resolved_session is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
+    if settings.ENABLE_BACKGROUND_DOCUMENT_PROCESSING:
+        from app.services.document.processing import enqueue
+        from app.services.document.upload_validation import validate_document_container
+
+        validate_document_container(file_data, extension)
+        user_text = (message or "").strip() or f"Uploaded {filename}"
+        if resolved_session is None:
+            resolved_session = repository.create_session(db, user_id, user_text[:60])
+        bot, attachment = repository.save_document_upload(
+            db,
+            session_id=int(resolved_session.id),
+            user_content=user_text,
+            bot_content="Your document is saved and is still processing.",
+            filename=filename,
+            content_type=expected_type,
+            file_data=file_data,
+            raw_text="",
+        )
+        setattr(attachment, "processing_status", "queued")
+        setattr(attachment, "processing_stage", "queued")
+        db.commit()
+        enqueue(int(attachment.id))
+        return ChatDocumentResponse(
+            response=str(bot.content),
+            session_id=int(resolved_session.id),
+            attachment=attachment,
+            analysis_status="skipped",
+        )
     try:
         if image_upload and not analyze:
             # Save the original before the chained automation request extracts its data.
@@ -912,6 +940,16 @@ async def generate_document(
                 content = await service.generate_content(
                     payload.instruction, summaries, history, profile
                 )
+        if (
+            payload.mode == "ai"
+            and payload.output_format in {"xlsx", "csv"}
+            and source_document is None
+            and not summaries
+            and isinstance(content, StructuredDocumentContent)
+        ):
+            from app.services.document.table_review import review_content
+
+            content = await review_content(content, payload.instruction, service._complete)
         response_content = service.content_for_chat(content)
         requested_filename = payload.filename
         if requested_filename is None and source_document is not None and payload.mode == "ai":
@@ -1192,6 +1230,20 @@ async def automate_document(
         if locked_session is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
 
+        if payload.source_document_id is None:
+            from app.services.document.phase4_turn import prepare_turn
+
+            clarified = await prepare_turn(
+                db, user_id, payload.session_id, payload.instruction, questions_only=True
+            )
+            if clarified is not None:
+                return ChatDocumentAutomationResponse(
+                    **{key: value for key, value in clarified.items() if key != "user_message_id"},
+                    status="clarification_required"
+                    if clarified.get("file_clarification")
+                    else "done",
+                )
+
         request_instruction = payload.instruction
         source_document_id = payload.source_document_id
         if (
@@ -1218,6 +1270,31 @@ async def automate_document(
             )
             if selected_source is None and documents:
                 selected_source = documents[-1]
+
+        if (
+            settings.ENABLE_SANDBOX_EXECUTION
+            and selected_source is not None
+            and payload.source_mode != "description"
+            and (
+                payload.source_document_id is not None
+                or references_document(payload.instruction, creation=True)
+            )
+        ):
+            from app.services.document.phase4_turn import prepare_turn
+
+            computed = await prepare_turn(
+                db,
+                user_id,
+                payload.session_id,
+                payload.instruction,
+                skip_file_questions=True,
+                source_document_id=int(selected_source.id),
+            )
+            if computed is not None:
+                return ChatDocumentAutomationResponse(
+                    **{key: value for key, value in computed.items() if key != "user_message_id"},
+                    status="done",
+                )
 
         selected_id = int(selected_source.id) if selected_source is not None else None
         available_documents = tuple(
@@ -1682,3 +1759,20 @@ def download_document(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get("/{document_id}/status")
+def document_status(
+    document_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
+):
+    if not settings.ENABLE_BACKGROUND_DOCUMENT_PROCESSING:
+        raise HTTPException(status_code=404, detail="Background processing is not enabled")
+    attachment = repository.get_document_for_user(db, document_id, int(current_user["sub"]))
+    if attachment is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {
+        "id": attachment.id,
+        "processing_status": attachment.processing_status,
+        "processing_stage": attachment.processing_stage,
+        "processing_error": attachment.processing_error,
+    }

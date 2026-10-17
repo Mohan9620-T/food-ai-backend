@@ -18,6 +18,9 @@ indent-style = "space"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "no_auto_verify: skip the autouse fixture that auto-verifies new test users' email, to exercise the real signup-OTP flow",
+]
 
 [tool.mypy]
 python_version = "3.13"

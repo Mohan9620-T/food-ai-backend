@@ -7,29 +7,45 @@ refreshing restores them. Downloads require the owning user's login.
 
 ## Provider
 
-Text-to-image uses NVIDIA's `black-forest-labs/flux.2-klein-4b` endpoint, separately from
+Text-to-image defaults to NVIDIA's `black-forest-labs/flux.1-dev` endpoint, separately from
 the Nemotron text and vision models. The existing server-side `NVIDIA_API_KEY` is used.
 Never put the key in Angular environment files or source control.
 
 - `ENABLE_IMAGE_GENERATION=true` (default): enables creation when the NVIDIA key is present.
+- `NVIDIA_IMAGE_MODEL=black-forest-labs/flux.1-dev` (default): quality profile, 50 steps,
+  guidance 3.5, one image. The optional `black-forest-labs/flux.2-klein-4b` profile retains
+  the fast four-step endpoint. Unknown models are rejected before sending credentials.
 - `NVIDIA_IMAGE_TIMEOUT_SECONDS=120` (default): provider read timeout.
-- One image per request; four inference steps; the app accepts up to **20,000 prompt characters**
+- The app accepts up to **20,000 prompt characters**
   in both the composer and API, including Unicode characters.
-- The NVIDIA hosted endpoint currently enforces **800 characters** (verified against the
-  live endpoint; its reference page currently says 10,000). Longer requests are prepared
+- FLUX.1-dev accepts descriptions up to **10,000 characters**. The fast Klein hosted trial
+  enforces **800 characters**, despite its reference page advertising 10,000. Requests
+  exceeding the selected model's limit are prepared
   using the existing NVIDIA chat model before image generation. The preparation instruction
   preserves subjects, counts, anatomy, positioning, colors, setting and exclusions while
   removing repeated wording. It does not slice off the end of a prompt. Model-based
   compression can still omit details; inspect the resulting image for complex requests.
+- Explicit photorealistic/live-action requests receive photography and composition guidance:
+  follow the requested visible subject count and keep a viewpoint photographer off-camera
+  unless explicitly requested in-frame. The complete description remains intact when it fits.
+  Ordinary illustration prompts retain their requested medium. Character features are not guessed.
 - The original request is kept in chat and attachment metadata. The exact provider prompt,
-  whether it was compacted, the resolved aspect ratio and actual pixel dimensions are also
-  saved with the attachment. Prompts and raw provider errors are not logged.
-- Short prompts require no extra text-model call. Preparation uses a JSON schema with an
-  800-character maximum for the provider description, followed by local validation.
+  compaction status, model, seed, steps, guidance, preparation version, resolved aspect ratio
+  and actual pixel dimensions are saved with the attachment. Prompts and raw provider errors
+  are not logged. No database migration is needed; existing generation metadata is used.
+- A stable, nonzero seed is derived from the original request, model and aspect ratio. Zero
+  previously requested a random result on every call. `/chat/images` accepts an optional
+  integer `seed` from 1 through 2147483647 to request a different variation. Identical model
+  inputs improve repeatability; provider updates/hardware and compression of exceptionally
+  long prompts can still change results. Seed control does not guarantee anatomical accuracy.
+- Prompts within the selected limit require no extra text-model call. Preparation uses JSON
+  schema without a string `maxLength`: constrained decoding previously terminated strings
+  mid-word while still returning valid JSON with `finish_reason=stop`. Local validation checks
+  length and a completed sentence ending instead; invalid output is corrected before generation.
   It has a 90-second total deadline, a 40-second timeout per text-model call, and at most
   three attempts to produce valid, complete output. Oversized, malformed or incomplete
   descriptions are retried using the full original request. Incomplete responses receive
-  a larger output budget (1,024, then 2,048, then 4,096 tokens).
+  a larger output budget up to 4,096 tokens (starting at 1,024 for the fast profile).
   Each text call retries a temporary connection failure or HTTP 502/503/504 once.
   Authorization, quota, explicit content rejections and `cannot_fit` are not retried.
   Quota errors return HTTP 429 with a specific retry-later message.
@@ -50,7 +66,15 @@ Never put the key in Angular environment files or source control.
   instead of silently ignoring the reference image. Existing image analysis still works.
 
 The provider's hosted API terms, quotas and content restrictions apply.
-API reference: https://docs.api.nvidia.com/nim/reference/black-forest-labs-flux_2-klein-4b-infer
+API references:
+- https://docs.api.nvidia.com/nim/reference/black-forest-labs-flux_1-dev-infer
+- https://docs.api.nvidia.com/nim/reference/black-forest-labs-flux_2-klein-4b-infer
+
+This is text-to-image generation, not a character reference or identity-preservation system.
+Names alone do not reliably reproduce a fictional character's hairstyle, costume or accessories.
+Specify those visible attributes directly. Exact likeness needs a reference-capable provider;
+this integration still cannot use arbitrary uploaded images as generation references. No model
+or seed setting guarantees perfect anatomy, exact counts or identical output forever.
 
 ## People, comparisons and follow-up questions
 
@@ -110,3 +134,13 @@ composer cleanup/retry, private preview loading and the browser generation/histo
 The long cinematic prompt fixture covers recovery from oversized, malformed, empty and
 token-limited preparation responses while retaining the original request on every attempt.
 A live provider check also generated a valid 1024-by-1024 PNG from the 3,273-character fixture.
+
+`tests/test_image_quality.py` adds full-prompt preservation, repeatable request settings,
+model-specific parameter limits, explicit seed validation, metadata/history persistence,
+photography intent and incomplete-but-valid JSON regressions. The quality endpoint was also
+tested live with the reported 1,826-character description at 768 by 1344 pixels. The complete
+description reached the image endpoint, including its final framing requirements.
+Two identical live robot-scene requests produced identical PNG bytes with the same nonzero
+seed. A separate character-scene output was filtered by the provider and was not retried;
+the model switch does not override the provider's content decisions. Visual inspection
+found improved single-subject composition, but did not establish an exact character likeness.

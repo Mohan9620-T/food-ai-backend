@@ -48,3 +48,53 @@ def spreadsheet_layout_question(description: str) -> LayoutQuestion | None:
             ),
         ),
     )
+
+
+_FILE = re.compile(
+    r"\b(pdf|excel|xlsx|csv|word|docx|pptx|spreadsheet|workbook|file|document|report|presentation|slides|markdown)\b",
+    re.I,
+)
+_MAKE = re.compile(r"\b(make|create|build|generate|prepare|export|convert|save|write)\b", re.I)
+_AS = re.compile(
+    r"\b(as|in|into)\s+(an?\s+)?(pdf|excel|xlsx|csv|word|docx|pptx|spreadsheet|workbook|markdown)\b",
+    re.I,
+)
+
+
+def file_request_gate(message: str) -> bool:
+    """No model call for ordinary chat."""
+    return bool((_FILE.search(message) and _MAKE.search(message)) or _AS.search(message))
+
+
+def validate_file_questions(value: object) -> list[dict]:
+    """Reject malformed model questions rather than inventing missing choices."""
+    if not isinstance(value, list) or not 1 <= len(value) <= 3:
+        raise ValueError("Expected one to three questions")
+    result = []
+    for item in value:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("question"), str)
+            or not item["question"].strip()
+        ):
+            raise ValueError("Invalid question")
+        options = item.get("options")
+        if not isinstance(options, list) or not 2 <= len(options) <= 4:
+            raise ValueError("Expected two to four options")
+        if any(
+            not isinstance(o, dict) or not isinstance(o.get("label"), str) or not o["label"].strip()
+            for o in options
+        ):
+            raise ValueError("Invalid option")
+        defaults = [i for i, o in enumerate(options) if o.get("recommended") is True]
+        recommended = defaults[0] if len(defaults) == 1 else 0
+        result.append(
+            {
+                "question": item["question"][:500],
+                "options": [
+                    {"label": o["label"][:300], "recommended": i == recommended}
+                    for i, o in enumerate(options)
+                ],
+            }
+        )
+    return result

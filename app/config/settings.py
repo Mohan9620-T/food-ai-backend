@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 from pathlib import Path
 
@@ -6,6 +8,8 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 def _read_secret(name: str, default: str | None = None) -> str | None:
@@ -149,6 +153,40 @@ NVIDIA_CHAT_MAX_TOKENS = int(os.getenv("NVIDIA_CHAT_MAX_TOKENS", "4096"))
 NVIDIA_CHAT_REASONING_BUDGET = max(
     0, min(int(os.getenv("NVIDIA_CHAT_REASONING_BUDGET", "0")), 8192)
 )
+# Used by the "reasoning"/"math"/"coding" chat profiles; falls back to
+# NVIDIA_CHAT_MODEL when unset so a deployment with only one model configured
+# still works unchanged.
+NVIDIA_REASONING_MODEL = os.getenv("NVIDIA_REASONING_MODEL", "").strip()
+
+
+def _parse_llm_profile_overrides() -> dict[str, dict]:
+    raw = os.getenv("LLM_PROFILE_OVERRIDES", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError("LLM_PROFILE_OVERRIDES must be a JSON object")
+    except (json.JSONDecodeError, ValueError) as error:
+        logger.warning(
+            "settings.llm_profile_overrides_invalid", extra={"error_type": type(error).__name__}
+        )
+        return {}
+    cleaned: dict[str, dict] = {}
+    for name, override in parsed.items():
+        if isinstance(name, str) and isinstance(override, dict):
+            cleaned[name.strip().lower()] = override
+    return cleaned
+
+
+# A JSON object of {profile_name: {field: value}} tuning overrides, e.g.
+# {"coding": {"temperature": 0.1}}. Invalid JSON, a non-object value, or a
+# non-object per-profile override is logged and ignored rather than crashing
+# the app; only a fixed field whitelist is honored (app/services/chat_profiles.py).
+LLM_PROFILE_OVERRIDES = _parse_llm_profile_overrides()
+# Deterministic, no-LLM-call pre-answer gate (app/services/turn_governance.py)
+# that can block/escalate/clarify a turn before generation runs. Off by default.
+ENABLE_TURN_GOVERNANCE = os.getenv("ENABLE_TURN_GOVERNANCE", "false").lower() == "true"
 # Additional same-provider requests for a text answer stopped by its token limit.
 CHAT_MAX_CONTINUATIONS = max(0, min(int(os.getenv("CHAT_MAX_CONTINUATIONS", "3")), 8))
 # Conversational chat sampling. Kept separate from DOCUMENT_AI_TEMPERATURE so
@@ -202,6 +240,7 @@ NVIDIA_VISION_MAX_TOKENS = int(os.getenv("NVIDIA_VISION_MAX_TOKENS", "2048"))
 
 # Text-to-image uses a separate endpoint; the chat/vision models cannot render images.
 ENABLE_IMAGE_GENERATION = os.getenv("ENABLE_IMAGE_GENERATION", "true").lower() == "true"
+NVIDIA_IMAGE_MODEL = os.getenv("NVIDIA_IMAGE_MODEL", "black-forest-labs/flux.1-dev").strip()
 NVIDIA_IMAGE_TIMEOUT_SECONDS = float(os.getenv("NVIDIA_IMAGE_TIMEOUT_SECONDS", "120"))
 CHAT_VISION_OCR_ENABLED = os.getenv("CHAT_VISION_OCR_ENABLED", "false").lower() == "true"
 
@@ -263,6 +302,19 @@ TAVILY_API_BASE_URL = os.getenv("TAVILY_API_BASE_URL", "https://api.tavily.com")
 TAVILY_TIMEOUT_SECONDS = float(os.getenv("TAVILY_TIMEOUT_SECONDS", "10"))
 WEB_SEARCH_MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
 WEB_FETCH_TIMEOUT_SECONDS = float(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", "12"))
+# Global per-day cap on provider search calls (not direct link reads). Redis-backed;
+# when Redis is unreachable the cap is not enforced - unmetered is better than unavailable.
+WEB_SEARCH_DAILY_CAP = int(os.getenv("WEB_SEARCH_DAILY_CAP", "80"))
+WEB_SEARCH_IMAGE_PREVIEW_TIMEOUT_SECONDS = float(
+    os.getenv("WEB_SEARCH_IMAGE_PREVIEW_TIMEOUT_SECONDS", "6")
+)
+# Structured source persistence + status/sources stream events + preview images +
+# the frontend source-card UI. Off: web search behaves exactly as it does today
+# (markdown "### Sources" footer only). The budget cap and explicit-content filter
+# above are hardening of search itself and always apply once ENABLE_WEB_SEARCH is on.
+ENABLE_WEB_SEARCH_SOURCE_CARDS = (
+    os.getenv("ENABLE_WEB_SEARCH_SOURCE_CARDS", "false").lower() == "true"
+)
 # Optional: enables reading private GitHub repositories/files via the API and raises
 # the public rate limit. Public repos work without it. Never invented if unset - a
 # private repo simply reports that authentication is required.
@@ -295,3 +347,79 @@ REGISTER_RATE_LIMIT = os.getenv("REGISTER_RATE_LIMIT", "5/minute")
 MEAL_CREATE_RATE_LIMIT = os.getenv("MEAL_CREATE_RATE_LIMIT", "10/minute")
 CHAT_VISION_RATE_LIMIT = os.getenv("CHAT_VISION_RATE_LIMIT", "2/minute")
 MIGRATION_CHECK_ENABLED = os.getenv("MIGRATION_CHECK_ENABLED", "true").lower() == "true"
+
+# Local development may use password login while email delivery is unavailable.
+# This override has no effect outside development and is off unless explicitly set.
+LOCAL_DISABLE_EMAIL_OTP = os.getenv("LOCAL_DISABLE_EMAIL_OTP", "false").lower() == "true"
+ENABLE_EMAIL_OTP = os.getenv("ENABLE_EMAIL_OTP", "true").lower() == "true"
+ENABLE_EMAIL_DELIVERY = os.getenv("ENABLE_EMAIL_DELIVERY", "true").lower() == "true"
+
+
+def email_otp_enabled() -> bool:
+    return (
+        ENABLE_EMAIL_OTP
+        and ENABLE_EMAIL_DELIVERY
+        and not (APP_ENVIRONMENT == "development" and LOCAL_DISABLE_EMAIL_OTP)
+    )
+
+
+OTP_EXPIRY_MINUTES = int(os.getenv("OTP_EXPIRY_MINUTES", "10"))
+OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
+OTP_RATE_LIMIT = os.getenv("OTP_RATE_LIMIT", "10/minute")
+OTP_RESEND_RATE_LIMIT = os.getenv("OTP_RESEND_RATE_LIMIT", "3/minute")
+
+# Phase 4: documents. Existing inline binary storage is unchanged by default.
+ENABLE_FILE_CLARIFY = os.getenv("ENABLE_FILE_CLARIFY", "true").lower() == "true"
+ENABLE_TABLE_REVIEW = os.getenv("ENABLE_TABLE_REVIEW", "true").lower() == "true"
+ENABLE_SANDBOX_EXECUTION = os.getenv("ENABLE_SANDBOX_EXECUTION", "false").lower() == "true"
+SANDBOX_IMAGE = os.getenv("SANDBOX_IMAGE", "food-ai-sandbox:latest")
+SANDBOX_TIMEOUT_SECONDS = int(os.getenv("SANDBOX_TIMEOUT_SECONDS", "120"))
+SANDBOX_MEMORY = os.getenv("SANDBOX_MEMORY", "2g")
+SANDBOX_CPUS = os.getenv("SANDBOX_CPUS", "2")
+SANDBOX_SEND_SAMPLES = os.getenv("SANDBOX_SEND_SAMPLES", "true").lower() == "true"
+ENABLE_DOCUMENT_CITATIONS = os.getenv("ENABLE_DOCUMENT_CITATIONS", "false").lower() == "true"
+DOCUMENT_GROUNDING_MIN_SCORE = float(os.getenv("DOCUMENT_GROUNDING_MIN_SCORE", "0.35"))
+DOCUMENT_ATTRIBUTION_MIN_SUPPORT = float(os.getenv("DOCUMENT_ATTRIBUTION_MIN_SUPPORT", "0.45"))
+ENABLE_LIBRARY = os.getenv("ENABLE_LIBRARY", "false").lower() == "true"
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "database")
+STORAGE_LOCAL_DIR = os.getenv("STORAGE_LOCAL_DIR", "data/blobs")
+STORAGE_SIGNED_URL_TTL_SECONDS = int(os.getenv("STORAGE_SIGNED_URL_TTL_SECONDS", "300"))
+AWS_S3_BUCKET = os.getenv("AWS_S3_BUCKET", "")
+AWS_REGION = os.getenv("AWS_REGION", "")
+ENABLE_BACKGROUND_DOCUMENT_PROCESSING = (
+    os.getenv("ENABLE_BACKGROUND_DOCUMENT_PROCESSING", "false").lower() == "true"
+)
+
+ENABLE_WORKSPACES = os.getenv("ENABLE_WORKSPACES", "false").lower() == "true"
+
+# Phase 6 capabilities are opt-in; credentials remain environment-owned.
+ENABLE_OAUTH_LOGIN = os.getenv("ENABLE_OAUTH_LOGIN", "false").lower() == "true"
+ENABLE_API_KEYS = os.getenv("ENABLE_API_KEYS", "false").lower() == "true"
+ENABLE_ROLES = os.getenv("ENABLE_ROLES", "false").lower() == "true"
+ENABLE_LLM_GATEWAY = os.getenv("ENABLE_LLM_GATEWAY", "false").lower() == "true"
+ENABLE_REQUEST_IDS = os.getenv("ENABLE_REQUEST_IDS", "false").lower() == "true"
+OAUTH_FIREBASE_PROJECT_ID = os.getenv("OAUTH_FIREBASE_PROJECT_ID", "")
+OAUTH_FIREBASE_API_KEY = os.getenv("OAUTH_FIREBASE_API_KEY", "")
+OAUTH_FIREBASE_AUTH_DOMAIN = os.getenv("OAUTH_FIREBASE_AUTH_DOMAIN", "")
+LLM_MAX_CONCURRENCY = max(1, int(os.getenv("LLM_MAX_CONCURRENCY", "8")))
+LLM_MAX_RETRIES = max(0, int(os.getenv("LLM_MAX_RETRIES", "2")))
+OTEL_ENABLED = os.getenv("OTEL_ENABLED", "false").lower() == "true"
+OTEL_EXPORTER_OTLP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+
+# Phase 7: stateless invoice extraction. Reuses existing provider credentials.
+ENABLE_INVOICE_EXTRACTION = os.getenv("ENABLE_INVOICE_EXTRACTION", "false").lower() == "true"
+INVOICE_VLM_PROVIDER = os.getenv("INVOICE_VLM_PROVIDER", "ollama").strip().lower()
+INVOICE_VLM_MODEL = os.getenv("INVOICE_VLM_MODEL", "").strip()
+INVOICE_MAX_PAGES = max(1, min(10, int(os.getenv("INVOICE_MAX_PAGES", "5"))))
+INVOICE_MAX_UPLOAD_BYTES = max(
+    1, min(15 * 1024 * 1024, int(os.getenv("INVOICE_MAX_UPLOAD_BYTES", str(15 * 1024 * 1024))))
+)
+INVOICE_VLM_TIMEOUT_SECONDS = max(1, float(os.getenv("INVOICE_VLM_TIMEOUT_SECONDS", "120")))
+INVOICE_EXTRACTION_RATE_LIMIT = os.getenv("INVOICE_EXTRACTION_RATE_LIMIT", "5/minute")
+
+# Phase 8: explicitly provisioned, owner-scoped source repositories.
+ENABLE_CODE_ASSISTANT = os.getenv("ENABLE_CODE_ASSISTANT", "false").lower() == "true"
+CODE_REPOSITORY_ROOT = os.getenv("CODE_REPOSITORY_ROOT", "").strip()
+CODE_MAX_FILES = max(1, min(500, int(os.getenv("CODE_MAX_FILES", "500"))))
+CODE_AGENT_MAX_STEPS = max(1, min(8, int(os.getenv("CODE_AGENT_MAX_STEPS", "6"))))
+CODE_AGENT_TIMEOUT_SECONDS = max(1, min(300, float(os.getenv("CODE_AGENT_TIMEOUT_SECONDS", "120"))))

@@ -131,12 +131,33 @@ class EmailService:
             ),
         )
 
+    def send_otp_email(self, *, recipient: str, fullname: str, otp: str, purpose: str) -> bool:
+        """The caller must never log `otp`; this method only sends it in the email body."""
+        subject, intent = (
+            ("Your Food AI verification code", "verify your email and finish signing in")
+            if purpose == "signup_verification"
+            else ("Your Food AI password reset code", "reset your Food AI password")
+        )
+        return self.send_text(
+            recipient=recipient,
+            subject=subject,
+            body=(
+                f"Hello {fullname},\n\n"
+                f"Use this code to {intent}:\n\n"
+                f"{otp}\n\n"
+                f"This code expires in {settings.OTP_EXPIRY_MINUTES} minutes.\n\n"
+                "If you didn't request this, you can ignore this email.\n"
+            ),
+        )
+
     def send_text(self, *, recipient: str, subject: str, body: str) -> bool:
         """True means provider accepted the request, not confirmed inbox delivery.
 
         Deliberately do not retry a send: a timeout may follow an accepted message.
         This method is internal; there is no public arbitrary-recipient mail route.
         """
+        if not settings.ENABLE_EMAIL_DELIVERY:
+            return False
         errors = self.configuration_errors()
         if errors:
             logger.info(

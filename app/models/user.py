@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Boolean, Column, Integer, String
 from sqlalchemy.orm import relationship
 
 from app.database.database import Base
@@ -11,7 +11,9 @@ class User(Base):
     fullname = Column(String(100), nullable=False)
     email = Column(String(150), unique=True, nullable=False)
     password = Column(String(255), nullable=False)
+    role = Column(String(10), nullable=False, default="member", server_default="member")
     auth_version = Column(Integer, nullable=False, default=0, server_default="0")
+    is_email_verified = Column(Boolean, nullable=False, default=False, server_default="false")
 
     refresh_tokens = relationship(
         "RefreshToken",

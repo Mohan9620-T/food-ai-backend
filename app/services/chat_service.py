@@ -11,12 +11,15 @@ import requests
 
 from app.config import settings
 from app.schemas.chat import ChatHistoryMessage
+from app.services.chat_profiles import ChatProfile, resolve_profile, thinking_kwarg_for_model
 from app.services.conversation_guidance import (
     CONVERSATION_GUIDANCE,
     PERSONAL_CONVERSATION_PROMPT,
     is_personal_conversation,
 )
+from app.services.llm_gateway import client_context, gateway
 from app.services.provider_policy import ollama_fallback_enabled
+from app.services.web_image_preview import vet_preview_images
 from app.services.web_lookup import (
     CitationFilter,
     WebEvidence,
@@ -44,12 +47,63 @@ class _OutputLimitReached(ChatModelUnavailableError):
         self.partial = partial
 
 
+class ReasoningChunk(str):
+    """A streamed chunk tagged as hidden model reasoning.
+
+    A plain str subclass so every streaming generator keeps its existing
+    AsyncGenerator[str, None] shape - callers that don't know about reasoning
+    still just receive a string. Callers that care use isinstance(chunk,
+    ReasoningChunk) to keep it out of the persisted answer, the continuation
+    accumulator, and the web-search citation filter.
+    """
+
+
+class SearchStatusChunk(str):
+    """A transient "searching the web" / "reading a page" progress update.
+
+    Same sentinel-subclass technique as ReasoningChunk: the string value is
+    the human-readable detail text, the stage name lives on an attribute.
+    Never persisted, never part of the visible answer.
+    """
+
+    stage: str
+
+    def __new__(cls, detail: str, stage: str) -> "SearchStatusChunk":
+        chunk = str.__new__(cls, detail)
+        chunk.stage = stage
+        return chunk
+
+
+class SourcesChunk(str):
+    """Structured web-search sources, carried as one chunk before the first
+    visible token - the string value is always empty; the structured data
+    (source cards, vetted preview image URLs, the resolved query) lives on
+    attributes. Never persisted as text and never shown to the model.
+    """
+
+    items: tuple[dict, ...]
+    image_urls: list[str]
+    query: str
+
+    def __new__(cls, items: tuple[dict, ...], image_urls: list[str], query: str) -> "SourcesChunk":
+        chunk = str.__new__(cls, "")
+        chunk.items = items
+        chunk.image_urls = image_urls
+        chunk.query = query
+        return chunk
+
+
 class ChatService:
     DOCUMENT_CONTEXT_PREFIX = "[Deterministically extracted document]"
     HISTORY_MESSAGE_LIMIT = 24
     REFERENCE_MESSAGE_LIMIT = 4
     NVIDIA_RETRY_DELAYS = (0.5, 1.5)
     CONTEXT_MESSAGE_CHAR_LIMIT = 2000
+    # Explicit shares of CONTEXT_TOKEN_BUDGET so a large semantic-RAG retrieval
+    # (ENABLE_SEMANTIC_RAG) cannot crowd out persistent user memory, the rolling
+    # summary, or recent history - see _fit_references_to_token_budget.
+    DOCUMENT_REFERENCE_TOKEN_BUDGET_SHARE = 0.25
+    OPTIONAL_REFERENCE_TOKEN_BUDGET_SHARE = 0.10
     STANDING_PREFERENCE_PATTERN = re.compile(
         r"\b(?:call|address|refer to)\s+(?:me\s+)?(?:as\s+)?[a-z0-9_-]+"
         r"|\bmy name is\b|\bi (?:prefer|always (?:prefer|like|want))\b"
@@ -370,17 +424,24 @@ maadhiri Thanglish-la explain panren."""
         temperature: float | None = None,
         session_title: str | None = None,
         rolling_summary: str | None = None,
+        user_memory: str | None = None,
         web_search: bool = False,
+        mode: str | None = None,
+        web_search_context: WebEvidence | None = None,
     ) -> str:
+        """`web_search_context`, when supplied, is used instead of searching
+        again - the caller already ran `_maybe_web_search` itself (e.g. to
+        read structured sources for persistence before generation runs)."""
         immediate_answer = self._immediate_answer(message)
         if immediate_answer:
             return immediate_answer
 
-        web_search_context = (
-            self._maybe_web_search(message, force=True, history=history)
-            if web_search
-            else self._maybe_web_search(message, history=history)
-        )
+        if web_search_context is None:
+            web_search_context = (
+                self._maybe_web_search(message, force=True, history=history)
+                if web_search
+                else self._maybe_web_search(message, history=history)
+            )
         if web_search_context and web_search_context.error:
             return web_search_context.error
         if web_search_context and web_search_context.answer:
@@ -393,7 +454,9 @@ maadhiri Thanglish-la explain panren."""
             temperature=temperature,
             session_title=session_title,
             rolling_summary=rolling_summary,
+            user_memory=user_memory,
             web_search_context=web_search_context.context if web_search_context else None,
+            profile=resolve_profile(mode),
         )
 
         provider = "ollama"
@@ -484,6 +547,23 @@ maadhiri Thanglish-la explain panren."""
                 self._require_ollama_fallback(error)
         return await self._complete_with_ollama(body)
 
+    async def complete_code_action(self, prompt: str) -> str:
+        """Use configured transports without food-chat rewriting of tool JSON."""
+        body = {
+            "model": settings.OLLAMA_MODEL,
+            "stream": False,
+            "think": False,
+            "messages": [{"role": "user", "content": prompt}],
+            "options": {"temperature": 0, "num_predict": 4096},
+            "nvidia_max_tokens": 4096,
+        }
+        if self._use_nvidia_primary():
+            try:
+                return await self._complete_with_nvidia(body)
+            except _NvidiaFallbackError as error:
+                self._require_ollama_fallback(error)
+        return await self._complete_with_ollama(body)
+
     async def complete_chat(
         self,
         message: str,
@@ -494,6 +574,7 @@ maadhiri Thanglish-la explain panren."""
         temperature: float | None = None,
         session_title: str | None = None,
         rolling_summary: str | None = None,
+        user_memory: str | None = None,
     ) -> str:
         """Return one complete answer without depending on an SSE stream.
 
@@ -518,6 +599,7 @@ maadhiri Thanglish-la explain panren."""
             ),
             session_title=session_title,
             rolling_summary=rolling_summary,
+            user_memory=user_memory,
         )
         token_budget = (
             settings.DOCUMENT_AI_MAX_TOKENS
@@ -574,7 +656,9 @@ maadhiri Thanglish-la explain panren."""
         temperature: float | None = None,
         session_title: str | None = None,
         rolling_summary: str | None = None,
+        user_memory: str | None = None,
         web_search: bool = False,
+        mode: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Continue length-limited answers with the same provider in one visible turn."""
         immediate_answer = self._immediate_answer(message)
@@ -594,6 +678,19 @@ maadhiri Thanglish-la explain panren."""
         if web_search_context and web_search_context.answer:
             yield web_search_context.answer
             return
+        if (
+            web_search_context
+            and web_search_context.structured
+            and settings.ENABLE_WEB_SEARCH_SOURCE_CARDS
+        ):
+            image_urls = await vet_preview_images(
+                [
+                    source["image_url"]
+                    for source in web_search_context.structured
+                    if source.get("image_url")
+                ]
+            )
+            yield SourcesChunk(web_search_context.structured, image_urls, web_search_context.query)
         _, body = self._build_request_body(
             message,
             history,
@@ -602,13 +699,20 @@ maadhiri Thanglish-la explain panren."""
             temperature=temperature,
             session_title=session_title,
             rolling_summary=rolling_summary,
+            user_memory=user_memory,
             web_search_context=web_search_context.context if web_search_context else None,
+            profile=resolve_profile(mode),
         )
         citations = (
             CitationFilter(web_search_context.citation_links) if web_search_context else None
         )
         async with aclosing(self._stream_answer(body)) as stream:
             async for chunk in stream:
+                if isinstance(chunk, ReasoningChunk):
+                    # Hidden reasoning bypasses citation handling entirely - citations
+                    # only ever apply to the visible answer.
+                    yield chunk
+                    continue
                 text = citations.feed(chunk) if citations else chunk
                 if text:
                     yield text
@@ -784,8 +888,11 @@ maadhiri Thanglish-la explain panren."""
                     self._stream_continuation_request(request_body, generate, retry=attempt > 0)
                 ) as stream:
                     async for chunk in stream:
-                        chunks.append(chunk)
                         yield chunk
+                        # Reasoning is hidden commentary, not the visible answer: keep it
+                        # out of the continuation/progress accumulator entirely.
+                        if not isinstance(chunk, ReasoningChunk):
+                            chunks.append(chunk)
                 if attempt and not "".join(chunks[start:]).strip():
                     self._check_continuation(attempt, "")
                 return
@@ -878,12 +985,21 @@ maadhiri Thanglish-la explain panren."""
                 "Text chat model is still loading or unavailable. Please try again shortly."
             ) from error
 
+    @staticmethod
+    def _nvidia_sync_post(url, **kwargs):
+        if settings.ENABLE_LLM_GATEWAY:
+            connect, read = kwargs["timeout"]
+            return gateway.post_sync(kwargs["json"], httpx.Timeout(read, connect=connect))
+        return requests.post(url, **kwargs)
+
     def _chat_with_nvidia(self, body: dict, *, allow_fallback: bool = True) -> str:
         try:
             if not settings.NVIDIA_API_KEY:
                 raise _NvidiaFallbackError("NVIDIA is not configured")
-            for attempt in range(len(self.NVIDIA_RETRY_DELAYS) + 1):
-                response = requests.post(
+            for attempt in range(
+                1 if settings.ENABLE_LLM_GATEWAY else len(self.NVIDIA_RETRY_DELAYS) + 1
+            ):
+                response = self._nvidia_sync_post(
                     f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
                     headers={
                         "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
@@ -898,11 +1014,16 @@ maadhiri Thanglish-la explain panren."""
                     ),
                     proxies={"http": "", "https": ""},
                 )
-                if attempt < len(self.NVIDIA_RETRY_DELAYS) and response.status_code in {
-                    502,
-                    503,
-                    504,
-                }:
+                if (
+                    not settings.ENABLE_LLM_GATEWAY
+                    and attempt < len(self.NVIDIA_RETRY_DELAYS)
+                    and response.status_code
+                    in {
+                        502,
+                        503,
+                        504,
+                    }
+                ):
                     logger.warning("chat.text_nvidia_retry", extra={"status": response.status_code})
                     time.sleep(self.NVIDIA_RETRY_DELAYS[attempt])
                     continue
@@ -924,7 +1045,14 @@ maadhiri Thanglish-la explain panren."""
             raise ChatModelUnavailableError(
                 "The NVIDIA text provider could not correct the response."
             ) from error
-        except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as error:
+        except (
+            requests.RequestException,
+            httpx.HTTPError,
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+        ) as error:
             if allow_fallback:
                 raise _NvidiaFallbackError("unusable NVIDIA response") from error
             raise ChatModelUnavailableError(
@@ -974,8 +1102,10 @@ maadhiri Thanglish-la explain panren."""
             pool=settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
         )
         try:
-            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-                for attempt in range(len(self.NVIDIA_RETRY_DELAYS) + 1):
+            async with client_context(timeout) as client:
+                for attempt in range(
+                    1 if settings.ENABLE_LLM_GATEWAY else len(self.NVIDIA_RETRY_DELAYS) + 1
+                ):
                     response = await client.post(
                         f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
                         headers={
@@ -985,11 +1115,16 @@ maadhiri Thanglish-la explain panren."""
                         },
                         json=self._nvidia_body(body, stream=False),
                     )
-                    if attempt == len(self.NVIDIA_RETRY_DELAYS) or response.status_code not in {
-                        502,
-                        503,
-                        504,
-                    }:
+                    if (
+                        settings.ENABLE_LLM_GATEWAY
+                        or attempt == len(self.NVIDIA_RETRY_DELAYS)
+                        or response.status_code
+                        not in {
+                            502,
+                            503,
+                            504,
+                        }
+                    ):
                         break
                     # A transient gateway failure should not immediately move a
                     # document onto a much slower local model. This single retry
@@ -1035,37 +1170,41 @@ maadhiri Thanglish-la explain panren."""
 
     @staticmethod
     def _nvidia_body(body: dict, *, stream: bool) -> dict:
+        model = body.get("nvidia_model", settings.NVIDIA_CHAT_MODEL)
         request_body = {
-            "model": settings.NVIDIA_CHAT_MODEL,
+            "model": model,
             "messages": body["messages"],
             "stream": stream,
             "temperature": body["options"]["temperature"],
-            "top_p": settings.NVIDIA_CHAT_TOP_P,
+            "top_p": body.get("nvidia_top_p", settings.NVIDIA_CHAT_TOP_P),
             "max_tokens": body.get("nvidia_max_tokens", settings.NVIDIA_CHAT_MAX_TOKENS),
         }
-        if settings.NVIDIA_CHAT_MODEL == "google/gemma-4-31b-it":
+        # Whether the resolved chat profile asked for visible reasoning on this
+        # call. Defaults False, matching every call made before profiles existed.
+        thinking_requested = bool(body.get("nvidia_thinking", False))
+        if model == "google/gemma-4-31b-it":
             request_body.update(
                 {
                     "chat_template_kwargs": {"enable_thinking": False},
                     "top_k": 64,
                 }
             )
-        elif settings.NVIDIA_CHAT_MODEL.startswith("nvidia/nemotron-3-"):
-            request_body.update(
-                {
-                    "chat_template_kwargs": {"enable_thinking": False},
-                }
-            )
+        elif model.startswith("nvidia/nemotron-3-") or "deepseek" in model.lower():
+            key = thinking_kwarg_for_model(model)
+            request_body["chat_template_kwargs"] = {key: thinking_requested}
             if (
-                settings.NVIDIA_CHAT_MODEL == "nvidia/nemotron-3-super-120b-a12b"
+                model == "nvidia/nemotron-3-super-120b-a12b"
                 and "nvidia_max_tokens" not in body
                 and settings.NVIDIA_CHAT_REASONING_BUDGET > 0
             ):
                 # Atomic document operations retain their separate budget and strict format.
                 # NIM can close reasoning up to 500 tokens after its requested budget.
+                # This operator-level setting always wins for this one model, the same
+                # way it did before per-profile thinking existed - it does not depend
+                # on thinking_requested.
                 budget = settings.NVIDIA_CHAT_REASONING_BUDGET
                 request_body["chat_template_kwargs"] = {
-                    "enable_thinking": True,
+                    key: True,
                     "low_effort": True,
                     "reasoning_budget": budget,
                 }
@@ -1086,7 +1225,7 @@ maadhiri Thanglish-la explain panren."""
             pool=settings.NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS,
         )
         try:
-            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            async with client_context(timeout) as client:
                 async with client.stream(
                     "POST",
                     f"{settings.NVIDIA_API_BASE_URL}/chat/completions",
@@ -1110,8 +1249,7 @@ maadhiri Thanglish-la explain panren."""
                         event = json.loads(data)
                         if event.get("error"):
                             raise _NvidiaFallbackError("NVIDIA stream reported an error")
-                        # Usage-only events have no choices; reasoning is deliberately
-                        # excluded from the visible answer and saved history.
+                        # Usage-only events have no choices.
                         choices = event.get("choices")
                         if choices == []:
                             continue
@@ -1122,7 +1260,15 @@ maadhiri Thanglish-la explain panren."""
                             choice.get("delta"), dict
                         ):
                             raise ValueError("Invalid NVIDIA stream choice")
-                        content = choice["delta"].get("content")
+                        delta = choice["delta"]
+                        # Tagged so callers can keep reasoning out of the visible
+                        # answer, saved history, and web-search citation filtering.
+                        reasoning = delta.get("reasoning_content")
+                        if reasoning is not None and not isinstance(reasoning, str):
+                            raise ValueError("Invalid NVIDIA reasoning content")
+                        if reasoning:
+                            yield ReasoningChunk(reasoning)
+                        content = delta.get("content")
                         if content is not None and not isinstance(content, str):
                             raise ValueError("Invalid NVIDIA content")
                         if content:
@@ -1165,7 +1311,13 @@ maadhiri Thanglish-la explain panren."""
                         event = json.loads(line)
                         if event.get("error"):
                             raise ValueError("Ollama reported an error")
-                        content = event.get("message", {}).get("content", "")
+                        message = event.get("message", {})
+                        reasoning = message.get("thinking", "")
+                        if not isinstance(reasoning, str):
+                            raise ValueError("Invalid Ollama reasoning content")
+                        if reasoning:
+                            yield ReasoningChunk(reasoning)
+                        content = message.get("content", "")
                         if not isinstance(content, str):
                             raise ValueError("Invalid Ollama content")
                         if content:
@@ -1236,8 +1388,24 @@ maadhiri Thanglish-la explain panren."""
         temperature: float | None = None,
         session_title: str | None = None,
         rolling_summary: str | None = None,
+        user_memory: str | None = None,
         web_search_context: str | None = None,
+        profile: ChatProfile | None = None,
     ) -> tuple[str, dict]:
+        """Assemble the provider request body.
+
+        Messages are appended in a fixed, labeled order so more specific,
+        higher-trust context always sits closer to the current question:
+        system prompt -> Tanglish style (if selected) -> persistent user memory
+        (Phase 1 facts) -> session title + rolling summary -> document
+        references -> optional saved-chat context -> web-search context ->
+        standing preferences -> recent verbatim history -> current message.
+        Only recent history and the reference-context blocks are trimmed to a
+        token budget (see _fit_history_to_token_budget and
+        _fit_references_to_token_budget); user memory and the rolling summary
+        are bounded at the source instead, so neither is ever silently dropped
+        to make room for a large document retrieval.
+        """
         response_language = self.response_language(message, history)
         # Personal conversation does not need the long report/document instructions.
         # Keep the same history, language, grounding and safety handling below.
@@ -1256,6 +1424,9 @@ maadhiri Thanglish-la explain panren."""
         ]
         if response_language == "Tanglish (Tamil written in Latin letters)":
             messages.append({"role": "system", "content": self.TANGLISH_STYLE_PROMPT})
+
+        if user_memory:
+            messages.append({"role": "system", "content": user_memory})
 
         memory_sections = []
         if session_title and session_title != "New chat":
@@ -1288,7 +1459,13 @@ maadhiri Thanglish-la explain panren."""
                 if item.role == "user" and item.content.startswith(self.DOCUMENT_CONTEXT_PREFIX)
             ]
             optional_references = [
-                item for item in bounded_references if item not in document_references
+                item
+                for item in bounded_references
+                if item not in document_references
+                and (
+                    item.role == "user"
+                    or not self.response_uses_wrong_language(item.content, response_language)
+                )
             ]
             if document_references:
                 messages.append(
@@ -1303,7 +1480,12 @@ maadhiri Thanglish-la explain panren."""
                         ),
                     }
                 )
-                messages.extend(self._context_message(item) for item in document_references)
+                messages.extend(
+                    self._fit_references_to_token_budget(
+                        [self._context_message(item) for item in document_references],
+                        self.DOCUMENT_REFERENCE_TOKEN_BUDGET_SHARE,
+                    )
+                )
             if optional_references:
                 messages.append(
                     {
@@ -1316,10 +1498,10 @@ maadhiri Thanglish-la explain panren."""
                     }
                 )
                 messages.extend(
-                    self._context_message(item)
-                    for item in optional_references
-                    if item.role == "user"
-                    or not self.response_uses_wrong_language(item.content, response_language)
+                    self._fit_references_to_token_budget(
+                        [self._context_message(item) for item in optional_references],
+                        self.OPTIONAL_REFERENCE_TOKEN_BUDGET_SHARE,
+                    )
                 )
 
         if web_search_context:
@@ -1394,19 +1576,30 @@ maadhiri Thanglish-la explain panren."""
         messages.append({"role": "system", "content": next_answer_instruction})
         messages.append({"role": "user", "content": message})
 
+        resolved_profile = profile if profile is not None else resolve_profile(None)
         body = {
             "model": settings.OLLAMA_MODEL,
             "messages": messages,
             "stream": stream,
             "keep_alive": settings.OLLAMA_KEEP_ALIVE,
-            "think": settings.OLLAMA_CHAT_THINK,
+            "think": resolved_profile.thinking,
             "options": {
                 "temperature": (
-                    temperature if temperature is not None else settings.CHAT_TEMPERATURE
+                    temperature if temperature is not None else resolved_profile.temperature
                 ),
-                "num_predict": settings.OLLAMA_CHAT_MAX_TOKENS,
+                "num_predict": resolved_profile.max_tokens or settings.OLLAMA_CHAT_MAX_TOKENS,
             },
+            # Per-call overrides for the NVIDIA request, read by _nvidia_body via
+            # body.get(...) - the same existing precedent as nvidia_max_tokens.
+            "nvidia_model": resolved_profile.resolved_model(),
+            "nvidia_thinking": resolved_profile.thinking,
         }
+        if resolved_profile.top_p is not None:
+            body["nvidia_top_p"] = resolved_profile.top_p
+        if resolved_profile.max_tokens is not None:
+            body["nvidia_max_tokens"] = resolved_profile.max_tokens
+        if resolved_profile.timeout_seconds is not None:
+            body["nvidia_timeout_seconds"] = resolved_profile.timeout_seconds
 
         return response_language, body
 
@@ -1442,6 +1635,27 @@ maadhiri Thanglish-la explain panren."""
         based estimate is honestly approximate and costs no new dependency.
         """
         return max(1, len(text) // settings.CONTEXT_TOKEN_CHAR_DIVISOR)
+
+    @classmethod
+    def _fit_references_to_token_budget(cls, items: list[dict], budget_share: float) -> list[dict]:
+        """Cap combined reference context to its own explicit share of the budget.
+
+        Semantic-RAG document retrieval (or loose saved-chat context) must not be
+        able to crowd out persistent user memory, the rolling summary, or recent
+        conversation history just because a retrieval pulled in a lot of text.
+        Keeps the newest items and drops the oldest first, same strategy as
+        _fit_history_to_token_budget, and always keeps at least one item.
+        """
+        budget = int(settings.CONTEXT_TOKEN_BUDGET * budget_share)
+        kept: list[dict] = []
+        running_total = 0
+        for item in reversed(items):
+            cost = cls._estimate_tokens(item["content"])
+            if kept and running_total + cost > budget:
+                break
+            running_total += cost
+            kept.append(item)
+        return list(reversed(kept))
 
     @classmethod
     def _fit_history_to_token_budget(

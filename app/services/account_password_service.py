@@ -46,6 +46,8 @@ class AccountPasswordService:
         self.email_service = email_service or EmailService()
 
     def create_link(self, db: Session, user_id: int) -> str | None:
+        if not settings.ENABLE_EMAIL_DELIVERY:
+            return None
         base = public_app_url()
         if not base:
             logger.info(

@@ -13,6 +13,9 @@ class ChatHistoryMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     web_search: bool = False
+    # A chat-mode profile name (general/reasoning/math/coding/planning/document).
+    # Unknown or missing values resolve to "general" - never a validation error.
+    mode: str | None = None
     history: list[ChatHistoryMessage] = Field(default_factory=list)
     reference_history: list[ChatHistoryMessage] = Field(default_factory=list)
     # Internal optional image payload for future multimodal transports. The existing
@@ -20,9 +23,29 @@ class ChatRequest(BaseModel):
     image_data: bytes | None = Field(default=None, exclude=True, repr=False)
 
 
+class ChatMessageSourceOut(BaseModel):
+    title: str
+    url: str
+    domain: str
+    snippet: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
 class ChatResponse(BaseModel):
+    file_clarification: dict | None = None
+    citations: list[dict] = Field(default_factory=list)
+    attachments: list["ChatDocumentAttachmentOut"] = Field(default_factory=list)
     response: str
     session_id: int
+    decision: str | None = None
+    intent: str | None = None
+    confidence: float | None = None
+    escalated: bool | None = None
+    sources: list[ChatMessageSourceOut] = Field(default_factory=list)
+    source_images: list[str] = Field(default_factory=list)
+    search_query: str | None = None
 
 
 class ChatDocumentAttachmentOut(BaseModel):
@@ -30,6 +53,9 @@ class ChatDocumentAttachmentOut(BaseModel):
     filename: str
     content_type: str
     file_size: int
+    processing_status: str = "ready"
+    processing_stage: str | None = None
+    processing_error: str | None = None
     kind: Literal["uploaded", "generated"]
     provenance: Literal["uploaded_source", "general_knowledge"] | None = None
     source_document_ids: list[int] = Field(default_factory=list)
@@ -164,6 +190,7 @@ class ClarificationQuestionOut(BaseModel):
 
 
 class ChatDocumentAutomationResponse(BaseModel):
+    file_clarification: dict | None = None
     response: str
     session_id: int
     status: Literal["done", "clarification_required", "ready_for_review", "partial", "failed"]
@@ -223,3 +250,15 @@ class ChatDocumentAutomationState(BaseModel):
                     ],
                 )
         return self
+
+
+class ChatProfileOut(BaseModel):
+    name: str
+    label: str
+    description: str
+    thinking: bool
+
+
+class ChatProfilesOut(BaseModel):
+    default: str = "general"
+    profiles: list[ChatProfileOut]

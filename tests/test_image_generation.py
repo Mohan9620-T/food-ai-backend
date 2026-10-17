@@ -20,10 +20,11 @@ def headers(client, label="image-owner"):
     return {"Authorization": "Bearer " + login.json()["access_token"]}
 
 
-def transport(monkeypatch, handler):
+def transport(monkeypatch, handler, model="black-forest-labs/flux.2-klein-4b"):
     real_client = httpx.AsyncClient
     monkeypatch.setattr(settings, "ENABLE_IMAGE_GENERATION", True)
     monkeypatch.setattr(settings, "NVIDIA_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "NVIDIA_IMAGE_MODEL", model)
     monkeypatch.setattr(
         generation.httpx,
         "AsyncClient",
@@ -100,7 +101,8 @@ def test_long_prompt_is_prepared_before_generation_and_keeps_landscape(
             assert body["messages"][1]["content"] == original
             assert body["response_format"]["type"] == "json_schema"
             schema = body["response_format"]["json_schema"]["schema"]
-            assert schema["properties"]["prompt"]["anyOf"][0]["maxLength"] == 800
+            assert "maxLength" not in schema["properties"]["prompt"]["anyOf"][0]
+            assert "hard limit is 800" in body["messages"][0]["content"]
             return httpx.Response(
                 200,
                 json={
@@ -128,7 +130,7 @@ def test_long_prompt_is_prepared_before_generation_and_keeps_landscape(
 
 def test_whitespace_can_fit_without_text_model(monkeypatch, valid_png_bytes):
     def handler(request):
-        assert str(request.url) == generation.IMAGE_ENDPOINT
+        assert str(request.url).endswith("/black-forest-labs/flux.2-klein-4b")
         assert json.loads(request.content)["prompt"] == "A black dragon"
         return httpx.Response(
             200, json={"artifacts": [{"base64": base64.b64encode(valid_png_bytes).decode()}]}
@@ -160,7 +162,7 @@ def test_long_cinematic_prompt_recovers_without_losing_original_or_duplicate_ima
         if request.url.path.endswith("/chat/completions"):
             preparation_calls.append(body)
             assert [message["role"] for message in body["messages"]] == ["system", "user"]
-            assert body["messages"][1]["content"] == original
+            assert body["messages"][1]["content"] == generation.photography_prompt(original)
             finish = "stop"
             content = json.dumps({"prompt": prepared, "error": None})
             if len(preparation_calls) < 3:
@@ -196,7 +198,7 @@ def test_long_cinematic_prompt_recovers_without_losing_original_or_duplicate_ima
     assert [r.attempt for r in recovery_logs] == [1, 2]
     success = next(r for r in caplog.records if r.message == "image.prompt_prepared")
     assert success.prepared_chars == len(prepared)
-    assert success.original_chars == len(original)
+    assert success.original_chars == len(generation.photography_prompt(original))
     assert original not in caplog.text
     assert "private provider detail" not in caplog.text
     assert "test-key" not in caplog.text

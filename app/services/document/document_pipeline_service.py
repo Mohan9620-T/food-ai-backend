@@ -611,6 +611,18 @@ class DocumentPipelineService:
                 history or [],
                 documents=extracted_sources,
             )
+            if (
+                step.intent.output_type in {DocumentType.XLSX, DocumentType.CSV}
+                and not extracted_sources
+                and not context_texts
+            ):
+                from app.services.document.table_review import review_content
+
+                generated_content = await review_content(
+                    generated_content,
+                    step.instruction or request_instruction,
+                    self.document_service._complete,
+                )
             requested_filename = step.intent.parameters.get("filename")
             if generated_content.assumptions:
                 # Keep assumptions out of the main body copy — surface them as a

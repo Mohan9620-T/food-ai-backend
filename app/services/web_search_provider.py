@@ -7,6 +7,7 @@ from urllib.parse import urlencode, urlsplit
 import requests
 
 from app.config import settings
+from app.services import web_search_safety
 from app.services.web_page_reader import WebPageError, _fetch
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,10 @@ def _search_tavily(query: str) -> list[dict] | None:
                 "search_depth": "basic",
                 "include_answer": False,
                 "include_raw_content": False,
+                # Tavily has no native safesearch flag; excluding known explicit
+                # domains at the request level is the closest equivalent.
+                "exclude_domains": web_search_safety.explicit_domains(),
+                "include_images": True,
             },
             timeout=(5, settings.TAVILY_TIMEOUT_SECONDS),
         )
@@ -53,13 +58,24 @@ def _search_tavily(query: str) -> list[dict] | None:
         results = data.get("results")
         if not isinstance(results, list):
             raise WebSearchUnavailableError("malformed Tavily response")
+        # Tavily returns images as one flat, query-level list rather than
+        # attached to a specific result; a best-effort positional pairing is
+        # good enough since preview images are a bonus, not a precise mapping.
+        raw_images = data.get("images")
+        image_pool = (
+            [url for url in raw_images if isinstance(url, str)]
+            if isinstance(raw_images, list)
+            else []
+        )
+        limited = results[: max(1, min(settings.WEB_SEARCH_MAX_RESULTS, 5))]
         return [
             {
                 "title": str(item.get("title") or "")[:200],
                 "url": str(item.get("url") or ""),
                 "content": str(item.get("content") or "")[:4000],
+                **({"image": image_pool[index]} if index < len(image_pool) else {}),
             }
-            for item in results[: max(1, min(settings.WEB_SEARCH_MAX_RESULTS, 5))]
+            for index, item in enumerate(limited)
             if isinstance(item, dict)
             and isinstance(item.get("url"), str)
             and isinstance(item.get("content"), str)

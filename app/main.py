@@ -5,6 +5,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse
@@ -14,15 +16,22 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
+from app.api.accounts import router as accounts_router
+from app.api.admin import router as admin_router
 from app.api.chat import router as chat_router
 from app.api.chat_documents import router as chat_documents_router
 from app.api.chat_images import router as chat_images_router
 from app.api.chat_suggestions import router as chat_suggestions_router
+from app.api.code_assistant import router as code_assistant_router
 from app.api.diet_plans import router as diet_plans_router
+from app.api.invoice_extraction import extraction_error_handler
+from app.api.invoice_extraction import router as invoice_extraction_router
+from app.api.library import router as library_router
 from app.api.meals import router as meals_router
 from app.api.nvidia_chat import router as nvidia_chat_router
 from app.api.profile import router as profile_router
 from app.api.user_api import router as user_router
+from app.api.workspaces import router as workspaces_router
 from app.config import settings
 from app.database.chroma_client import get_chroma_client
 from app.database.database import engine
@@ -30,6 +39,8 @@ from app.database.migration_check import warn_if_migrations_pending
 from app.database.redis_client import get_redis_client
 from app.logging_config import configure_logging
 from app.rate_limit import limiter
+from app.services.invoice_extraction.errors import InvoiceExtractionError
+from app.services.observability import RequestIdMiddleware, setup_tracing
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -48,7 +59,17 @@ async def lifespan(application: FastAPI):
         )
     if settings.MIGRATION_CHECK_ENABLED:
         warn_if_migrations_pending(engine)
-    yield
+    from app.services.document.processing import DocumentWorker
+
+    worker = DocumentWorker()
+    await worker.start()
+    try:
+        yield
+    finally:
+        await worker.stop()
+        from app.services.llm_gateway import gateway
+
+        await gateway.close()
 
 
 app = FastAPI(
@@ -63,7 +84,14 @@ app.add_exception_handler(RateLimitExceeded, cast(Any, _rate_limit_exceeded_hand
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 app.include_router(user_router)
+app.include_router(accounts_router)
+app.include_router(code_assistant_router)
+app.include_router(admin_router)
 app.include_router(chat_router)
+app.include_router(library_router)
+app.include_router(invoice_extraction_router)
+app.add_exception_handler(InvoiceExtractionError, extraction_error_handler)
+app.include_router(workspaces_router)
 app.include_router(chat_suggestions_router)
 app.include_router(chat_documents_router)
 app.include_router(chat_images_router)
@@ -176,9 +204,22 @@ def swagger_ui():
 async def unhandled_exception_handler(request: Request, exception: Exception):
     logger.exception(
         "unhandled_request_exception",
-        extra={"method": request.method, "path": request.url.path},
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "request_id": getattr(request.state, "request_id", ""),
+        },
     )
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    # Request IDs survive the outer server-error handler too.
+    identifier = getattr(request.state, "request_id", None)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            **({"request_id": identifier} if identifier else {}),
+        },
+        headers={"X-Request-ID": identifier} if identifier else {},
+    )
 
 
 app.add_middleware(
@@ -189,3 +230,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def safe_validation_error(request: Request, exception: RequestValidationError):
+    if request.url.path == "/documents/extract-invoice" and settings.ENABLE_INVOICE_EXTRACTION:
+        return await extraction_error_handler(
+            request,
+            InvoiceExtractionError(
+                422, "invalid_upload", "Provide one PDF or image in the multipart file field."
+            ),
+        )
+    if request.url.path == "/users/oauth-login":
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
+                    for error in exception.errors()
+                ]
+            },
+        )
+    return await request_validation_exception_handler(request, exception)
+
+
+app.add_middleware(RequestIdMiddleware)
+setup_tracing(app, engine)

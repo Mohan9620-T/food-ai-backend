@@ -11,6 +11,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     UploadFile,
 )
@@ -30,6 +31,8 @@ from app.rate_limit import limiter
 from app.repositories.chat_repository import ChatRepository
 from app.schemas.chat import (
     ChatHistoryMessage,
+    ChatMessageSourceOut,
+    ChatProfilesOut,
     ChatRequest,
     ChatResponse,
 )
@@ -38,14 +41,23 @@ from app.schemas.chat_session import (
     ChatSessionDetailOut,
     ChatSessionImport,
     ChatSessionOut,
+    ChatSessionPinRequest,
     ChatSessionRename,
+    ChatSessionsPageOut,
 )
-from app.services import chat_memory_service
-from app.services.chat_service import ChatModelUnavailableError, ChatService
+from app.services import chat_memory_service, user_memory_service
+from app.services.chat_profiles import list_profiles
+from app.services.chat_service import (
+    ChatModelUnavailableError,
+    ChatService,
+    ReasoningChunk,
+    SourcesChunk,
+)
 from app.services.chat_vision_service import ChatVisionService
 from app.services.document import semantic_retrieval
 from app.services.document.document_references import matches_document_topic, references_document
 from app.services.document.exceptions import InvalidDocumentError
+from app.services.document.phase4_turn import prepare_turn
 from app.services.generated_image_context import (
     generated_image_analysis_context,
     generated_image_follow_up,
@@ -56,6 +68,9 @@ from app.services.image_parser_service import VisionModelUnavailableError
 from app.services.image_validation import InvalidImageError, validate_image_content
 from app.services.response_errors import public_model_error
 from app.services.spreadsheet.workbook_lookup_service import prepare_workbook_lookup
+from app.services.turn_governance import evaluate_turn
+from app.services.web_image_preview import vet_preview_images
+from app.services.web_page_reader import extract_urls
 from app.utils.auth_dependency import get_current_user
 
 router = APIRouter(prefix="/chat", tags=["AI Chat"])
@@ -196,7 +211,12 @@ def _document_reference_history(
     db: Session, user_id: int, session_id: int, message: str
 ) -> list[ChatHistoryMessage]:
     contexts = repository.get_document_contexts(db, session_id)
-    if not references_document(message, (filename for _, filename, _ in contexts)):
+    from app.repositories.workspace_repository import scoped_documents
+
+    workspace_scope = scoped_documents(db, session_id)
+    if workspace_scope is None and not references_document(
+        message, (filename for _, filename, _ in contexts)
+    ):
         contexts = [
             (document_id, filename, text)
             for document_id, filename, text in contexts
@@ -206,12 +226,31 @@ def _document_reference_history(
         return []
 
     if settings.ENABLE_SEMANTIC_RAG:
-        chunks = semantic_retrieval.retrieve_relevant_chunks(
-            user_id=user_id,
-            session_id=session_id,
-            document_ids=[document_id for document_id, _, _ in contexts],
-            query=message,
-        )
+        from app.repositories.workspace_repository import scoped_documents
+
+        scoped = scoped_documents(db, session_id)
+        if scoped is None:
+            chunks = semantic_retrieval.retrieve_relevant_chunks(
+                user_id=user_id,
+                session_id=session_id,
+                document_ids=[document_id for document_id, _, _ in contexts],
+                query=message,
+            )
+        else:
+            grouped: dict[int, list[int]] = {}
+            context_ids = {document_id for document_id, _, _ in contexts}
+            for document in scoped:
+                if int(document.id) in context_ids:
+                    grouped.setdefault(int(document.session_id), []).append(int(document.id))
+            chunks = []
+            for source_session, ids in grouped.items():
+                retrieved = semantic_retrieval.retrieve_relevant_chunks(
+                    user_id=user_id, session_id=source_session, document_ids=ids, query=message
+                )
+                if retrieved is None:
+                    chunks = None
+                    break
+                chunks.extend(retrieved)
         if chunks is not None:
             if chunks:
                 return [
@@ -343,6 +382,30 @@ def _select_referenced_image(
 
 
 @router.get(
+    "/profiles",
+    response_model=ChatProfilesOut,
+    summary="List chat-mode profiles",
+    description="Return the chat-mode profiles a request's `mode` field may select.",
+    responses={401: {"description": "Missing, invalid, or expired access token."}},
+)
+def get_chat_profiles(current_user: dict = Depends(get_current_user)):
+    return ChatProfilesOut.model_validate(
+        dict(
+            default="general",
+            profiles=[
+                {
+                    "name": profile.name,
+                    "label": profile.label,
+                    "description": profile.description,
+                    "thinking": profile.thinking,
+                }
+                for profile in list_profiles()
+            ],
+        )
+    )
+
+
+@router.get(
     "/sessions",
     response_model=list[ChatSessionOut],
     summary="List chat sessions",
@@ -391,6 +454,34 @@ def consolidate_sessions(
         extra={"user_id": user_id, "session_count": len(session)},
     )
     return session
+
+
+@router.get(
+    "/sessions/page",
+    response_model=ChatSessionsPageOut,
+    summary="List chat sessions, paginated",
+    description=(
+        "Return a page of the authenticated user's chat sessions, pinned sessions "
+        "first, with a total count for further pages. Registered before "
+        "/sessions/{session_id} so the literal 'page' segment is never captured "
+        "by that path parameter."
+    ),
+    responses={401: {"description": "Missing, invalid, or expired access token."}},
+)
+def list_sessions_page(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _get_user_id(current_user)
+    sessions, total = repository.get_sessions_page_for_user(db, user_id, limit=limit, offset=offset)
+    return ChatSessionsPageOut(
+        conversations=[ChatSessionOut.model_validate(row) for row in sessions],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(
@@ -466,6 +557,33 @@ def rename_session(
     if not session:
         raise HTTPException(status_code=404, detail="Chat session not found")
     invalidate_cached_history(user_id, session_id)
+    return session
+
+
+@router.put(
+    "/sessions/{session_id}/pin",
+    response_model=ChatSessionOut,
+    summary="Pin or unpin a chat session",
+    description=(
+        "Pin a chat session (it sorts before unpinned sessions in the paginated "
+        "list, appended after any already-pinned sessions) or unpin it."
+    ),
+    responses={
+        401: {"description": "Missing, invalid, or expired access token."},
+        404: {"description": "The chat session does not exist or belongs to another user."},
+        422: {"description": "The session ID or pin payload failed validation."},
+    },
+)
+def pin_session(
+    session_id: int,
+    payload: ChatSessionPinRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = _get_user_id(current_user)
+    session = repository.set_pinned(db, session_id, user_id, payload.pinned)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
     return session
 
 
@@ -545,8 +663,32 @@ def chat(
 
     session = _get_or_create_chat_session(db, user_id, session_id, request.message)
 
-    history = _get_persisted_history(db, user_id, session.id)
+    document_turn = asyncio.run(prepare_turn(db, user_id, int(session.id), request.message))
+    if document_turn is not None:
+        invalidate_cached_history(user_id, session.id)
+        if settings.ENABLE_TURN_GOVERNANCE:
+            verdict = evaluate_turn(
+                request.message, has_history=bool(_get_persisted_history(db, user_id, session.id))
+            )
+            document_turn.update(
+                decision=verdict.decision,
+                intent=verdict.intent,
+                confidence=verdict.confidence,
+                escalated=verdict.decision == "escalate",
+            )
+        return ChatResponse(
+            **{key: value for key, value in document_turn.items() if key != "user_message_id"}
+        )
 
+    history = _get_persisted_history(db, user_id, session.id)
+    user_memory_context = user_memory_service.context_block(db, user_id)
+    governance = (
+        evaluate_turn(request.message, has_history=bool(history))
+        if settings.ENABLE_TURN_GOVERNANCE
+        else None
+    )
+
+    web_search_context = None
     try:
         image_answer = generated_image_follow_up(db, session.id, request.message)
         referenced_image = (
@@ -566,7 +708,9 @@ def chat(
             if web_request or image_answer or referenced_image is not None
             else prepare_workbook_lookup(db, session.id, request.message)
         )
-        if image_answer:
+        if governance is not None and governance.decision != "answer":
+            answer = cast(str, governance.message)
+        elif image_answer:
             answer = image_answer
         elif referenced_image is not None:
             image_bytes = cast(bytes, referenced_image.image_data)
@@ -589,12 +733,21 @@ def chat(
                 if web_request
                 else _document_reference_history(db, user_id, session.id, request.message)
             )
+            if settings.ENABLE_WEB_SEARCH_SOURCE_CARDS and web_request:
+                web_search_context = (
+                    service._maybe_web_search(request.message, force=True, history=history)
+                    if request.web_search
+                    else service._maybe_web_search(request.message, history=history)
+                )
             answer = service.chat(
                 request.message,
                 history,
                 [*request.reference_history, *document_references],
                 session_title=session.title,
                 rolling_summary=cast(str | None, session.rolling_summary),
+                user_memory=user_memory_context,
+                mode=request.mode,
+                web_search_context=web_search_context,
                 **({"web_search": True} if request.web_search else {}),
             )
     except InvalidDocumentError as error:
@@ -606,13 +759,48 @@ def chat(
         )
         raise HTTPException(status_code=503, detail=public_model_error(error)) from error
 
-    repository.add_turn(db, session.id, request.message, answer)
+    source_image_urls: list[str] = []
+    if web_search_context and web_search_context.structured:
+        source_image_urls = asyncio.run(
+            vet_preview_images(
+                [
+                    source["image_url"]
+                    for source in web_search_context.structured
+                    if source.get("image_url")
+                ]
+            )
+        )
+
+    _, bot_message = repository.add_turn(db, session.id, request.message, answer)
+    if web_search_context and web_search_context.structured:
+        repository.add_message_sources(
+            db,
+            int(bot_message.id),
+            web_search_context.structured,
+            source_image_urls,
+            web_search_context.query,
+        )
     invalidate_cached_history(user_id, session.id)
+    user_memory_service.sync_from_message(db, user_id, session.id, request.message)
     background_tasks.add_task(_refresh_rolling_summary_task, db.get_bind(), session.id)
 
     logger.info("chat.completed", extra={"user_id": user_id, "session_id": session.id})
 
-    return ChatResponse(response=answer, session_id=session.id)
+    return ChatResponse(
+        response=answer,
+        session_id=session.id,
+        decision=governance.decision if governance is not None else None,
+        intent=governance.intent if governance is not None else None,
+        confidence=governance.confidence if governance is not None else None,
+        escalated=(governance.decision == "escalate") if governance is not None else None,
+        sources=(
+            [ChatMessageSourceOut(**source) for source in web_search_context.structured]
+            if web_search_context and web_search_context.structured
+            else []
+        ),
+        source_images=source_image_urls,
+        search_query=(web_search_context.query if web_search_context else None) or None,
+    )
 
 
 @router.post(
@@ -749,7 +937,50 @@ async def stream_chat(
     user_id = _get_user_id(current_user)
     session = _get_or_create_chat_session(db, user_id, session_id, payload.message)
 
+    document_turn = await prepare_turn(db, user_id, int(session.id), payload.message)
+    if document_turn is not None:
+        invalidate_cached_history(user_id, session.id)
+
+        async def document_events():
+            yield json.dumps({"type": "session", "session_id": session.id}) + "\n"
+            if document_turn.get("user_message_id"):
+                yield (
+                    json.dumps(
+                        {
+                            "type": "meta",
+                            "session_id": session.id,
+                            "user_message_id": document_turn["user_message_id"],
+                        }
+                    )
+                    + "\n"
+                )
+            yield json.dumps({"type": "token", "content": document_turn["response"]}) + "\n"
+            if document_turn.get("file_clarification"):
+                yield json.dumps({"type": "clarify", **document_turn["file_clarification"]}) + "\n"
+            if document_turn.get("citations"):
+                yield json.dumps({"type": "citations", "items": document_turn["citations"]}) + "\n"
+            if document_turn.get("attachments"):
+                yield (
+                    json.dumps({"type": "artifacts", "items": document_turn["attachments"]}) + "\n"
+                )
+            done: dict = {"type": "done"}
+            if settings.ENABLE_TURN_GOVERNANCE:
+                verdict = evaluate_turn(
+                    payload.message,
+                    has_history=bool(_get_persisted_history(db, user_id, session.id)),
+                )
+                done.update(
+                    decision=verdict.decision,
+                    intent=verdict.intent,
+                    confidence=verdict.confidence,
+                    escalated=verdict.decision == "escalate",
+                )
+            yield json.dumps(done) + "\n"
+
+        return StreamingResponse(document_events(), media_type="application/x-ndjson")
+
     history = _get_persisted_history(db, user_id, session.id)
+    user_memory_context = user_memory_service.context_block(db, user_id)
     image_answer = generated_image_follow_up(db, session.id, payload.message)
     image_turns = repository.get_image_turns(db, session.id)
     referenced_image = (
@@ -769,6 +1000,14 @@ async def stream_chat(
         )
     except InvalidDocumentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    search_status_event = None
+    if settings.ENABLE_WEB_SEARCH_SOURCE_CARDS and web_request:
+        stage = "reading" if extract_urls(payload.message) else "searching"
+        search_status_event = {
+            "type": "status",
+            "stage": stage,
+            "detail": "Reading the page…" if stage == "reading" else "Searching the web…",
+        }
     document_references = (
         [] if web_request else _document_reference_history(db, user_id, session.id, payload.message)
     )
@@ -798,8 +1037,9 @@ async def stream_chat(
                 ],
             )
         )
-    repository.add_message(db, session.id, "user", payload.message)
+    user_message = repository.add_message(db, session.id, "user", payload.message)
     invalidate_cached_history(user_id, session.id)
+    user_memory_service.sync_from_message(db, user_id, session.id, payload.message)
     logger.info("chat.stream_started", extra={"user_id": user_id, "session_id": session.id})
 
     events: asyncio.Queue[dict] = asyncio.Queue()
@@ -841,8 +1081,18 @@ async def stream_chat(
                 chunks, "The response could not be completed. Please retry your message."
             )
 
+    governance = (
+        evaluate_turn(payload.message, has_history=bool(history))
+        if settings.ENABLE_TURN_GOVERNANCE
+        else None
+    )
+    captured_sources: dict = {}
+
     async def produce_answer(chunks: list[str]):
-        if image_answer:
+        if governance is not None and governance.decision != "answer":
+            chunks.append(cast(str, governance.message))
+            await events.put({"type": "token", "content": governance.message})
+        elif image_answer:
             chunks.append(image_answer)
             await events.put({"type": "token", "content": image_answer})
         elif lookup is not None:
@@ -883,7 +1133,15 @@ async def stream_chat(
         if answer:
             worker_db = Session(bind=database_bind)
             try:
-                repository.add_message(worker_db, session.id, "bot", answer)
+                bot_message = repository.add_message(worker_db, session.id, "bot", answer)
+                if captured_sources.get("items"):
+                    repository.add_message_sources(
+                        worker_db,
+                        int(bot_message.id),
+                        captured_sources["items"],
+                        captured_sources.get("image_urls", []),
+                        captured_sources.get("query", ""),
+                    )
                 invalidate_cached_history(user_id, session.id)
             finally:
                 worker_db.close()
@@ -895,7 +1153,13 @@ async def stream_chat(
             stream_tasks.add(memory_task)
             memory_task.add_done_callback(stream_tasks.discard)
         logger.info("chat.stream_completed", extra={"user_id": user_id, "session_id": session.id})
-        await events.put({"type": "done"})
+        done_event: dict = {"type": "done"}
+        if governance is not None:
+            done_event["decision"] = governance.decision
+            done_event["intent"] = governance.intent
+            done_event["confidence"] = governance.confidence
+            done_event["escalated"] = governance.decision == "escalate"
+        await events.put(done_event)
 
     async def _produce_text_stream(chunks: list[str]) -> bool:
         iterator = service.stream_chat(
@@ -904,10 +1168,28 @@ async def stream_chat(
             [*payload.reference_history, *document_references],
             session_title=session.title,
             rolling_summary=cast(str | None, session.rolling_summary),
+            user_memory=user_memory_context,
+            mode=payload.mode,
             **({"web_search": True} if payload.web_search else {}),
         )
         try:
             async for chunk in iterator:
+                if isinstance(chunk, ReasoningChunk):
+                    await events.put({"type": "reasoning", "content": str(chunk)})
+                    continue
+                if isinstance(chunk, SourcesChunk):
+                    captured_sources["items"] = chunk.items
+                    captured_sources["image_urls"] = chunk.image_urls
+                    captured_sources["query"] = chunk.query
+                    await events.put(
+                        {
+                            "type": "sources",
+                            "items": list(chunk.items),
+                            "image_urls": chunk.image_urls,
+                            "search_query": chunk.query,
+                        }
+                    )
+                    continue
                 chunks.append(chunk)
                 await events.put({"type": "token", "content": chunk})
         except ChatModelUnavailableError as error:
@@ -938,6 +1220,18 @@ async def stream_chat(
 
     async def generate():
         yield json.dumps({"type": "session", "session_id": session.id}) + "\n"
+        yield (
+            json.dumps(
+                {
+                    "type": "meta",
+                    "session_id": session.id,
+                    "user_message_id": user_message.id,
+                }
+            )
+            + "\n"
+        )
+        if search_status_event is not None:
+            yield json.dumps(search_status_event) + "\n"
         while True:
             event = await events.get()
             yield json.dumps(event) + "\n"

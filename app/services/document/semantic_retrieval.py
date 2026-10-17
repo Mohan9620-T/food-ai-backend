@@ -17,6 +17,7 @@ class RetrievedChunk:
     text: str
     similarity: float
     location_label: str
+    document_id: int | None = None
 
 
 def index_document(
@@ -148,6 +149,9 @@ def retrieve_relevant_chunks(
                 text=item["text"],
                 similarity=item["similarity"],
                 location_label=_location_label(metadata),
+                document_id=int(metadata["document_id"])
+                if metadata.get("document_id") is not None
+                else None,
             )
         )
     return selected

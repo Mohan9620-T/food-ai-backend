@@ -1,0 +1,3 @@
+# Optional S3 backend only. Database and local storage need no additional packages.
+-r requirements.txt
+boto3>=1.34,<2

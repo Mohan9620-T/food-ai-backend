@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import fakeredis
 import pytest
 import redis
@@ -108,6 +110,33 @@ def test_invalidate_cached_history_degrades_gracefully_on_redis_error(monkeypatc
     monkeypatch.setattr(redis_client, "get_redis_client", lambda: _RaisingClient())
 
     redis_client.invalidate_cached_history(1, 5)
+
+
+def test_claim_daily_search_allows_up_to_the_cap(fake_client):
+    assert redis_client.claim_daily_search(2) is True
+    assert redis_client.claim_daily_search(2) is True
+    assert redis_client.claim_daily_search(2) is False
+
+
+def test_claim_daily_search_sets_an_expiry(fake_client):
+    redis_client.claim_daily_search(80)
+
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    ttl = fake_client.ttl(redis_client._search_budget_key(day))
+    assert 0 < ttl <= 86400
+
+
+def test_claim_daily_search_allows_when_redis_is_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "ENABLE_REDIS_CACHE", False)
+
+    assert redis_client.claim_daily_search(0) is True
+
+
+def test_claim_daily_search_fails_open_on_redis_error(monkeypatch):
+    monkeypatch.setattr(settings, "ENABLE_REDIS_CACHE", True)
+    monkeypatch.setattr(redis_client, "get_redis_client", lambda: _RaisingClient())
+
+    assert redis_client.claim_daily_search(0) is True
 
 
 def _register_and_login(client, email):

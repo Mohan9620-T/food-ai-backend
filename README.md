@@ -74,6 +74,33 @@ use the documented default or disable the associated integration when empty.
 | `DB_NAME` | Required | PostgreSQL database name. |
 | `DB_USER` | Required | PostgreSQL user name. |
 | `DB_PASSWORD` | Required | PostgreSQL password; must be non-empty for Compose. |
+| `ENABLE_WORKSPACES` | Optional | Default `false`. Enable workspace dashboards, owner-scoped documents, conversation scope, search and exports after migration `0022_workspaces`. |
+| `ENABLE_EMAIL_OTP` | Optional | `true`; set `false` for password-only signup/login in any environment. OTP and email-based reset endpoints become unavailable. |
+| `ENABLE_EMAIL_DELIVERY` | Optional | `true`; set `false` to prevent all outbound emails and welcome password-link creation. Also disables OTP requirements. |
+| `ENABLE_CODE_ASSISTANT` | Optional | `false`; enable owner-scoped repository inspection after migration `0025_code_assistant`. |
+| `CODE_REPOSITORY_ROOT` | Optional | Empty; operator-provisioned base directory, with a separate `<user-id>/<repository>` folder for each account. Required when connecting repositories. |
+| `CODE_MAX_FILES` | Optional | `500`; maximum indexed UTF-8 source files per repository, clamped to 1–500. |
+| `CODE_AGENT_MAX_STEPS` | Optional | `6`; maximum tool/planner steps per question, clamped to 1–8. |
+| `CODE_AGENT_TIMEOUT_SECONDS` | Optional | `120`; total agent deadline, clamped to 1–300 seconds. |
+| `ENABLE_OAUTH_LOGIN` | Optional | `false`; verified Firebase Google/Microsoft login. |
+| `OAUTH_FIREBASE_PROJECT_ID` | Optional | Firebase project ID used to verify token audience and issuer. |
+| `OAUTH_FIREBASE_API_KEY` | Optional | Public Firebase Web API key, returned to the sign-in client only when enabled. |
+| `OAUTH_FIREBASE_AUTH_DOMAIN` | Optional | Authorized Firebase Auth domain. |
+| `ENABLE_API_KEYS` | Optional | `false`; hashed personal API keys and the settings page. |
+| `ENABLE_ROLES` | Optional | `false`; role enforcement and administrator diagnostics. |
+| `ENABLE_LLM_GATEWAY` | Optional | `false`; pooled NVIDIA client with bounded concurrency and retries. |
+| `LLM_MAX_CONCURRENCY` | Optional | `8`; maximum NVIDIA requests in flight. |
+| `LLM_MAX_RETRIES` | Optional | `2`; jittered retry limit for transport failures and retryable statuses. |
+| `ENABLE_REQUEST_IDS` | Optional | `false`; X-Request-ID response headers, error bodies and log context. |
+| `OTEL_ENABLED` | Optional | `false`; FastAPI/httpx/SQLAlchemy tracing when optional instrumentation is installed. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional | `http://localhost:4317`; tracing collector. |
+| `ENABLE_INVOICE_EXTRACTION` | Optional | `false`; enable the authenticated, stateless invoice extraction API. |
+| `INVOICE_VLM_PROVIDER` | Optional | `ollama`; select `ollama` or `nvidia` explicitly, using existing provider URLs/credentials. |
+| `INVOICE_VLM_MODEL` | Optional | Empty; uses the selected provider's existing chat vision model. |
+| `INVOICE_MAX_PAGES` | Optional | `5`; reject PDFs above this cap before inference (bounded to 1-10). |
+| `INVOICE_MAX_UPLOAD_BYTES` | Optional | `15728640`; upload limit, bounded to at most 15 MiB. |
+| `INVOICE_VLM_TIMEOUT_SECONDS` | Optional | `120`; total preparation, inference and repair deadline. |
+| `INVOICE_EXTRACTION_RATE_LIMIT` | Optional | `5/minute`; per-client extraction limit. |
 | `DATABASE_URL` | Optional | Full SQLAlchemy connection URL; when empty, the `DB_*` values are used. |
 | `JWT_SECRET_KEY` | Required | Long random secret used to sign access tokens; must be non-empty for Compose. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional | Standard access-token lifetime; default `30`. |
@@ -98,9 +125,15 @@ use the documented default or disable the associated integration when empty.
 | `APP_ENVIRONMENT` | Optional | Set to `production` to use NVIDIA regardless of `LLM_PROVIDER`; default `development`. |
 | `ENABLE_OLLAMA_FALLBACK` | Optional | Chat and vision fallback to Ollama. Unset: enabled in development, disabled in production. Set `true` only with a reachable Ollama server and installed models. Independent of readiness checks. |
 | `LLM_PROVIDER` | Optional | Development override: `ollama` is local-only; `nvidia` uses NVIDIA first with one Ollama fallback. |
+| `LLM_PROFILE_OVERRIDES` | Optional | JSON object keyed by chat-mode profile name (`general`, `reasoning`, `math`, `coding`, `planning`, `document`), patching `model`/`thinking`/`temperature`/`top_p`/`max_tokens`/`timeout_seconds`/`label`/`description` per profile; malformed JSON or unknown fields are logged and ignored rather than failing the request. |
+| `ENABLE_TURN_GOVERNANCE` | Optional | Deterministic, no-LLM-call pre-answer gate (`app/services/turn_governance.py`) that can block, escalate, or ask for clarification before generation runs; default `false`. |
+| `WEB_SEARCH_DAILY_CAP` | Optional | Global per-day cap on web-search provider calls (not direct link reads); default `80`. Redis-backed (`ENABLE_REDIS_CACHE`); fails open (search still allowed) when Redis is unreachable. |
+| `WEB_SEARCH_IMAGE_PREVIEW_TIMEOUT_SECONDS` | Optional | HTTP client timeout for vetting web-search preview images; default `6`. |
+| `ENABLE_WEB_SEARCH_SOURCE_CARDS` | Optional | Structured source persistence, the `status`/`sources` NDJSON stream events, preview-image vetting, and the frontend source-card UI; default `false`. Off: web search behaves exactly as before (markdown "### Sources" footer only). The daily cap and explicit-content filter above are hardening of web search itself and always apply once `ENABLE_WEB_SEARCH` is on, independent of this flag. |
 | `NVIDIA_API_KEY` | Required for NVIDIA | NVIDIA API credential. Never commit a real value. |
 | `NVIDIA_API_BASE_URL` | Optional | NVIDIA OpenAI-compatible API base URL. |
 | `NVIDIA_CHAT_MODEL` | Optional | NVIDIA text model; defaults to `nvidia/nemotron-3-super-120b-a12b`. |
+| `NVIDIA_REASONING_MODEL` | Optional | NVIDIA model used by the `reasoning`/`math` chat-mode profiles; falls back to `NVIDIA_CHAT_MODEL` when empty. |
 | `NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS` | Optional | NVIDIA text connection timeout; default `5`. |
 | `NVIDIA_CHAT_TIMEOUT_SECONDS` | Optional | NVIDIA text response-read timeout; default `30`. |
 | `DOCUMENT_AI_TIMEOUT_SECONDS` | Optional | Total deadline for each document AI operation, including provider fallback and all tokens; default `90`. Keep this greater than the NVIDIA timeout so the one Ollama fallback can run. Does not affect ordinary chat or direct text export. |
@@ -133,6 +166,10 @@ use the documented default or disable the associated integration when empty.
 | `MEAL_CREATE_RATE_LIMIT` | Optional | Meal-creation limit; default `10/minute`. |
 | `CHAT_VISION_RATE_LIMIT` | Optional | Image-chat limit; default `2/minute`. |
 | `MIGRATION_CHECK_ENABLED` | Optional | Enables the startup warning for pending Alembic migrations; default `true`. |
+| `CONTEXT_TOKEN_BUDGET` | Optional | Approximate total token budget for one assembled chat request (system prompt, persistent user memory, rolling summary, document references, recent history); default `24000`. |
+| `CONTEXT_TOKEN_CHAR_DIVISOR` | Optional | Characters-per-token approximation used only for budgeting, not a real tokenizer; default `4`. |
+| `ENABLE_REDIS_CACHE` | Optional | Caches recently-assembled chat history in Redis; default `false`. PostgreSQL remains the source of truth - every read/write degrades to a no-op (falling back to PostgreSQL) when disabled or unreachable. See `REDIS_URL`/`REDIS_HOST`/`REDIS_PORT`/`REDIS_DB`/`REDIS_PASSWORD`/`REDIS_TIMEOUT_SECONDS`/`REDIS_CHAT_TTL_SECONDS`. |
+| `ENABLE_SEMANTIC_RAG` | Optional | Adds ChromaDB-backed semantic chunk retrieval for uploaded documents, on top of (never instead of) the deterministic raw-text extraction path; default `false`. Falls back to that deterministic path when Chroma or the embedding provider is unreachable. See `CHROMA_HOST`/`CHROMA_PORT`/`CHROMA_COLLECTION_PREFIX`/`CHROMA_TIMEOUT_SECONDS`/`EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`. |
 
 ### Chat response detail
 
@@ -191,6 +228,12 @@ subdirectory of this repo). It talks to this API purely over HTTP/CORS, so the
 two can be developed, versioned, and deployed independently. See its own
 README for setup; `ALLOWED_ORIGINS` below controls which frontend origins this
 API accepts requests from.
+
+For how the chat memory system, NVIDIA/Ollama provider routing, and the document
+upload/retrieval pipeline fit together (with diagrams), see
+[docs/architecture.md](docs/architecture.md). Deployment to Railway is covered in
+[docs/railway-deployment.md](docs/railway-deployment.md) and
+[docs/production-deployment.md](docs/production-deployment.md), not duplicated here.
 
 ## Prerequisites
 
@@ -654,3 +697,174 @@ deadline and returned the typed `ChatModelUnavailableError` instead of crashing 
 This verifies graceful degradation but also shows that successful cold inference is not
 guaranteed within 300 seconds on this machine. Repeat the five-request command above after
 the model is warm to record representative successful inference timings.
+
+## Phase 4 documents
+
+| Environment variable | Default |
+|---|---|
+| `ENABLE_FILE_CLARIFY` | `true` |
+| `ENABLE_TABLE_REVIEW` | `true` |
+| `ENABLE_SANDBOX_EXECUTION` | `false` |
+| `SANDBOX_IMAGE` | `food-ai-sandbox:latest` |
+| `SANDBOX_TIMEOUT_SECONDS` | `120` |
+| `SANDBOX_MEMORY` | `2g` |
+| `SANDBOX_CPUS` | `2` |
+| `SANDBOX_SEND_SAMPLES` | `true` |
+| `ENABLE_DOCUMENT_CITATIONS` | `false` |
+| `DOCUMENT_GROUNDING_MIN_SCORE` | `0.35` |
+| `DOCUMENT_ATTRIBUTION_MIN_SUPPORT` | `0.45` |
+| `ENABLE_LIBRARY` | `false` |
+| `STORAGE_BACKEND` | `database` |
+| `STORAGE_LOCAL_DIR` | `data/blobs` |
+| `STORAGE_SIGNED_URL_TTL_SECONDS` | `300` |
+| `AWS_S3_BUCKET` | `` |
+| `AWS_REGION` | `` |
+| `ENABLE_BACKGROUND_DOCUMENT_PROCESSING` | `false` |
+
+Clarification and knowledge-only table review extend existing generation and default on. All other capabilities are opt-in. Use `ENABLE_LIBRARY` for the library and `ENABLE_DOCUMENT_CITATIONS` for grounded answers. Citations validate all markers and refuse unsupported answers. Support thresholds control grounding and marker attribution.
+
+Migrate to `0021_documents_phase4` before enabling these features. Local/S3 reads check the storage key and fall back to legacy database bytes. New writes fall back to the database when optional storage is unavailable. Install `requirements-storage.txt` only for S3; AWS credentials use the normal environment/instance credential chain. `python -m scripts.migrate_blobs_to_storage --dry-run` reports a copy count. Omit `--dry-run` to copy idempotently. Keep the original storage available during downgrade, which materializes external bytes before removing storage columns.
+
+Build the sandbox with `docker build -t food-ai-sandbox:latest docker/sandbox`. Only its image needs pandas/openpyxl. Scripts run without network, with a read-only root, a temporary input/output mount, CPU/memory caps, wall timeout and truncated stdout. Existing deterministic operations take priority. Set `RUN_SANDBOX_INTEGRATION=true` to opt into the Docker integration test after building the image.
+
+Background uploads use durable database states and Redis notifications when available. One lifespan-managed worker processes extraction/indexing serially, with a database fallback when Redis is missing. Processing questions receive a waiting message. A restart marks interrupted work failed rather than leaving it stuck. The operations tray follows uploads across routes.
+
+
+### Workspaces (Phase 5)
+
+Apply `0022_workspaces` before enabling `ENABLE_WORKSPACES=true`. The migration
+creates My Workspace for existing users and links their conversations and files.
+New users receive a default workspace when the feature is enabled. With the flag
+off, `/workspaces` returns 404 and the sidebar switcher is hidden.
+
+Choose a workspace in the sidebar to open `/w/:id`. All/Selected document scope is
+read fresh for each question; changing it preserves conversation history. Uploads
+reuse the existing type/size validation, storage and optional processing queue.
+Checksums reject duplicate files within a workspace while allowing them elsewhere.
+Search includes document text, conversations, answers, generated files and optional
+semantic chunks. Provider outages preserve cached summaries and rule-based actions.
+
+Conversation exports reuse the Markdown/PDF/Word generators. PDF text is stripped
+of Markdown and XML-escaped by the existing plain-text renderer. Save as knowledge
+creates a searchable snapshot without changing the source conversation. Removing
+workspace items removes membership and bookmarks while preserving stored chat/file
+history. Archiving hides the workspace; the default workspace cannot be archived.
+
+### Accounts and platform (Phase 6)
+
+Apply `0023_accounts_platform` before enabling the account/platform flags. All
+existing users receive the `member` role; promote administrators through your
+controlled database administration process (no public role-changing endpoint).
+With `ENABLE_ROLES=true`, `/nvidia-chat` and `/admin/health/detailed` and
+`/admin/models` require an administrator. Administrator diagnostics disclose only
+safe status/model names, never provider responses, keys or connection strings.
+
+OAuth uses Firebase Google/Microsoft popup sign-in and verifies the resulting ID
+token server-side with cached Google signing keys, RS256, project audience,
+issuer, expiry, subject, authentication time and provider checks. Unverified email
+identities cannot create or link accounts. Configure both providers and authorized
+web domains in Firebase, then supply the three `OAUTH_FIREBASE_*` settings. Provider
+secrets stay in Firebase. No service-account file or existing API key is changed.
+See [ID token verification](https://firebase.google.com/docs/auth/admin/verify-id-tokens)
+and [Microsoft sign-in](https://firebase.google.com/docs/auth/web/microsoft-oauth).
+
+`POST /users/keys` shows a generated `fai-` key once. Only its SHA-256 hash,
+name, prefix and lifecycle dates are stored. `GET /users/keys` never returns the
+raw key or hash. `DELETE /users/keys/{id}` revokes it immediately. Authenticate
+with `X-API-Key`; a key cannot mint additional keys. Keys follow their owner's
+current database role. The lazy `/settings/api-keys` page appears only when enabled.
+
+The optional gateway holds one NVIDIA AsyncClient on a dedicated event loop so
+synchronous chat and async streaming share a connection pool and semaphore.
+Retries use jittered exponential backoff for 408/409/425/429, 5xx and transport
+errors, never other 4xx. Streams are never retried after emitting content. Existing
+Ollama fallback and output-limit continuation remain above that transport seam.
+
+Install `requirements-observability.txt` only for tracing. Missing instrumentation
+leaves the application operational and logs a safe warning. Request IDs are
+validated (up to 128 safe ASCII characters) or generated, included in errors and
+logs, and do not change NDJSON event shapes. Keep collector credentials outside
+application responses. Metrics remain available as before.
+
+### Invoice extraction API (Phase 7)
+
+`ENABLE_INVOICE_EXTRACTION=false` hides all three routes with 404. To enable the
+API, select an existing vision provider/model and set the flag. No voice setting,
+provider key or existing chat route is changed. Revision `0024_invoice_extraction`
+is a deployment marker only: this API is stateless and creates no tables or
+stored documents. Uploaded images, invoice JSON and failed model output are not
+logged or persisted.
+
+All routes accept the existing bearer session or an enabled personal API key:
+
+- `POST /documents/extract-invoice`: multipart `file`, a PDF or PNG/JPEG/WebP/
+  single-frame GIF. Extension, MIME, image content, upload size, PDF encryption and
+  page count are checked. Every PDF page is rendered in order at a bounded image
+  size and sent to the configured VLM; excess pages are rejected, never truncated.
+- `GET /documents/vlm/provider`: safe provider/model labels, schema/prompt versions
+  and document limits. It never returns credentials or internal endpoint URLs.
+- `GET /documents/vlm/health`: checks the configured model's availability without
+  paid inference; returns 503 when unavailable. It does not probe other providers.
+
+Ollama inference shares the existing meal/chat vision slot. NVIDIA inference uses
+the Phase 6 gateway when enabled. Provider selection is explicit; invoice failures
+do not silently switch providers. The model receives a versioned invoice schema,
+not the unrelated food-photo schema. Page text and previous output are treated as
+untrusted evidence. One repair call is permitted after invalid JSON/schema output,
+using the same pages. The total deadline includes that repair.
+
+Success returns `schema_version: "1.0.0"`, `prompt_version`, `request_id`, provider,
+model, page/image counts, repair metadata, warnings and typed `data`. Invoice
+number/dates, parties, line items, currency, totals and payment fields retain only
+extracted values; unknown values remain null. Dates use ISO format and decimal
+money serializes as strings to preserve precision. Missing expected fields and
+inconsistent printed totals produce warnings; they never cause invented values or
+silently rewritten arithmetic. An empty extraction is not a successful invoice.
+
+Failures use `{success:false, schema_version, request_id, error:{code,message,
+retryable,violations}}`. Error messages and violations never quote invoice or
+provider text. Schema failures after one repair return 422, provider failures 502,
+and timeouts 504; unsupported formats return 415, oversize uploads 413, and invalid,
+encrypted or over-cap documents 422. These routes do not alter NDJSON chat events.
+Provider/network tests use fakes; enable a configured VLM to exercise live inference.
+
+
+### Code Assistant (approved optional extension)
+
+Apply `0025_code_assistant` and set `ENABLE_CODE_ASSISTANT=true` to show the
+Code Assistant sidebar entry and `/code` page. All `/code/repositories` APIs
+require authentication and return 404 while disabled. Normal chat is unchanged.
+
+An operator provisions a trusted local repository under
+`CODE_REPOSITORY_ROOT/<numeric-user-id>/<relative-path>`; the user connects only
+the relative path. No remote clone, arbitrary absolute server paths, symlink or
+junction repositories are supported. Provision reviewed source code, excluding
+credentials. Hidden files, credential-named files, binary/non-UTF-8 files, large
+files, dependencies and build folders are excluded. Source files are capped at
+200 KB each, 500 files and 10 MB total; scan traversal is capped at 10,000 entries.
+Indexing and agent requests are limited to five per minute per client.
+The index is a database JSON snapshot, replaced atomically on reindex. Search
+is deterministic lexical ranking with file and line references; no Chroma,
+Redis, embedding model or additional infrastructure is required. Disconnect
+deletes the snapshot registration and preserves source files and Git history.
+
+Routes: GET/POST `/code/repositories`; DELETE `/{id}`; POST `/{id}/index`;
+GET `/{id}/files`, `/{id}/file?path=...`, `/{id}/search?q=...`, and
+`/{id}/git/{status|diff|log|branches}`; POST `/{id}/agent` with
+`{"question":"Explain the authentication flow"}`. Suffixes are relative to
+`/code/repositories`. Every lookup is owner-scoped, including API-key auth.
+Git runs argument lists without a shell, disables external diff/textconv and
+filesystem monitoring, limits runtime to 10 seconds and displayed output to
+60 KB. Diff is limited to indexed source paths and compares HEAD to the working
+tree (staged and unstaged). Repositories without a commit can still be indexed;
+HEAD-based views return a safe 409 until a commit exists.
+
+The agent reuses existing model/provider selection, credentials and gateway.
+Its strict tool allowlist is `list_files`, `search_code`, `read_file`,
+`git_status`, `git_diff` and `finish`. File tools read the indexed snapshot;
+Git tools read the current working tree. Responses include answer, status and
+a tool trace. Invalid provider output returns safe 502; the total deadline
+returns 504; reaching the step limit returns `status=step_limit`. The agent can
+explain code and propose patches as text. Applying patches, command execution,
+Git mutations and automatic deployments are outside this read-only version.
+No credentials or voice settings are changed. UI output is escaped plain text.

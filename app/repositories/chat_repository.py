@@ -1,17 +1,19 @@
 import re
 from datetime import datetime, timezone
-from typing import cast
+from typing import Any, cast
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import QueryableAttribute, Session, load_only
 
 from app.models.chat import (
     ChatDocumentAttachment,
     ChatImageAttachment,
     ChatMessageRecord,
+    ChatMessageSource,
     ChatSession,
 )
+from app.repositories.workspace_repository import link_document, scoped_documents
 from app.schemas.chat import (
     ChatDocumentAutomationRequest,
     ChatDocumentAutomationResponse,
@@ -105,7 +107,11 @@ class ChatRepository:
         records = (
             db.query(ChatMessageRecord)
             .filter(
-                ChatMessageRecord.session_id == session_id, ChatMessageRecord.image_data.isnot(None)
+                ChatMessageRecord.session_id == session_id,
+                (
+                    ChatMessageRecord._image_data.isnot(None)
+                    | ChatMessageRecord.storage_key.isnot(None)
+                ),
             )
             .order_by(ChatMessageRecord.created_at.asc(), ChatMessageRecord.id.asc())
             .all()
@@ -327,6 +333,52 @@ class ChatRepository:
             .all()
         )
 
+    def get_sessions_page_for_user(
+        self, db: Session, user_id: int, *, limit: int, offset: int
+    ) -> tuple[list[ChatSession], int]:
+        """Pinned sessions first (oldest-pinned first), then by recency.
+
+        A separate query because this sorts/filters differently from
+        get_sessions_for_user and must not change that endpoint's behavior.
+        """
+        base = db.query(ChatSession).filter(ChatSession.user_id == user_id)
+        total = base.with_entities(func.count(ChatSession.id)).scalar() or 0
+        order_key = case((ChatSession.is_pinned.is_(True), ChatSession.pin_order), else_=2**31 - 1)
+        sessions = (
+            base.order_by(order_key.asc(), ChatSession.updated_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
+        return sessions, total
+
+    def set_pinned(
+        self, db: Session, session_id: int, user_id: int, pinned: bool
+    ) -> ChatSession | None:
+        session = self.get_session(db, session_id, user_id)
+        if session is None:
+            return None
+        values: dict[Any, Any]
+        if pinned and not session.is_pinned:
+            next_order = (
+                db.query(func.coalesce(func.max(ChatSession.pin_order), 0))
+                .filter(ChatSession.user_id == user_id, ChatSession.is_pinned.is_(True))
+                .scalar()
+            )
+            values = {"is_pinned": True, "pin_order": int(next_order) + 1}
+        elif not pinned and session.is_pinned:
+            values = {"is_pinned": False, "pin_order": None}
+        else:
+            return session
+        # Pinning must not disturb the session's recency ordering on the
+        # unpaginated /chat/sessions endpoint - explicitly hold updated_at at its
+        # current value, since onupdate defaults still apply to a bulk UPDATE.
+        values["updated_at"] = session.updated_at
+        db.query(ChatSession).filter(ChatSession.id == session_id).update(values)
+        db.commit()
+        db.refresh(session)
+        return session
+
     def get_session(self, db: Session, session_id: int, user_id: int) -> ChatSession | None:
         return (
             db.query(ChatSession)
@@ -364,6 +416,34 @@ class ChatRepository:
             db.flush()
 
         return message
+
+    def add_message_sources(
+        self,
+        db: Session,
+        message_id: int,
+        structured: tuple[dict, ...],
+        image_urls: list[str],
+        query: str,
+        *,
+        commit: bool = True,
+    ) -> None:
+        for position, source in enumerate(structured):
+            db.add(
+                ChatMessageSource(
+                    message_id=message_id,
+                    position=position,
+                    title=str(source.get("title") or "")[:512],
+                    url=str(source.get("url") or "")[:2048],
+                    domain=str(source.get("domain") or "")[:255],
+                    snippet=source.get("snippet"),
+                    image_url=(image_urls[position] if position < len(image_urls) else None),
+                    query=(query or "")[:255] or None,
+                )
+            )
+        if commit:
+            db.commit()
+        else:
+            db.flush()
 
     def add_turn(
         self,
@@ -438,6 +518,7 @@ class ChatRepository:
                 setattr(attachment, "raw_text", raw_text)
         db.add(attachment)
         db.flush()
+        link_document(db, attachment)
         session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
         if session is not None:
             session.latest_document_id = attachment.id
@@ -486,6 +567,7 @@ class ChatRepository:
                 self.save_document_extraction(attachment, extracted)
             db.add(attachment)
             db.flush()
+            link_document(db, attachment)
             session = locked_session or (
                 db.query(ChatSession).filter(ChatSession.id == session_id).with_for_update().first()
             )
@@ -540,6 +622,7 @@ class ChatRepository:
                 self.save_document_extraction(attachment, extracted)
             db.add(attachment)
             db.flush()
+            link_document(db, attachment)
             session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
             if session is not None:
                 session.latest_document_id = attachment.id
@@ -564,6 +647,10 @@ class ChatRepository:
     def get_documents_for_user(
         self, db: Session, session_id: int, user_id: int
     ) -> list[ChatDocumentAttachment]:
+        scoped = scoped_documents(db, session_id)
+        if scoped is not None:
+            session = self.get_session(db, session_id, user_id)
+            return scoped if session is not None else []
         return (
             db.query(ChatDocumentAttachment)
             .join(ChatSession, ChatSession.id == ChatDocumentAttachment.session_id)
@@ -581,6 +668,10 @@ class ChatRepository:
     def get_latest_document_for_user(
         self, db: Session, session_id: int, user_id: int
     ) -> ChatDocumentAttachment | None:
+        scoped = scoped_documents(db, session_id)
+        if scoped is not None:
+            session = self.get_session(db, session_id, user_id)
+            return scoped[0] if scoped and session is not None else None
         session = self.get_session(db, session_id, user_id)
         if session is None or session.latest_document_id is None:
             return None
@@ -594,6 +685,13 @@ class ChatRepository:
         filename: str,
         user_id: int,
     ) -> ChatDocumentAttachment | None:
+        scoped = scoped_documents(db, session_id)
+        if scoped is not None:
+            if self.get_session(db, session_id, user_id) is None:
+                return None
+            return next(
+                (row for row in scoped if str(row.filename).casefold() == filename.casefold()), None
+            )
         return (
             db.query(ChatDocumentAttachment)
             .join(ChatSession, ChatSession.id == ChatDocumentAttachment.session_id)
@@ -610,6 +708,13 @@ class ChatRepository:
         )
 
     def get_document_summaries(self, db: Session, session_id: int) -> list[str]:
+        scoped = scoped_documents(db, session_id)
+        if scoped is not None:
+            return [
+                str(row.raw_text)
+                for row in scoped
+                if row.processing_status == "ready" and row.raw_text
+            ]
         rows = (
             db.query(ChatDocumentAttachment)
             .filter(
@@ -630,6 +735,13 @@ class ChatRepository:
         self, db: Session, session_id: int, limit: int = 4
     ) -> list[tuple[int, str, str]]:
         """Return recent original uploads as deterministic evidence for chat Q&A."""
+        scoped = scoped_documents(db, session_id)
+        if scoped is not None:
+            return [
+                (int(row.id), str(row.filename), str(row.raw_text))
+                for row in scoped
+                if row.processing_status == "ready" and row.raw_text
+            ]
         rows = (
             db.query(ChatDocumentAttachment)
             .filter(
@@ -654,6 +766,17 @@ class ChatRepository:
         self, db: Session, session_id: int, instruction: str
     ) -> ChatDocumentAttachment | None:
         """New lookups search the original upload, unless an output is requested."""
+        scoped = scoped_documents(db, session_id)
+        if scoped is not None:
+            documents = [
+                row
+                for row in scoped
+                if str(row.filename).lower().endswith(".xlsx") and row.processing_status == "ready"
+            ]
+            named = [
+                row for row in documents if str(row.filename).casefold() in instruction.casefold()
+            ]
+            return next(iter(named or documents), None)
         documents = (
             db.query(ChatDocumentAttachment)
             .options(
@@ -688,6 +811,17 @@ class ChatRepository:
         self, db: Session, session_id: int
     ) -> ChatDocumentAttachment | None:
         """Choose the latest generated XLSX, otherwise the latest uploaded table."""
+        scoped = scoped_documents(db, session_id)
+        if scoped is not None:
+            return next(
+                (
+                    row
+                    for row in scoped
+                    if str(row.filename).lower().endswith((".xlsx", ".csv"))
+                    and row.processing_status == "ready"
+                ),
+                None,
+            )
         generated = (
             db.query(ChatDocumentAttachment)
             .filter(

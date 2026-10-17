@@ -1,10 +1,12 @@
 import json
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.services.llm_gateway import client_context
+from app.utils.auth_dependency import require_role
 
 router = APIRouter(tags=["NVIDIA Test"])
 
@@ -21,6 +23,7 @@ class NvidiaChatResponse(BaseModel):
 @router.post(
     "/nvidia-chat",
     response_model=NvidiaChatResponse,
+    dependencies=[Depends(require_role("admin"))],
     summary="Test NVIDIA text chat",
     description=(
         "Send a text prompt directly to the configured NVIDIA chat model. "
@@ -55,7 +58,7 @@ async def nvidia_chat(payload: NvidiaChatRequest) -> NvidiaChatResponse:
     try:
         # This diagnostic endpoint connects directly because stale machine-level
         # proxy variables can otherwise prevent access to NVIDIA's hosted API.
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        async with client_context(timeout) as client:
             async with client.stream(
                 "POST",
                 f"{settings.NVIDIA_API_BASE_URL}/chat/completions",

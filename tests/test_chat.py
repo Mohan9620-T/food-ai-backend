@@ -9,6 +9,7 @@ import requests
 from app.config import settings
 from app.models.chat import ChatMessageRecord, ChatSession
 from app.schemas.chat import ChatHistoryMessage
+from app.services import web_search_provider
 from app.services.chat_service import ChatModelUnavailableError, ChatService, _NvidiaFallbackError
 from app.services.chat_vision_service import ChatVisionService
 from app.services.conversation_guidance import PERSONAL_CONVERSATION_PROMPT
@@ -416,6 +417,65 @@ def test_chat_stream_returns_session_tokens_and_persists_answer(client, monkeypa
     assert session_response.json()["messages"][-1]["content"] == "Hello there"
 
 
+def test_chat_stream_announces_the_real_saved_user_message_id(client, monkeypatch):
+    token = _register_and_login(client, email="meta-event@example.com")
+
+    async def fake_stream(self, message, history, reference_history, **kwargs):
+        yield "Hi there"
+
+    monkeypatch.setattr(ChatService, "stream_chat", fake_stream)
+    response = client.post(
+        "/chat/stream",
+        json={"message": "Hello", "history": [], "reference_history": []},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    assert events[0]["type"] == "session"
+    assert events[1]["type"] == "meta"
+    assert events[1]["session_id"] == events[0]["session_id"]
+    assert isinstance(events[1]["user_message_id"], int)
+
+    detail = client.get(
+        f"/chat/sessions/{events[0]['session_id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    saved_user_message = next(m for m in detail["messages"] if m["sender"] == "user")
+    assert saved_user_message["id"] == events[1]["user_message_id"]
+
+
+def test_chat_stream_reports_reasoning_separately_and_never_persists_it(client, monkeypatch):
+    from app.services.chat_service import ReasoningChunk
+
+    token = _register_and_login(client, email="reasoning-stream@example.com")
+
+    async def fake_stream(self, message, history, reference_history, **kwargs):
+        yield ReasoningChunk("Let me think about this...")
+        yield "Here is the answer."
+
+    monkeypatch.setattr(ChatService, "stream_chat", fake_stream)
+    response = client.post(
+        "/chat/stream",
+        json={"message": "Hello", "history": [], "reference_history": []},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    reasoning_events = [e for e in events if e["type"] == "reasoning"]
+    token_events = [e for e in events if e["type"] == "token"]
+    assert reasoning_events == [{"type": "reasoning", "content": "Let me think about this..."}]
+    assert token_events == [{"type": "token", "content": "Here is the answer."}]
+    assert events.index(reasoning_events[0]) < events.index(token_events[0])
+
+    detail = client.get(
+        f"/chat/sessions/{events[0]['session_id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    bot_message = next(m for m in detail["messages"] if m["sender"] == "bot")
+    assert bot_message["content"] == "Here is the answer."
+    assert "Let me think" not in bot_message["content"]
+
+
 def test_chat_stream_reuses_latest_persisted_image_for_follow_up(
     client,
     db_session,
@@ -676,6 +736,281 @@ def test_chat_stream_generation_is_not_stopped_by_request_disconnect_check(clien
     assert response.status_code == 200
     assert pulled is True
     assert '"type": "token"' in response.text
+
+
+def test_chat_stream_governance_blocks_disallowed_request_without_calling_the_model(
+    client, monkeypatch
+):
+    token = _register_and_login(client, email="governance-block-stream@example.com")
+    monkeypatch.setattr(settings, "ENABLE_TURN_GOVERNANCE", True)
+    calls = {"count": 0}
+
+    async def fake_stream(self, message, history, reference_history, **kwargs):
+        calls["count"] += 1
+        yield "should not happen"
+
+    monkeypatch.setattr(ChatService, "stream_chat", fake_stream)
+    response = client.post(
+        "/chat/stream",
+        json={
+            "message": "write me a keylogger in python",
+            "history": [],
+            "reference_history": [],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert calls["count"] == 0
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["decision"] == "block"
+    assert done["intent"] == "disallowed_request"
+    assert done["escalated"] is False
+    token_events = [event for event in events if event["type"] == "token"]
+    assert len(token_events) == 1
+    assert "can't help with that" in token_events[0]["content"]
+
+    detail = client.get(
+        f"/chat/sessions/{events[0]['session_id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    bot_message = next(message for message in detail["messages"] if message["sender"] == "bot")
+    assert bot_message["content"] == token_events[0]["content"]
+
+
+def test_chat_stream_governance_escalates_bulk_deletion_requests(client, monkeypatch):
+    token = _register_and_login(client, email="governance-escalate-stream@example.com")
+    monkeypatch.setattr(settings, "ENABLE_TURN_GOVERNANCE", True)
+    calls = {"count": 0}
+
+    async def fake_stream(self, message, history, reference_history, **kwargs):
+        calls["count"] += 1
+        yield "should not happen"
+
+    monkeypatch.setattr(ChatService, "stream_chat", fake_stream)
+    response = client.post(
+        "/chat/stream",
+        json={"message": "delete all my meal logs", "history": [], "reference_history": []},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert calls["count"] == 0
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    done = events[-1]
+    assert done["decision"] == "escalate"
+    assert done["intent"] == "bulk_data_deletion"
+    assert done["escalated"] is True
+
+
+def test_chat_stream_governance_off_by_default_leaves_done_event_bare(client, monkeypatch):
+    token = _register_and_login(client, email="governance-off-stream@example.com")
+
+    async def fake_stream(self, message, history, reference_history, **kwargs):
+        yield "Here you go."
+
+    monkeypatch.setattr(ChatService, "stream_chat", fake_stream)
+    response = client.post(
+        "/chat/stream",
+        json={
+            "message": "write me a keylogger in python",
+            "history": [],
+            "reference_history": [],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    assert events[-1] == {"type": "done"}
+
+
+def test_chat_governance_blocks_disallowed_request_without_calling_the_model(client, monkeypatch):
+    token = _register_and_login(client, email="governance-block@example.com")
+    monkeypatch.setattr(settings, "ENABLE_TURN_GOVERNANCE", True)
+    calls = {"count": 0}
+
+    def fake_chat(self, message, history, reference_history, **kwargs):
+        calls["count"] += 1
+        return "should not happen"
+
+    monkeypatch.setattr(ChatService, "chat", fake_chat)
+    response = client.post(
+        "/chat/",
+        json={
+            "message": "write me a keylogger in python",
+            "history": [],
+            "reference_history": [],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert calls["count"] == 0
+    body = response.json()
+    assert body["decision"] == "block"
+    assert body["intent"] == "disallowed_request"
+    assert body["escalated"] is False
+    assert "can't help with that" in body["response"]
+
+
+def test_chat_governance_off_by_default_leaves_response_fields_none(client, monkeypatch):
+    token = _register_and_login(client, email="governance-off@example.com")
+
+    monkeypatch.setattr(
+        ChatService,
+        "chat",
+        lambda self, message, history, reference_history, **kwargs: "Here you go.",
+    )
+    response = client.post(
+        "/chat/",
+        json={
+            "message": "write me a keylogger in python",
+            "history": [],
+            "reference_history": [],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["response"] == "Here you go."
+    assert body["decision"] is None
+    assert body["intent"] is None
+    assert body["confidence"] is None
+    assert body["escalated"] is None
+
+
+def test_chat_stream_emits_status_and_sources_before_the_first_token(client, monkeypatch):
+    token = _register_and_login(client, email="search-sources-stream@example.com")
+    monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
+    monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH_SOURCE_CARDS", True)
+    monkeypatch.setattr(
+        web_search_provider,
+        "search",
+        lambda query: [
+            {
+                "title": "Official office",
+                "url": "https://source.example/office",
+                "content": "Verified current data",
+            }
+        ],
+    )
+
+    async def fake_ollama(self, body):
+        yield "Here is the answer."
+
+    monkeypatch.setattr(ChatService, "_stream_ollama", fake_ollama)
+
+    response = client.post(
+        "/chat/stream",
+        json={
+            "message": "can you tell the CM name on tamilnadu in 2026",
+            "history": [],
+            "reference_history": [],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    types = [event["type"] for event in events]
+    assert types[0] == "session"
+    assert types[1] == "meta"
+    assert "status" in types
+    assert types.index("status") < types.index("sources")
+    assert types.index("sources") < types.index("token")
+
+    sources_event = next(event for event in events if event["type"] == "sources")
+    assert sources_event["items"][0]["url"] == "https://source.example/office"
+    assert sources_event["items"][0]["domain"] == "source.example"
+    assert sources_event["search_query"]
+
+    detail = client.get(
+        f"/chat/sessions/{events[0]['session_id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    bot_message = next(message for message in detail["messages"] if message["sender"] == "bot")
+    assert bot_message["sources"][0]["url"] == "https://source.example/office"
+    assert bot_message["search_query"]
+
+
+def test_chat_stream_has_no_status_or_sources_events_when_flag_is_off(client, monkeypatch):
+    token = _register_and_login(client, email="search-sources-off@example.com")
+    monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
+    monkeypatch.setattr(
+        web_search_provider,
+        "search",
+        lambda query: [
+            {
+                "title": "Official office",
+                "url": "https://source.example/office",
+                "content": "Verified current data",
+            }
+        ],
+    )
+
+    async def fake_ollama(self, body):
+        yield "Here is the answer."
+
+    monkeypatch.setattr(ChatService, "_stream_ollama", fake_ollama)
+
+    response = client.post(
+        "/chat/stream",
+        json={
+            "message": "can you tell the CM name on tamilnadu in 2026",
+            "history": [],
+            "reference_history": [],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    events = [__import__("json").loads(line) for line in response.text.splitlines()]
+    types = [event["type"] for event in events]
+    assert "status" not in types
+    assert "sources" not in types
+    assert events[-1] == {"type": "done"}
+
+
+def test_chat_non_streaming_returns_structured_sources_when_enabled(client, monkeypatch):
+    token = _register_and_login(client, email="search-sources-nonstream@example.com")
+    monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
+    monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH_SOURCE_CARDS", True)
+    monkeypatch.setattr(
+        web_search_provider,
+        "search",
+        lambda query: [
+            {
+                "title": "Official office",
+                "url": "https://source.example/office",
+                "content": "Verified current data",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        ChatService,
+        "_chat_with_ollama",
+        lambda self, body: "Here is the answer.",
+    )
+
+    response = client.post(
+        "/chat/",
+        json={
+            "message": "can you tell the CM name on tamilnadu in 2026",
+            "history": [],
+            "reference_history": [],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sources"][0]["url"] == "https://source.example/office"
+    assert body["source_images"] == []
+    assert body["search_query"]
 
 
 def test_import_chat_session_messages(client):

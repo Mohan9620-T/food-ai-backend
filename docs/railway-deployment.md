@@ -11,6 +11,9 @@ Use the repository Dockerfile and set these Railway service variables:
 ```text
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 APP_ENVIRONMENT=production
+ENABLE_EMAIL_OTP=false
+ENABLE_EMAIL_DELIVERY=false
+EMAIL_PROVIDER=disabled
 LLM_PROVIDER=nvidia
 OLLAMA_REQUIRED_FOR_READINESS=false
 PORT=8080
@@ -20,7 +23,10 @@ ALLOWED_ORIGINS=https://food-ai-ui-production.up.railway.app
 
 Set `JWT_SECRET_KEY` to a long random secret and `NVIDIA_API_KEY` to your provider
 key using Railway Variables, never in Git. `USDA_API_KEY` is optional for nutrition
-lookup. For account emails, configure an HTTPS provider as described in
+lookup. This deployment uses password-only signup/login with OTP, welcome emails,
+password-link emails and email-based recovery disabled. Existing mail credentials
+can remain stored; the delivery kill switch prevents their use. To enable account
+emails in a future deployment, configure an HTTPS provider as described in
 [email delivery](email-delivery.md); Trial/Hobby do not permit outbound SMTP.
 Gmail API, Microsoft Graph, Resend and SMTP are supported. Existing local database data is
 not copied automatically; Railway uses its own persistent Postgres database.

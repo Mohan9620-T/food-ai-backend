@@ -1,6 +1,6 @@
 # Configure Food AI account emails
 
-Food AI sends welcome emails after registration. One authorized sender can send to
+Food AI sends welcome and verification-code emails after registration. One authorized sender can send to
 Gmail, Google Workspace, Outlook, Hotmail, Microsoft 365, and other recipient domains.
 Recipients do not supply their email passwords to Food AI. A Food AI login password
 is separate from the sender's mail-provider credentials and is never emailed.
@@ -10,7 +10,8 @@ is separate from the sender's mail-provider credentials and is never emailed.
 Configure `PUBLIC_APP_URL` with the deployed UI's HTTPS URL, for example
 `https://food-ai-ui-production.up.railway.app`. New-account emails include the
 recipient's sign-in address, login URL, and a private link to choose a new password.
-The user can also log in immediately with the password chosen during registration.
+New accounts must verify their email with a six-digit code before password login.
+Configure and check the sender before deploying the OTP authentication flow.
 
 The password link expires after 30 minutes and works once. Only its hash is saved
 in the database; the private token is never returned by registration. Using it
@@ -18,7 +19,8 @@ invalidates existing access and refresh tokens and sends a password-change notic
 The browser removes the token from its address bar and keeps it only in memory.
 Do not refresh the form before saving; reopen the email link if necessary.
 Missing/invalid `PUBLIC_APP_URL` disables the link without preventing registration.
-Mail delivery failure likewise does not prevent login. Existing accounts are not
+Mail delivery failure leaves the new account unverified. The user can request a
+replacement through **Resend code** once delivery is available. Existing accounts are not
 automatically sent new emails, and their passwords cannot be retrieved or emailed.
 
 This follows [OWASP's password-link guidance](https://cheatsheetseries.owasp.org/cheatsheets/Forgot_Password_Cheat_Sheet.html).
@@ -217,10 +219,34 @@ railway ssh --service food-ai-backend -- python -m app.email_setup --test-to you
 
 A successful API/SMTP response means **accepted by the provider**, not confirmed
 inbox delivery. Check the receiving inbox/spam folder and provider delivery logs.
-The existing registration `email_sent` field reports this provider acceptance.
-Email failure does not undo registration or reveal provider secrets to the user.
+The registration `email_sent` field reports welcome-email acceptance;
+`otp_email_sent` independently reports verification-code acceptance. The UI uses
+the latter and displays an alert if signup succeeded but the OTP could not be sent.
+Email failure does not undo registration, issue login tokens, or reveal provider secrets.
 No automatic send retry occurs after an ambiguous timeout.
 
-This setup sends application emails and supports the private new-account password
-link. It does not add Google/Microsoft login, read inboxes, or provide a public
-forgot-password/link-resend form for existing accounts.
+### Troubleshoot a missing OTP
+
+1. Run the configuration check in the environment receiving the registration.
+   `auto` with no SMTP host means email is disabled. `gmail` needs its OAuth client
+   ID, client secret, sender refresh token, and encryption key; a sender address
+   alone does not authorize sending. Local `.env` and Railway Variables are separate.
+2. Set the missing credentials privately and restart/redeploy that backend.
+3. Use **Resend code** on verification. Check the receiving inbox and spam folder.
+   Inspect `otp.email_accepted`, `otp.delivery_failed`, `otp.delivery_unavailable`,
+   `email.not_configured`, and `email.delivery_failed` in backend logs. Codes,
+   tokens, mail bodies, and provider responses must not be logged.
+
+An accepted resend replaces the previous code. If sending fails, the transaction
+rolls back, preserving any previous unexpired code and its attempt count. OTPs are
+stored as hashes, expire after `OTP_EXPIRY_MINUTES`, and allow at most
+`OTP_MAX_ATTEMPTS` incorrect guesses. Requests are rate limited.
+
+Resend/reset endpoints report globally missing sender configuration as HTTP 503
+before looking up an account. Otherwise their neutral acknowledgement is identical
+for unknown, already-verified, and eligible addresses, including provider failures;
+it confirms a request, not inbox delivery. This avoids revealing account existence.
+The UI displays request errors and retains entered reset details on a failed resend.
+
+This setup supports signup verification, password-reset codes, and the private
+new-account password link. It does not add Google/Microsoft login or read inboxes.
